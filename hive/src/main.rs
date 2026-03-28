@@ -4,6 +4,7 @@ use std::path::Path;
 use std::process;
 
 use hive::assert::types::RunResult;
+use hive::bench;
 use hive::env;
 use hive::error::HiveError;
 use hive::parser;
@@ -65,6 +66,40 @@ enum Commands {
     /// Initialize a new Hive project
     Init,
 
+    /// Benchmark a test step with concurrent requests
+    Bench {
+        /// Test file to benchmark
+        path: String,
+
+        /// Total number of requests
+        #[arg(short = 'n', long, default_value = "100")]
+        requests: u64,
+
+        /// Number of concurrent workers
+        #[arg(short, long, default_value = "10")]
+        concurrency: u64,
+
+        /// Step index to benchmark (0-based)
+        #[arg(long, default_value = "0")]
+        step: usize,
+
+        /// Ramp-up duration (e.g., "5s", "500ms")
+        #[arg(long)]
+        ramp_up: Option<String>,
+
+        /// Override environment variables
+        #[arg(long = "var", value_name = "KEY=VALUE")]
+        vars: Vec<String>,
+
+        /// Environment name
+        #[arg(long = "env")]
+        env_name: Option<String>,
+
+        /// Output format: human, json
+        #[arg(long, default_value = "human")]
+        format: String,
+    },
+
     /// Generate shell completions
     Completions {
         /// Shell to generate completions for
@@ -93,6 +128,25 @@ fn main() {
             tag.as_deref(),
             verbose,
             dry_run,
+        ),
+        Commands::Bench {
+            path,
+            requests,
+            concurrency,
+            step,
+            ramp_up,
+            vars,
+            env_name,
+            format,
+        } => bench_command(
+            &path,
+            requests,
+            concurrency,
+            step,
+            ramp_up.as_deref(),
+            &vars,
+            env_name.as_deref(),
+            &format,
         ),
         Commands::Validate { path } => validate_command(path),
         Commands::List { tag: _ } => list_command(),
@@ -221,6 +275,80 @@ fn run_command(
         0
     } else {
         1
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn bench_command(
+    path: &str,
+    requests: u64,
+    concurrency: u64,
+    step_index: usize,
+    ramp_up: Option<&str>,
+    vars: &[String],
+    env_name: Option<&str>,
+    format: &str,
+) -> i32 {
+    let cli_vars = match env::parse_cli_vars(vars) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            return e.exit_code();
+        }
+    };
+
+    let file_path = Path::new(path);
+    let test_file = match parser::parse_file(file_path) {
+        Ok(tf) => tf,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            return e.exit_code();
+        }
+    };
+
+    let base_dir = file_path.parent().unwrap_or(Path::new("."));
+    let resolved_env = match env::resolve_env(&test_file.env, env_name, &cli_vars, base_dir) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            return e.exit_code();
+        }
+    };
+
+    let ramp_up_duration = ramp_up.and_then(|s| {
+        let s = s.trim();
+        if let Some(ms) = s.strip_suffix("ms") {
+            ms.parse::<u64>().ok().map(std::time::Duration::from_millis)
+        } else if let Some(secs) = s.strip_suffix('s') {
+            secs.parse::<u64>().ok().map(std::time::Duration::from_secs)
+        } else {
+            s.parse::<u64>().ok().map(std::time::Duration::from_millis)
+        }
+    });
+
+    let opts = bench::BenchOptions {
+        requests,
+        concurrency,
+        ramp_up: ramp_up_duration,
+    };
+
+    match bench::run_bench(&test_file, step_index, &resolved_env, &opts) {
+        Ok(result) => {
+            let output = match format {
+                "json" => bench::render_json(&result),
+                _ => bench::render_human(&result),
+            };
+            print!("{}", output);
+            if result.failed == 0 {
+                0
+            } else {
+                1
+            }
+        }
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            e.exit_code()
+        }
     }
 }
 

@@ -1,4 +1,5 @@
 pub mod assert;
+pub mod bench;
 pub mod builtin;
 pub mod capture;
 pub mod config;
