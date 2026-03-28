@@ -20,16 +20,16 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            artifact: hive-linux-amd64
+            artifact: tarn-linux-amd64
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
-            artifact: hive-linux-arm64
+            artifact: tarn-linux-arm64
           - target: x86_64-apple-darwin
             os: macos-latest
-            artifact: hive-darwin-amd64
+            artifact: tarn-darwin-amd64
           - target: aarch64-apple-darwin
             os: macos-latest
-            artifact: hive-darwin-arm64
+            artifact: tarn-darwin-arm64
 
     steps:
       - uses: actions/checkout@v4
@@ -49,12 +49,12 @@ jobs:
           echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }} -p hive
+        run: cargo build --release --target ${{ matrix.target }} -p tarn
 
       - name: Package
         shell: bash
         run: |
-          cp target/${{ matrix.target }}/release/hive ${{ matrix.artifact }}
+          cp target/${{ matrix.target }}/release/tarn ${{ matrix.artifact }}
           chmod +x ${{ matrix.artifact }}
           tar czf ${{ matrix.artifact }}.tar.gz ${{ matrix.artifact }}
 

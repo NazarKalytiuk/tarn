@@ -1,0 +1,31 @@
+This project uses Tarn, a CLI API testing tool. Tests are .tarn.yaml files.
+
+When writing API tests, use the .tarn.yaml format:
+
+```yaml
+name: Test name
+steps:
+  - name: Step name
+    request:
+      method: GET|POST|PUT|PATCH|DELETE
+      url: "{{ env.base_url }}/path"
+      headers:
+        Content-Type: "application/json"
+      body:
+        key: "value"
+    capture:
+      var_name: "$.jsonpath"
+    assert:
+      status: 200
+      body:
+        "$.field": "expected"
+        "$.field": { type: string, contains: "sub", not_empty: true }
+```
+
+Run tests: `tarn run`, `tarn run --format json`
+Validate: `tarn validate`
+List: `tarn list`
+
+Assertion operators: eq, not_eq, type, contains, not_contains, starts_with, ends_with, matches, not_empty, exists, length, gt, gte, lt, lte.
+Built-ins: {{ $uuid }}, {{ $timestamp }}, {{ $now_iso }}, {{ $random_hex(n) }}, {{ $random_int(min, max) }}.
+Env resolution: --var > shell env > tarn.env.local.yaml > tarn.env.{name}.yaml > tarn.env.yaml > inline env:.

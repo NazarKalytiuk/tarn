@@ -1,0 +1,84 @@
+name: httpbin.org API tests
+description: Demonstrates Tarn features against a public HTTP testing service
+
+env:
+  base_url: "{{ env.httpbin_url }}"
+
+defaults:
+  headers:
+    Accept: "application/json"
+  timeout: 10000
+
+steps:
+  - name: GET request
+    request:
+      method: GET
+      url: "{{ env.base_url }}/get?foo=bar"
+    assert:
+      status: 200
+      body:
+        "$.args.foo": "bar"
+        "$.url": { contains: "foo=bar" }
+
+  - name: POST with JSON body
+    request:
+      method: POST
+      url: "{{ env.base_url }}/post"
+      headers:
+        Content-Type: "application/json"
+      body:
+        name: "Tarn Test"
+        version: 1
+        tags: ["api", "testing"]
+    assert:
+      status: 200
+      body:
+        "$.json.name": "Tarn Test"
+        "$.json.version": 1
+        "$.json.tags": { type: array, length: 2 }
+
+  - name: Custom headers echoed back
+    request:
+      method: GET
+      url: "{{ env.base_url }}/headers"
+      headers:
+        X-Custom-Header: "tarn-test-value"
+    assert:
+      status: 200
+      body:
+        "$.headers.X-Custom-Header": "tarn-test-value"
+
+  - name: Status code endpoint
+    request:
+      method: GET
+      url: "{{ env.base_url }}/status/201"
+    assert:
+      status: 201
+
+  - name: Response time check
+    request:
+      method: GET
+      url: "{{ env.base_url }}/get"
+    assert:
+      status: 200
+      duration: "< 5s"
+
+  - name: PUT request
+    request:
+      method: PUT
+      url: "{{ env.base_url }}/put"
+      headers:
+        Content-Type: "application/json"
+      body:
+        updated: true
+    assert:
+      status: 200
+      body:
+        "$.json.updated": true
+
+  - name: DELETE request
+    request:
+      method: DELETE
+      url: "{{ env.base_url }}/delete"
+    assert:
+      status: 200

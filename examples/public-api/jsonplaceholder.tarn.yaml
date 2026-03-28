@@ -1,0 +1,139 @@
+name: JSONPlaceholder API tests
+description: Demonstrates CRUD operations and capture chaining against a public REST API
+
+env:
+  base_url: "{{ env.jsonplaceholder_url }}"
+
+defaults:
+  headers:
+    Content-Type: "application/json"
+    Accept: "application/json"
+  timeout: 10000
+
+tests:
+  list_resources:
+    description: List endpoints return arrays with expected structure
+    steps:
+      - name: List all posts
+        request:
+          method: GET
+          url: "{{ env.base_url }}/posts"
+        assert:
+          status: 200
+          body:
+            "$": { type: array, length: 100 }
+            "$[0].id": 1
+            "$[0].userId": { type: number }
+            "$[0].title": { type: string, not_empty: true }
+
+      - name: List all users
+        request:
+          method: GET
+          url: "{{ env.base_url }}/users"
+        assert:
+          status: 200
+          body:
+            "$": { type: array, length: 10 }
+            "$[0].name": { type: string }
+            "$[0].email": { type: string, contains: "@" }
+
+  single_resource:
+    description: Get a single resource by ID
+    steps:
+      - name: Get post by ID
+        request:
+          method: GET
+          url: "{{ env.base_url }}/posts/1"
+        assert:
+          status: 200
+          body:
+            "$.id": 1
+            "$.userId": { type: number }
+            "$.title": { type: string, not_empty: true }
+            "$.body": { type: string, not_empty: true }
+
+      - name: Non-existent resource returns 404
+        request:
+          method: GET
+          url: "{{ env.base_url }}/posts/99999"
+        assert:
+          status: 404
+
+  crud_with_chaining:
+    description: Create a resource and verify it via capture chaining
+    steps:
+      - name: Create a post
+        request:
+          method: POST
+          url: "{{ env.base_url }}/posts"
+          body:
+            title: "Tarn test post"
+            body: "Created by Tarn API testing tool"
+            userId: 1
+        capture:
+          post_id: "$.id"
+        assert:
+          status: 201
+          body:
+            "$.title": "Tarn test post"
+            "$.userId": 1
+            "$.id": { type: number }
+
+      - name: Update the post
+        request:
+          method: PUT
+          url: "{{ env.base_url }}/posts/{{ capture.post_id }}"
+          body:
+            id: "{{ capture.post_id }}"
+            title: "Updated post"
+            body: "Updated by Tarn"
+            userId: 1
+        assert:
+          status: 200
+          body:
+            "$.title": "Updated post"
+
+      - name: Patch the post
+        request:
+          method: PATCH
+          url: "{{ env.base_url }}/posts/{{ capture.post_id }}"
+          body:
+            title: "Patched title"
+        assert:
+          status: 200
+          body:
+            "$.title": "Patched title"
+
+      - name: Delete the post
+        request:
+          method: DELETE
+          url: "{{ env.base_url }}/posts/{{ capture.post_id }}"
+        assert:
+          status: 200
+
+  cross_resource_chaining:
+    description: Chain across different resource types
+    steps:
+      - name: Get a post
+        request:
+          method: GET
+          url: "{{ env.base_url }}/posts/1"
+        capture:
+          author_id: "$.userId"
+        assert:
+          status: 200
+
+      - name: Get the author of the post
+        request:
+          method: GET
+          url: "{{ env.base_url }}/users/{{ capture.author_id }}"
+        capture:
+          author_name: "$.name"
+        assert:
+          status: 200
+          body:
+            "$.id": 1
+            "$.name": { type: string, not_empty: true }
+            "$.email": { type: string, contains: "@" }
+            "$.address": { type: object }
+            "$.address.city": { type: string }

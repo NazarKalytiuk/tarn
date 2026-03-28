@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Hive is a CLI-first API testing tool written in Rust. Tests are defined in `.hive.yaml` files. Designed for AI-assisted workflows: an LLM writes tests, runs `hive run`, parses structured JSON output, and iterates.
+Tarn is a CLI-first API testing tool written in Rust. Tests are defined in `.tarn.yaml` files. Designed for AI-assisted workflows: an LLM writes tests, runs `tarn run`, parses structured JSON output, and iterates.
 
 ## Build & Run Commands
 
@@ -12,7 +12,7 @@ Hive is a CLI-first API testing tool written in Rust. Tests are defined in `.hiv
 cargo build                    # dev build
 cargo build --release          # release build (single binary, zero runtime deps)
 cargo run -- run               # run all tests
-cargo run -- run tests/x.hive.yaml  # run specific test file
+cargo run -- run tests/x.tarn.yaml  # run specific test file
 cargo run -- validate          # validate YAML without running
 cargo run -- list              # dry run listing
 cargo test                     # run all Rust tests
@@ -28,8 +28,8 @@ The codebase follows a pipeline architecture: **parse YAML -> resolve env/variab
 Key modules in `src/`:
 
 - **model.rs** - Serde-derived Rust structs mirroring the YAML test format (TestFile, Step, Assertion, etc.)
-- **parser.rs** - Loads `.hive.yaml` files into `TestFile` structs
-- **env.rs** - Environment variable resolution with priority chain: CLI `--var` > shell env > `hive.env.local.yaml` > `hive.env.{name}.yaml` > `hive.env.yaml` > inline `env:` block
+- **parser.rs** - Loads `.tarn.yaml` files into `TestFile` structs
+- **env.rs** - Environment variable resolution with priority chain: CLI `--var` > shell env > `tarn.env.local.yaml` > `tarn.env.{name}.yaml` > `tarn.env.yaml` > inline `env:` block
 - **interpolation.rs** - `{{ env.x }}` and `{{ capture.x }}` template resolution across all string fields
 - **runner.rs** - Orchestrator: load file -> resolve env -> run setup -> run tests -> run teardown
 - **http.rs** - Request execution via reqwest (blocking initially)
@@ -37,7 +37,7 @@ Key modules in `src/`:
 - **assert/** - Assertion modules: status, headers, body (JSONPath), duration, types
 - **report/** - Output formatters behind a Reporter trait: human (colored), json, junit, tap
 - **builtin.rs** - Built-in functions: `$uuid`, `$random_hex(n)`, `$random_int(min,max)`, `$timestamp`, `$now_iso`
-- **config.rs** - Optional `hive.config.yaml` parsing
+- **config.rs** - Optional `tarn.config.yaml` parsing
 - **main.rs** - CLI entry point using clap (derive)
 
 ## Key Crates
@@ -56,7 +56,7 @@ Key modules in `src/`:
 
 ## Test File Format
 
-Files use `.hive.yaml` extension. Minimal test:
+Files use `.tarn.yaml` extension. Minimal test:
 ```yaml
 name: Health check
 steps:

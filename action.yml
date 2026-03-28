@@ -1,0 +1,52 @@
+name: "Tarn API Testing"
+description: "Run API tests using Tarn, a CLI-first API testing tool"
+author: "NazarKalytiuk"
+
+branding:
+  icon: "check-circle"
+  color: "blue"
+
+inputs:
+  path:
+    description: "Path to test files or directory"
+    required: false
+    default: "tests"
+  env:
+    description: "Environment name to use (loads hive.env.{name}.yaml)"
+    required: false
+    default: ""
+  format:
+    description: "Output format: human, json, junit, tap"
+    required: false
+    default: "human"
+  tag:
+    description: "Run only tests matching this tag"
+    required: false
+    default: ""
+  version:
+    description: "Tarn version to install (e.g. v0.1.0, or latest)"
+    required: false
+    default: "latest"
+  vars:
+    description: "Newline-separated KEY=VALUE pairs to pass as --var flags"
+    required: false
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install Tarn
+      shell: bash
+      run: ${{ github.action_path }}/action-install.sh
+      env:
+        TARN_VERSION: ${{ inputs.version }}
+
+    - name: Run Tarn tests
+      shell: bash
+      run: ${{ github.action_path }}/action-run.sh
+      env:
+        TARN_PATH: ${{ inputs.path }}
+        TARN_ENV: ${{ inputs.env }}
+        TARN_FORMAT: ${{ inputs.format }}
+        TARN_TAG: ${{ inputs.tag }}
+        TARN_VARS: ${{ inputs.vars }}

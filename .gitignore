@@ -3,4 +3,4 @@
 *.swo
 *~
 .DS_Store
-hive.env.local.yaml
+tarn.env.local.yaml

@@ -1,0 +1,310 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tarn.dev/schemas/v1/testfile.json",
+  "title": "Tarn Test File",
+  "description": "Schema for .tarn.yaml API test files",
+  "type": "object",
+  "required": ["name"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "description": "Schema version",
+      "enum": ["1"],
+      "default": "1"
+    },
+    "name": {
+      "type": "string",
+      "description": "Human-readable name for this test file",
+      "minLength": 1
+    },
+    "description": {
+      "type": "string",
+      "description": "Optional description of what this test file covers"
+    },
+    "tags": {
+      "type": "array",
+      "description": "Tags for filtering with --tag",
+      "items": { "type": "string" },
+      "default": []
+    },
+    "env": {
+      "type": "object",
+      "description": "Inline environment variables (lowest priority in resolution chain)",
+      "additionalProperties": { "type": "string" }
+    },
+    "defaults": { "$ref": "#/$defs/Defaults" },
+    "setup": {
+      "type": "array",
+      "description": "Steps run once before all tests",
+      "items": { "$ref": "#/$defs/Step" }
+    },
+    "teardown": {
+      "type": "array",
+      "description": "Steps run once after all tests, even on failure",
+      "items": { "$ref": "#/$defs/Step" }
+    },
+    "tests": {
+      "type": "object",
+      "description": "Named test groups (full format)",
+      "additionalProperties": { "$ref": "#/$defs/TestGroup" }
+    },
+    "steps": {
+      "type": "array",
+      "description": "Flat steps (simple format)",
+      "items": { "$ref": "#/$defs/Step" }
+    }
+  },
+  "anyOf": [
+    { "required": ["steps"] },
+    { "required": ["tests"] }
+  ],
+  "$defs": {
+    "Defaults": {
+      "type": "object",
+      "description": "Default settings applied to every request in this file",
+      "properties": {
+        "headers": {
+          "type": "object",
+          "description": "Headers added to every request",
+          "additionalProperties": { "type": "string" }
+        },
+        "timeout": {
+          "type": "integer",
+          "description": "Default timeout in milliseconds",
+          "minimum": 0
+        },
+        "retries": {
+          "type": "integer",
+          "description": "Default retry count for all steps",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "TestGroup": {
+      "type": "object",
+      "description": "A named group of test steps",
+      "properties": {
+        "description": {
+          "type": "string",
+          "description": "Description of this test group"
+        },
+        "tags": {
+          "type": "array",
+          "description": "Tags for filtering",
+          "items": { "type": "string" }
+        },
+        "steps": {
+          "type": "array",
+          "description": "Steps in this test group",
+          "items": { "$ref": "#/$defs/Step" },
+          "minItems": 1
+        }
+      },
+      "required": ["steps"]
+    },
+    "Step": {
+      "type": "object",
+      "description": "A single test step: one HTTP request with optional capture and assertions",
+      "required": ["name", "request"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Human-readable step name",
+          "minLength": 1
+        },
+        "request": { "$ref": "#/$defs/Request" },
+        "capture": {
+          "type": "object",
+          "description": "JSONPath expressions to capture values from the response for use in later steps. Keys become variable names accessible via {{ capture.key }}",
+          "additionalProperties": { "type": "string" },
+          "examples": [{ "user_id": "$.id", "token": "$.auth.token" }]
+        },
+        "assert": { "$ref": "#/$defs/Assertion" },
+        "retries": {
+          "type": "integer",
+          "description": "Number of retries on failure (0 = no retries)",
+          "minimum": 0
+        },
+        "timeout": {
+          "type": "integer",
+          "description": "Step-level timeout in milliseconds (overrides defaults)",
+          "minimum": 0
+        },
+        "delay": {
+          "type": "string",
+          "description": "Delay before executing this step",
+          "pattern": "^\\d+(ms|s)$",
+          "examples": ["500ms", "2s"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Request": {
+      "type": "object",
+      "description": "HTTP request definition",
+      "required": ["method", "url"],
+      "properties": {
+        "method": {
+          "type": "string",
+          "description": "HTTP method",
+          "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
+        },
+        "url": {
+          "type": "string",
+          "description": "Request URL. Supports interpolation: {{ env.base_url }}/path"
+        },
+        "headers": {
+          "type": "object",
+          "description": "Request headers. Supports interpolation: {{ capture.token }}",
+          "additionalProperties": { "type": "string" }
+        },
+        "body": {
+          "description": "Request body sent as JSON. Can be any valid JSON value (object, array, string, number, boolean, null)"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Assertion": {
+      "type": "object",
+      "description": "Assertions on the HTTP response",
+      "properties": {
+        "status": {
+          "type": "integer",
+          "description": "Expected HTTP status code",
+          "minimum": 100,
+          "maximum": 599
+        },
+        "duration": {
+          "type": "string",
+          "description": "Response time assertion",
+          "pattern": "^[<>]=?\\s*\\d+(ms|s)?$",
+          "examples": ["< 500ms", "<= 1s", "> 100ms", ">= 200ms"]
+        },
+        "headers": {
+          "type": "object",
+          "description": "Header assertions. Values can be exact match, 'contains \"substring\"', or 'matches \"regex\"'. Header names are case-insensitive.",
+          "additionalProperties": { "type": "string" },
+          "examples": [{
+            "content-type": "application/json",
+            "x-request-id": "matches \"^[a-f0-9-]{36}$\"",
+            "x-custom": "contains \"value\""
+          }]
+        },
+        "body": {
+          "type": "object",
+          "description": "Body assertions using JSONPath keys. Values can be literal (exact match) or operator objects.",
+          "additionalProperties": {
+            "oneOf": [
+              { "type": "string", "description": "Exact string match" },
+              { "type": "number", "description": "Exact number match" },
+              { "type": "boolean", "description": "Exact boolean match" },
+              { "type": "null", "description": "Assert field is null" },
+              { "$ref": "#/$defs/BodyAssertionOperators" }
+            ]
+          },
+          "examples": [{
+            "$.id": { "type": "string", "not_empty": true },
+            "$.name": "Jane Doe",
+            "$.age": { "gt": 18, "lt": 100 },
+            "$.tags": { "type": "array", "length": 2, "contains": "admin" },
+            "$.email": { "matches": "^[^@]+@[^@]+$" },
+            "$.deletedAt": null
+          }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "BodyAssertionOperators": {
+      "type": "object",
+      "description": "Assertion operators for body field checks. Multiple operators on the same field use AND logic.",
+      "properties": {
+        "eq": {
+          "description": "Exact equality (same as literal value)"
+        },
+        "not_eq": {
+          "description": "Not equal to value"
+        },
+        "type": {
+          "type": "string",
+          "description": "Assert the JSON type of the value",
+          "enum": ["string", "number", "boolean", "array", "object", "null"]
+        },
+        "contains": {
+          "description": "For strings: substring match. For arrays: element exists in array.",
+          "oneOf": [
+            { "type": "string" },
+            { "type": "number" },
+            { "type": "boolean" }
+          ]
+        },
+        "not_contains": {
+          "description": "Inverse of contains",
+          "oneOf": [
+            { "type": "string" },
+            { "type": "number" },
+            { "type": "boolean" }
+          ]
+        },
+        "starts_with": {
+          "type": "string",
+          "description": "Assert string starts with prefix"
+        },
+        "ends_with": {
+          "type": "string",
+          "description": "Assert string ends with suffix"
+        },
+        "matches": {
+          "type": "string",
+          "description": "Assert string matches regex pattern"
+        },
+        "not_empty": {
+          "type": "boolean",
+          "description": "Assert value is not empty (strings, arrays, objects)",
+          "const": true
+        },
+        "exists": {
+          "type": "boolean",
+          "description": "Assert field exists (true) or does not exist (false)"
+        },
+        "length": {
+          "type": "integer",
+          "description": "Exact length of string or array",
+          "minimum": 0
+        },
+        "length_gt": {
+          "type": "integer",
+          "description": "Length greater than",
+          "minimum": 0
+        },
+        "length_gte": {
+          "type": "integer",
+          "description": "Length greater than or equal",
+          "minimum": 0
+        },
+        "length_lte": {
+          "type": "integer",
+          "description": "Length less than or equal",
+          "minimum": 0
+        },
+        "gt": {
+          "type": "number",
+          "description": "Greater than (numeric comparison)"
+        },
+        "gte": {
+          "type": "number",
+          "description": "Greater than or equal (numeric comparison)"
+        },
+        "lt": {
+          "type": "number",
+          "description": "Less than (numeric comparison)"
+        },
+        "lte": {
+          "type": "number",
+          "description": "Less than or equal (numeric comparison)"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

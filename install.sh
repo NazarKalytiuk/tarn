@@ -1,8 +1,8 @@
 #!/bin/sh
-# Hive installer — curl -fsSL https://raw.githubusercontent.com/NazarKalytiuk/hive/main/install.sh | sh
+# Tarn installer — curl -fsSL https://raw.githubusercontent.com/NazarKalytiuk/tarn/main/install.sh | sh
 set -e
 
-REPO="NazarKalytiuk/hive"
+REPO="NazarKalytiuk/tarn"
 INSTALL_DIR="${HIVE_INSTALL_DIR:-/usr/local/bin}"
 
 # Detect OS and architecture
@@ -21,7 +21,7 @@ case "$ARCH" in
   *)             echo "Unsupported architecture: $ARCH"; exit 1 ;;
 esac
 
-ARTIFACT="hive-${OS_TAG}-${ARCH_TAG}"
+ARTIFACT="tarn-${OS_TAG}-${ARCH_TAG}"
 
 # Get latest release tag
 echo "Fetching latest release..."
@@ -32,7 +32,7 @@ if [ -z "$TAG" ]; then
   exit 1
 fi
 
-echo "Installing hive ${TAG} (${OS_TAG}/${ARCH_TAG})..."
+echo "Installing tarn ${TAG} (${OS_TAG}/${ARCH_TAG})..."
 
 URL="https://github.com/${REPO}/releases/download/${TAG}/${ARTIFACT}.tar.gz"
 
@@ -45,16 +45,16 @@ tar xzf "$TMPDIR/${ARTIFACT}.tar.gz" -C "$TMPDIR"
 
 # Install
 if [ -w "$INSTALL_DIR" ]; then
-  mv "$TMPDIR/$ARTIFACT" "$INSTALL_DIR/hive"
+  mv "$TMPDIR/$ARTIFACT" "$INSTALL_DIR/tarn"
 else
   echo "Need sudo to install to $INSTALL_DIR"
-  sudo mv "$TMPDIR/$ARTIFACT" "$INSTALL_DIR/hive"
+  sudo mv "$TMPDIR/$ARTIFACT" "$INSTALL_DIR/tarn"
 fi
 
-chmod +x "$INSTALL_DIR/hive"
+chmod +x "$INSTALL_DIR/tarn"
 
 echo ""
-echo "  Hive ${TAG} installed to ${INSTALL_DIR}/hive"
+echo "  Tarn ${TAG} installed to ${INSTALL_DIR}/tarn"
 echo ""
-echo "  Run 'hive --help' to get started"
+echo "  Run 'tarn --help' to get started"
 echo ""

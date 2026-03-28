@@ -2,7 +2,7 @@
 name = "demo-server"
 version = "0.1.0"
 edition = "2021"
-description = "Demo HTTP server for Hive integration testing"
+description = "Demo HTTP server for Tarn integration testing"
 
 [dependencies]
 axum = "0.8"

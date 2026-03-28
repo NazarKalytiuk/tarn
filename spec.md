@@ -1,12 +1,12 @@
-# Hive — CLI API Testing Tool (Rust)
+# Tarn — CLI API Testing Tool (Rust)
 
 ## Overview
 
-Hive is a CLI-first API testing tool written in Rust. Tests are defined in YAML files optimized for both human readability and LLM generation/analysis. The tool is designed for an AI-assisted workflow: an LLM writes tests, runs `hive run`, parses structured JSON output, and iterates.
+Tarn is a CLI-first API testing tool written in Rust. Tests are defined in YAML files optimized for both human readability and LLM generation/analysis. The tool is designed for an AI-assisted workflow: an LLM writes tests, runs `tarn run`, parses structured JSON output, and iterates.
 
 ## Core Principles
 
-1. **YAML-first**: every test is a `.hive.yaml` file — no code, no custom DSL
+1. **YAML-first**: every test is a `.tarn.yaml` file — no code, no custom DSL
 2. **LLM-friendly**: format is simple enough that an LLM generates valid tests on the first try; CLI output is structured JSON that an LLM can parse and reason about
 3. **Single binary**: `cargo build --release` produces one binary with zero runtime dependencies
 4. **Incremental complexity**: simple tests are simple (3 lines for a GET + status check), complex tests are possible (chaining, cross-field assertions, setup/teardown)
@@ -19,7 +19,7 @@ Hive is a CLI-first API testing tool written in Rust. Tests are defined in YAML 
 | YAML parsing | `serde` + `serde_yaml` | Deserialize directly into Rust structs |
 | HTTP client | `reqwest` (blocking initially, async later) | Most popular Rust HTTP client |
 | JSONPath | `serde_json_path` | RFC 9535 compliant |
-| JSON Schema | `jsonschema` | For `hive validate` command |
+| JSON Schema | `jsonschema` | For `tarn validate` command |
 | Regex | `regex` | Standard |
 | Duration | `std::time` | For response time assertions |
 | Colored output | `colored` | TTY-aware |
@@ -32,15 +32,15 @@ Hive is a CLI-first API testing tool written in Rust. Tests are defined in YAML 
 
 ```
 tests/
-  health.hive.yaml          # single endpoint smoke test
+  health.tarn.yaml          # single endpoint smoke test
   users/
-    crud.hive.yaml           # full CRUD lifecycle
-    validation.hive.yaml     # negative/error tests
-    pagination.hive.yaml     # list/filter/sort tests
+    crud.tarn.yaml           # full CRUD lifecycle
+    validation.tarn.yaml     # negative/error tests
+    pagination.tarn.yaml     # list/filter/sort tests
   auth/
-    login.hive.yaml
-    permissions.hive.yaml
-hive.config.yaml             # project-level config (optional)
+    login.tarn.yaml
+    permissions.tarn.yaml
+tarn.config.yaml             # project-level config (optional)
 ```
 
 ### Minimal test (simplest possible)
@@ -59,7 +59,7 @@ steps:
 ### Full format specification
 
 ```yaml
-# yaml-language-server: $schema=https://hive-api.dev/schemas/v1/testfile.json
+# yaml-language-server: $schema=https://tarn-api.dev/schemas/v1/testfile.json
 version: "1"
 
 name: "User CRUD Operations"
@@ -68,7 +68,7 @@ tags: [crud, users, smoke]
 
 # Environment variables — values come from:
 # 1. Inline defaults (below)
-# 2. env files (hive.env.yaml, hive.env.staging.yaml)
+# 2. env files (tarn.env.yaml, tarn.env.staging.yaml)
 # 3. CLI --var key=value (highest priority)
 # 4. Shell environment variables via ${VAR_NAME}
 env:
@@ -353,25 +353,25 @@ All assertions available in `assert.body` via JSONPath:
 ### Environment Files
 
 ```yaml
-# hive.env.yaml (default, committed to git — no secrets)
+# tarn.env.yaml (default, committed to git — no secrets)
 base_url: "http://localhost:3000/api/v1"
 admin_email: "admin@example.com"
 
-# hive.env.staging.yaml (per-environment overrides)
+# tarn.env.staging.yaml (per-environment overrides)
 base_url: "https://staging-api.example.com/v1"
 
-# hive.env.local.yaml (gitignored — secrets go here)
+# tarn.env.local.yaml (gitignored — secrets go here)
 admin_password: "s3cret"
 ```
 
-Priority (highest wins): CLI `--var` > shell env `${VAR}` > `hive.env.local.yaml` > `hive.env.{name}.yaml` > `hive.env.yaml` > inline `env:` block in test file.
+Priority (highest wins): CLI `--var` > shell env `${VAR}` > `tarn.env.local.yaml` > `tarn.env.{name}.yaml` > `tarn.env.yaml` > inline `env:` block in test file.
 
 ### Project Config (optional)
 
 ```yaml
-# hive.config.yaml
-test_dir: "tests"           # where to find .hive.yaml files
-env_file: "hive.env.yaml"   # default env file
+# tarn.config.yaml
+test_dir: "tests"           # where to find .tarn.yaml files
+env_file: "tarn.env.yaml"   # default env file
 timeout: 10000              # global default timeout (ms)
 retries: 0                  # retry failed requests
 parallel: false             # run test files in parallel (future)
@@ -383,41 +383,41 @@ parallel: false             # run test files in parallel (future)
 
 ```bash
 # Run all tests
-hive run
+tarn run
 
 # Run specific file
-hive run tests/users/crud.hive.yaml
+tarn run tests/users/crud.tarn.yaml
 
 # Run tests matching tags
-hive run --tag smoke
-hive run --tag "crud,users"  # AND logic
+tarn run --tag smoke
+tarn run --tag "crud,users"  # AND logic
 
 # Run with specific environment
-hive run --env staging
-# loads hive.env.staging.yaml
+tarn run --env staging
+# loads tarn.env.staging.yaml
 
 # Override variables
-hive run --var base_url=http://localhost:8080 --var admin_password=test
+tarn run --var base_url=http://localhost:8080 --var admin_password=test
 
 # Output formats
-hive run --format human    # default: colored terminal output
-hive run --format json     # structured JSON (for LLM consumption)
-hive run --format junit    # JUnit XML (for CI/CD)
-hive run --format tap      # TAP (Test Anything Protocol)
+tarn run --format human    # default: colored terminal output
+tarn run --format json     # structured JSON (for LLM consumption)
+tarn run --format junit    # JUnit XML (for CI/CD)
+tarn run --format tap      # TAP (Test Anything Protocol)
 
 # Validate test files without running
-hive validate
-hive validate tests/users/crud.hive.yaml
+tarn validate
+tarn validate tests/users/crud.tarn.yaml
 
 # List all tests (dry run)
-hive list
-hive list --tag smoke
+tarn list
+tarn list --tag smoke
 
 # Init new project
-hive init
+tarn init
 
 # Version
-hive --version
+tarn --version
 ```
 
 ### Exit Codes
@@ -434,7 +434,7 @@ hive --version
 ### Human-readable (default)
 
 ```
- HIVE  Running tests/users/crud.hive.yaml
+ TARN  Running tests/users/crud.tarn.yaml
 
  ● User CRUD Operations
 
@@ -470,7 +470,7 @@ hive --version
   "duration_ms": 911,
   "files": [
     {
-      "file": "tests/users/crud.hive.yaml",
+      "file": "tests/users/crud.tarn.yaml",
       "name": "User CRUD Operations",
       "status": "FAILED",
       "duration_ms": 911,
@@ -571,14 +571,14 @@ Key design decisions for JSON output:
 ## Project Structure
 
 ```
-hive/
+tarn/
 ├── Cargo.toml
 ├── src/
 │   ├── main.rs              # CLI entry point (clap)
 │   ├── lib.rs               # Public API for library usage
-│   ├── config.rs            # hive.config.yaml parsing
+│   ├── config.rs            # tarn.config.yaml parsing
 │   ├── model.rs             # Rust structs for YAML test files (serde)
-│   ├── parser.rs            # Load and validate .hive.yaml files
+│   ├── parser.rs            # Load and validate .tarn.yaml files
 │   ├── env.rs               # Environment variable resolution
 │   ├── interpolation.rs     # {{ variable }} template engine
 │   ├── runner.rs            # Orchestrator: setup → tests → teardown
@@ -600,12 +600,12 @@ hive/
 │   └── builtin.rs           # Built-in functions ($uuid, $random_hex, etc.)
 ├── schemas/
 │   └── v1/
-│       └── testfile.json    # JSON Schema for .hive.yaml files
+│       └── testfile.json    # JSON Schema for .tarn.yaml files
 ├── examples/
-│   ├── minimal.hive.yaml
-│   ├── crud.hive.yaml
-│   ├── auth.hive.yaml
-│   └── hive.env.yaml
+│   ├── minimal.tarn.yaml
+│   ├── crud.tarn.yaml
+│   ├── auth.tarn.yaml
+│   └── tarn.env.yaml
 └── tests/
     ├── parser_test.rs
     ├── assert_test.rs
@@ -624,7 +624,7 @@ hive/
 5. Implement basic `http.rs` — send a request, return status + headers + body + duration
 6. Implement `assert/status.rs` — just `status: 200` works
 7. Implement `report/human.rs` — minimal colored pass/fail output
-8. **Milestone**: `hive run minimal.hive.yaml` sends GET, checks status, prints result
+8. **Milestone**: `tarn run minimal.tarn.yaml` sends GET, checks status, prints result
 
 ### Phase 2: Core assertions
 
@@ -648,9 +648,9 @@ hive/
 1. Implement `runner.rs` — full lifecycle: load file → resolve env → run setup → run tests → run teardown
 2. Implement defaults merging (file-level headers applied to each request)
 3. Implement `--tag` filtering
-4. Implement test file discovery (scan `test_dir` for `*.hive.yaml`)
-5. Implement `config.rs` — optional `hive.config.yaml`
-6. **Milestone**: `hive run` discovers and runs all test files with setup/teardown
+4. Implement test file discovery (scan `test_dir` for `*.tarn.yaml`)
+5. Implement `config.rs` — optional `tarn.config.yaml`
+6. **Milestone**: `tarn run` discovers and runs all test files with setup/teardown
 
 ### Phase 5: Reporters
 
@@ -663,10 +663,10 @@ hive/
 
 ### Phase 6: Polish and DX
 
-1. Implement `hive init` — scaffold project structure
-2. Implement `hive list` — dry run listing
-3. Implement `hive validate` — check YAML against JSON Schema without running
-4. Create JSON Schema file for `.hive.yaml` format
+1. Implement `tarn init` — scaffold project structure
+2. Implement `tarn list` — dry run listing
+3. Implement `tarn validate` — check YAML against JSON Schema without running
+4. Create JSON Schema file for `.tarn.yaml` format
 5. Write example test files for `examples/`
 6. Error messages: every error must be actionable (file:line:column where possible)
 7. **Milestone**: tool is ready for daily use
@@ -676,11 +676,11 @@ hive/
 - Parallel test file execution (`--parallel`)
 - Retry logic (`retries: 2` per step)
 - Before/after hooks per test (not just file-level setup/teardown)
-- `hive generate --from-openapi spec.yaml` — scaffold tests from OpenAPI
-- `hive explain tests/crud.hive.yaml` — render test steps as plain English
+- `tarn generate --from-openapi spec.yaml` — scaffold tests from OpenAPI
+- `tarn explain tests/crud.tarn.yaml` — render test steps as plain English
 - Lua scripting for custom assertions (escape hatch for the 20%)
 - GraphQL support
 - gRPC support
 - WebSocket support
-- Watch mode (`hive run --watch`)
+- Watch mode (`tarn run --watch`)
 - HTML report
