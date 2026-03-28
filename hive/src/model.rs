@@ -71,6 +71,16 @@ pub struct Step {
     /// Assertions on the response
     #[serde(rename = "assert")]
     pub assertions: Option<Assertion>,
+
+    /// Number of retries on failure (0 = no retries)
+    #[serde(default)]
+    pub retries: Option<u32>,
+
+    /// Step-level timeout in milliseconds (overrides defaults)
+    pub timeout: Option<u64>,
+
+    /// Delay before executing this step (e.g., "500ms", "2s")
+    pub delay: Option<String>,
 }
 
 /// HTTP request definition.
@@ -94,6 +104,9 @@ pub struct Defaults {
 
     /// Default timeout in milliseconds
     pub timeout: Option<u64>,
+
+    /// Default retries for all steps
+    pub retries: Option<u32>,
 }
 
 /// Assertion block for a step.

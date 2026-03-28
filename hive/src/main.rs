@@ -1,4 +1,5 @@
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::{generate, Shell};
 use std::path::Path;
 use std::process;
 
@@ -23,7 +24,7 @@ enum Commands {
         /// Test file or directory to run
         path: Option<String>,
 
-        /// Output format: human, json, junit, tap
+        /// Output format: human, json, junit, tap, html
         #[arg(long, default_value = "human")]
         format: String,
 
@@ -38,6 +39,14 @@ enum Commands {
         /// Environment name (loads hive.env.{name}.yaml)
         #[arg(long = "env")]
         env_name: Option<String>,
+
+        /// Print full request/response for every step
+        #[arg(short, long)]
+        verbose: bool,
+
+        /// Show interpolated requests without sending them
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Validate test files without running
@@ -55,6 +64,13 @@ enum Commands {
 
     /// Initialize a new Hive project
     Init,
+
+    /// Generate shell completions
+    Completions {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: Shell,
+    },
 }
 
 fn main() {
@@ -67,10 +83,24 @@ fn main() {
             tag,
             vars,
             env_name,
-        } => run_command(path, &format, &vars, env_name.as_deref(), tag.as_deref()),
+            verbose,
+            dry_run,
+        } => run_command(
+            path,
+            &format,
+            &vars,
+            env_name.as_deref(),
+            tag.as_deref(),
+            verbose,
+            dry_run,
+        ),
         Commands::Validate { path } => validate_command(path),
         Commands::List { tag: _ } => list_command(),
         Commands::Init => init_command(),
+        Commands::Completions { shell } => {
+            generate(shell, &mut Cli::command(), "hive", &mut std::io::stdout());
+            0
+        }
     };
 
     process::exit(exit_code);
@@ -82,6 +112,8 @@ fn run_command(
     vars: &[String],
     env_name: Option<&str>,
     tag: Option<&str>,
+    verbose: bool,
+    dry_run: bool,
 ) -> i32 {
     let tag_filter = tag.map(runner::parse_tag_filter).unwrap_or_default();
     let output_format = match format.parse::<OutputFormat>() {
@@ -113,6 +145,8 @@ fn run_command(
         return 2;
     }
 
+    let run_opts = runner::RunOptions { verbose, dry_run };
+
     let start = std::time::Instant::now();
     let mut file_results = Vec::new();
 
@@ -136,7 +170,7 @@ fn run_command(
             }
         };
 
-        match runner::run_file(&test_file, file_path, &resolved_env, &tag_filter) {
+        match runner::run_file(&test_file, file_path, &resolved_env, &tag_filter, &run_opts) {
             Ok(result) => file_results.push(result),
             Err(e) => {
                 eprintln!("Error running {}: {}", file_path, e);
