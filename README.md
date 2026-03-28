@@ -633,7 +633,7 @@ delay: "2s"    # wait before executing
 Add to the top of your `.tarn.yaml` files for IDE autocompletion:
 
 ```yaml
-# yaml-language-server: $schema=https://tarn.dev/schemas/v1/testfile.json
+# yaml-language-server: $schema=https://raw.githubusercontent.com/NazarKalytiuk/hive/main/schemas/v1/testfile.json
 name: My test
 steps: ...
 ```

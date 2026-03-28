@@ -59,7 +59,7 @@ steps:
 ### Full format specification
 
 ```yaml
-# yaml-language-server: $schema=https://tarn-api.dev/schemas/v1/testfile.json
+# yaml-language-server: $schema=https://raw.githubusercontent.com/NazarKalytiuk/hive/main/schemas/v1/testfile.json
 version: "1"
 
 name: "User CRUD Operations"

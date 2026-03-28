@@ -136,4 +136,4 @@ Add to your project's `.claude/settings.json`:
 
 ## File Extension
 
-Tests use `.tarn.yaml`. Schema validation: add `# yaml-language-server: $schema=https://tarn.dev/schemas/v1/testfile.json` at the top of test files for IDE autocompletion.
+Tests use `.tarn.yaml`. Schema validation: add `# yaml-language-server: $schema=https://raw.githubusercontent.com/NazarKalytiuk/hive/main/schemas/v1/testfile.json` at the top of test files for IDE autocompletion.

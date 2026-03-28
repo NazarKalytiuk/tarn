@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://tarn.dev/schemas/v1/testfile.json",
+  "$id": "https://raw.githubusercontent.com/NazarKalytiuk/hive/main/schemas/v1/testfile.json",
   "title": "Tarn Test File",
   "description": "Schema for .tarn.yaml API test files",
   "type": "object",
