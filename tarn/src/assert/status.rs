@@ -43,10 +43,7 @@ fn assert_status_shorthand(pattern: &str, actual: u16) -> AssertionResult {
                     "status",
                     pattern.to_string(),
                     actual.to_string(),
-                    format!(
-                        "Expected HTTP status in {} range, got {}",
-                        pattern, actual
-                    ),
+                    format!("Expected HTTP status in {} range, got {}", pattern, actual),
                 )
             }
         }
@@ -63,10 +60,7 @@ fn assert_status_shorthand(pattern: &str, actual: u16) -> AssertionResult {
 }
 
 /// Assert a complex status specification with ranges and sets.
-fn assert_status_complex(
-    spec: &crate::model::StatusSpec,
-    actual: u16,
-) -> AssertionResult {
+fn assert_status_complex(spec: &crate::model::StatusSpec, actual: u16) -> AssertionResult {
     let mut conditions: Vec<String> = Vec::new();
     let mut passed = true;
 

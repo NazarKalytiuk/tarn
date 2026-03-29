@@ -369,7 +369,10 @@ tests:
         ));
 
         let assertions = step.assertions.as_ref().unwrap();
-        assert!(matches!(assertions.status, Some(StatusAssertion::Exact(201))));
+        assert!(matches!(
+            assertions.status,
+            Some(StatusAssertion::Exact(201))
+        ));
         assert_eq!(assertions.duration, Some("< 500ms".into()));
         assert!(assertions.headers.is_some());
         assert!(assertions.body.is_some());

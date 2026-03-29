@@ -114,10 +114,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn make_ctx(
-        env: &[(&str, &str)],
-        captures: &[(&str, serde_json::Value)],
-    ) -> Context {
+    fn make_ctx(env: &[(&str, &str)], captures: &[(&str, serde_json::Value)]) -> Context {
         Context {
             env: env
                 .iter()

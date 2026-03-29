@@ -22,9 +22,8 @@ pub fn extract_captures(
                     name, path_str, e
                 ))
             })?,
-            CaptureSpec::Extended(ext) => extract_extended(body, headers, ext).map_err(|e| {
-                TarnError::Capture(format!("Failed to capture '{}': {}", name, e))
-            })?,
+            CaptureSpec::Extended(ext) => extract_extended(body, headers, ext)
+                .map_err(|e| TarnError::Capture(format!("Failed to capture '{}': {}", name, e)))?,
         };
         captures.insert(name.clone(), value);
     }
@@ -72,8 +71,8 @@ fn extract_extended(
 
     // Apply regex if specified
     if let Some(ref regex_str) = ext.regex {
-        let re = Regex::new(regex_str)
-            .map_err(|e| format!("Invalid regex '{}': {}", regex_str, e))?;
+        let re =
+            Regex::new(regex_str).map_err(|e| format!("Invalid regex '{}': {}", regex_str, e))?;
         match re.captures(&source) {
             Some(caps) => {
                 // Use capture group 1 if it exists, otherwise the full match

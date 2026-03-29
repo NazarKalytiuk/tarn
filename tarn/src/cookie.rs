@@ -90,10 +90,7 @@ mod tests {
                 "set-cookie".to_string(),
                 "session=abc123; Path=/".to_string(),
             ),
-            (
-                "set-cookie".to_string(),
-                "csrf=xyz789; Path=/".to_string(),
-            ),
+            ("set-cookie".to_string(), "csrf=xyz789; Path=/".to_string()),
         ];
         jar.capture_from_response(&headers);
         assert!(!jar.is_empty());
@@ -105,16 +102,10 @@ mod tests {
     #[test]
     fn overwrite_existing_cookie() {
         let mut jar = CookieJar::new();
-        let headers1 = vec![(
-            "set-cookie".to_string(),
-            "session=old; Path=/".to_string(),
-        )];
+        let headers1 = vec![("set-cookie".to_string(), "session=old; Path=/".to_string())];
         jar.capture_from_response(&headers1);
 
-        let headers2 = vec![(
-            "set-cookie".to_string(),
-            "session=new; Path=/".to_string(),
-        )];
+        let headers2 = vec![("set-cookie".to_string(), "session=new; Path=/".to_string())];
         jar.capture_from_response(&headers2);
 
         assert_eq!(jar.cookie_header(), Some("session=new".to_string()));
@@ -125,10 +116,7 @@ mod tests {
         let mut jar = CookieJar::new();
         let headers = vec![
             ("content-type".to_string(), "application/json".to_string()),
-            (
-                "set-cookie".to_string(),
-                "token=abc; Path=/".to_string(),
-            ),
+            ("set-cookie".to_string(), "token=abc; Path=/".to_string()),
         ];
         jar.capture_from_response(&headers);
         assert_eq!(jar.cookie_header(), Some("token=abc".to_string()));
@@ -137,10 +125,7 @@ mod tests {
     #[test]
     fn case_insensitive_header_name() {
         let mut jar = CookieJar::new();
-        let headers = vec![(
-            "Set-Cookie".to_string(),
-            "token=abc; Path=/".to_string(),
-        )];
+        let headers = vec![("Set-Cookie".to_string(), "token=abc; Path=/".to_string())];
         jar.capture_from_response(&headers);
         assert_eq!(jar.cookie_header(), Some("token=abc".to_string()));
     }

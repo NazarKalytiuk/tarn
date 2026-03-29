@@ -52,15 +52,13 @@ pub fn check_for_update() -> Result<UpdateInfo, String> {
 
     // Find the download URL for our platform
     let asset_name = format!("tarn-{}.tar.gz", target);
-    let download_url = release["assets"]
-        .as_array()
-        .and_then(|assets| {
-            assets
-                .iter()
-                .find(|a| a["name"].as_str() == Some(asset_name.as_str()))
-                .and_then(|a| a["browser_download_url"].as_str())
-                .map(|s| s.to_string())
-        });
+    let download_url = release["assets"].as_array().and_then(|assets| {
+        assets
+            .iter()
+            .find(|a| a["name"].as_str() == Some(asset_name.as_str()))
+            .and_then(|a| a["browser_download_url"].as_str())
+            .map(|s| s.to_string())
+    });
 
     Ok(UpdateInfo {
         current_version: current.to_string(),
@@ -122,10 +120,7 @@ pub fn perform_update(info: &UpdateInfo) -> Result<(), String> {
             .map_err(|e| format!("Path error: {}", e))?
             .to_path_buf();
 
-        let filename = path
-            .file_name()
-            .and_then(|f| f.to_str())
-            .unwrap_or("");
+        let filename = path.file_name().and_then(|f| f.to_str()).unwrap_or("");
 
         if expected_names.iter().any(|n| n == filename) {
             let dest = tmpdir.join("tarn");
@@ -153,14 +148,18 @@ pub fn perform_update(info: &UpdateInfo) -> Result<(), String> {
     }
 
     // Replace current binary
-    let current_exe =
-        std::env::current_exe().map_err(|e| format!("Cannot determine current executable: {}", e))?;
+    let current_exe = std::env::current_exe()
+        .map_err(|e| format!("Cannot determine current executable: {}", e))?;
 
     eprintln!("Installing to {}...", current_exe.display());
 
     let backup = current_exe.with_extension("bak");
-    fs::rename(&current_exe, &backup)
-        .map_err(|e| format!("Failed to backup current binary: {}. Try running with sudo.", e))?;
+    fs::rename(&current_exe, &backup).map_err(|e| {
+        format!(
+            "Failed to backup current binary: {}. Try running with sudo.",
+            e
+        )
+    })?;
 
     if let Err(e) = fs::rename(&new_binary, &current_exe) {
         // Restore backup on failure
@@ -240,12 +239,7 @@ mod tests {
             target
         );
         // Should be one of the known targets
-        let valid = [
-            "darwin-arm64",
-            "darwin-amd64",
-            "linux-arm64",
-            "linux-amd64",
-        ];
+        let valid = ["darwin-arm64", "darwin-amd64", "linux-arm64", "linux-amd64"];
         assert!(
             valid.contains(&target.as_str()),
             "Unknown target: {}",

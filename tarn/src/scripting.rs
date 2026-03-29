@@ -59,9 +59,9 @@ pub fn run_script(
         .create_table()
         .map_err(|e| TarnError::Script(e.to_string()))?;
     for (k, v) in captures {
-        let lua_val = lua
-            .to_value(v)
-            .map_err(|e| TarnError::Script(format!("Failed to convert capture '{}' to Lua: {}", k, e)))?;
+        let lua_val = lua.to_value(v).map_err(|e| {
+            TarnError::Script(format!("Failed to convert capture '{}' to Lua: {}", k, e))
+        })?;
         captures_table
             .set(k.as_str(), lua_val)
             .map_err(|e| TarnError::Script(e.to_string()))?;
@@ -130,11 +130,9 @@ fn lua_value_to_json(v: LuaValue) -> serde_json::Value {
     match v {
         LuaValue::String(s) => serde_json::Value::String(s.to_string_lossy().to_string()),
         LuaValue::Integer(i) => serde_json::json!(i),
-        LuaValue::Number(n) => {
-            serde_json::Number::from_f64(n)
-                .map(serde_json::Value::Number)
-                .unwrap_or(serde_json::Value::Null)
-        }
+        LuaValue::Number(n) => serde_json::Number::from_f64(n)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null),
         LuaValue::Boolean(b) => serde_json::Value::Bool(b),
         LuaValue::Nil => serde_json::Value::Null,
         _ => serde_json::Value::String(format!("{:?}", v)),

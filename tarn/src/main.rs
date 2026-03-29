@@ -575,10 +575,7 @@ fn update_command(check_only: bool) -> i32 {
 
     if !info.is_newer {
         eprintln!("up to date");
-        println!(
-            "tarn v{} is the latest version",
-            info.current_version
-        );
+        println!("tarn v{} is the latest version", info.current_version);
         return 0;
     }
 

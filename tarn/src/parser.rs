@@ -110,8 +110,8 @@ fn resolve_step_includes(
                     ))
                 })?;
 
-                let mut included: serde_yaml::Value = serde_yaml::from_str(&content)
-                    .map_err(|e| {
+                let mut included: serde_yaml::Value =
+                    serde_yaml::from_str(&content).map_err(|e| {
                         TarnError::Parse(format!(
                             "Failed to parse include file {}: {}",
                             canonical.display(),
@@ -667,10 +667,7 @@ steps:
 
         let result = parse_file(&dir.path().join("a.tarn.yaml"));
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Circular include"));
+        assert!(result.unwrap_err().to_string().contains("Circular include"));
     }
 
     #[test]

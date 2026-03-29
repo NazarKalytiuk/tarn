@@ -122,9 +122,9 @@ pub fn execute_multipart_request(
         })?;
 
         if let Some(ref ct) = file.content_type {
-            part = part.mime_str(ct).map_err(|e| {
-                TarnError::Http(format!("Invalid content type '{}': {}", ct, e))
-            })?;
+            part = part
+                .mime_str(ct)
+                .map_err(|e| TarnError::Http(format!("Invalid content type '{}': {}", ct, e)))?;
         }
 
         if let Some(ref filename) = file.filename {
@@ -273,9 +273,6 @@ mod tests {
             Path::new("."),
         );
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("POST/PUT/PATCH"));
+        assert!(result.unwrap_err().to_string().contains("POST/PUT/PATCH"));
     }
 }

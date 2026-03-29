@@ -333,7 +333,9 @@ fn run_step(
 
     // Dispatch to poll mode if configured
     if let Some(ref poll) = step.poll {
-        return run_step_poll(step, poll, env, captures, test_file, opts, cookie_jar, base_dir);
+        return run_step_poll(
+            step, poll, env, captures, test_file, opts, cookie_jar, base_dir,
+        );
     }
 
     let (url, headers, body, timeout, ctx) =
