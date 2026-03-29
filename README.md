@@ -41,7 +41,7 @@ $ tarn run
 - **Structured JSON output** with request/response on failures &mdash; machines parse it, not regex
 - **Single binary** &mdash; `curl | sh` install, runs in any CI, no runtime needed
 - **MCP server** &mdash; direct integration with Claude Code, Cursor, Windsurf
-- **Everything you need** &mdash; REST, GraphQL, captures, polling, Lua scripting, parallel execution, 5 output formats
+- **Everything you need** &mdash; REST, GraphQL, captures, cookies, multipart, includes, polling, Lua scripting, parallel execution, 5 output formats
 
 ## Install
 
@@ -72,6 +72,9 @@ tarn run --parallel                    # run files in parallel
 - [Test File Format](#test-file-format)
 - [Assertions](#assertions)
 - [Variables](#variables)
+- [Cookies](#cookies)
+- [Multipart / File Upload](#multipart--file-upload)
+- [Includes](#includes)
 - [GraphQL](#graphql)
 - [Polling](#polling)
 - [Lua Scripting](#lua-scripting)
@@ -193,7 +196,13 @@ tests:
 
 ```yaml
 assert:
-  status: 200
+  status: 200              # exact match
+  status: "2xx"            # any 2xx status
+  status:                  # set of allowed codes
+    in: [200, 201, 204]
+  status:                  # range
+    gte: 400
+    lt: 500
 ```
 
 ### Body (JSONPath)
@@ -290,6 +299,8 @@ assert:
 
 ### Captures (Chaining)
 
+Capture values from responses to use in subsequent steps. Captured values preserve their original JSON types (numbers stay numbers, booleans stay booleans).
+
 ```yaml
 steps:
   - name: Login
@@ -300,7 +311,8 @@ steps:
         email: "admin@example.com"
         password: "password123"
     capture:
-      token: "$.token"
+      token: "$.token"              # JSONPath capture from body
+      user_id: "$.user.id"          # nested path
 
   - name: Use token
     request:
@@ -308,6 +320,26 @@ steps:
       url: "{{ env.base_url }}/users"
       headers:
         Authorization: "Bearer {{ capture.token }}"
+```
+
+**Header capture** &mdash; capture values from response headers with optional regex:
+
+```yaml
+capture:
+  session_token:
+    header: "set-cookie"
+    regex: "session_token=([^;]+)"
+  request_id:
+    header: "x-request-id"
+```
+
+**JSONPath with regex** &mdash; extract a sub-match from a body field:
+
+```yaml
+capture:
+  user_id:
+    jsonpath: "$.message"
+    regex: "ID: (\\w+)"
 ```
 
 ### Built-in Functions
@@ -319,6 +351,89 @@ steps:
 "{{ $timestamp }}"               # unix timestamp
 "{{ $now_iso }}"                 # ISO 8601 datetime
 ```
+
+## Cookies
+
+Tarn automatically captures `Set-Cookie` headers and sends stored cookies on subsequent requests. This is enabled by default.
+
+```yaml
+name: Auth flow
+steps:
+  - name: Login
+    request:
+      method: POST
+      url: "{{ env.base_url }}/auth/login"
+      body:
+        email: "admin@test.com"
+        password: "secret"
+    # Set-Cookie from response is automatically stored
+    assert:
+      status: 200
+
+  - name: Access protected resource
+    request:
+      method: GET
+      url: "{{ env.base_url }}/profile"
+    # Cookie header is automatically sent
+    assert:
+      status: 200
+```
+
+Disable automatic cookies per file:
+
+```yaml
+cookies: "off"
+```
+
+## Multipart / File Upload
+
+Send multipart form data for file uploads using the `multipart:` field:
+
+```yaml
+steps:
+  - name: Upload photo
+    request:
+      method: POST
+      url: "{{ env.base_url }}/api/photos"
+      headers:
+        Authorization: "Bearer {{ capture.token }}"
+      multipart:
+        fields:
+          - name: "title"
+            value: "My Photo"
+          - name: "description"
+            value: "A test upload"
+        files:
+          - name: "photo"
+            path: "./fixtures/test.jpg"
+            content_type: "image/jpeg"
+          - name: "thumbnail"
+            path: "./fixtures/thumb.png"
+            filename: "custom-name.png"
+    assert:
+      status: 201
+```
+
+> Note: `multipart` cannot be combined with `body` or `graphql` on the same step.
+
+## Includes
+
+Reuse shared step sequences across test files with `include:` directives:
+
+```yaml
+name: User tests
+setup:
+  - include: ./shared/auth-setup.tarn.yaml
+steps:
+  - name: Get users
+    request:
+      method: GET
+      url: "{{ env.base_url }}/users"
+    assert:
+      status: 200
+```
+
+The included file's `setup` and `steps` are inlined at the include point. Includes work in `setup`, `teardown`, `steps`, and `tests.*.steps`. Circular includes are detected and rejected.
 
 ## GraphQL
 
@@ -606,6 +721,7 @@ defaults:
     Content-Type: "application/json"
   timeout: 5000
   retries: 1
+  delay: "100ms"    # default delay before each request
 ```
 
 ## Step Options
@@ -655,7 +771,7 @@ git clone https://github.com/NazarKalytiuk/tarn.git
 cd tarn
 
 cargo build                    # build
-cargo test --all               # 300+ tests
+cargo test --all               # 348+ tests
 cargo clippy                   # lint
 cargo fmt                      # format
 
@@ -676,7 +792,8 @@ Pipeline: **parse YAML &rarr; resolve env &rarr; interpolate &rarr; execute HTTP
 | `interpolation.rs` | `{{ }}` template engine |
 | `runner.rs` | Orchestrator (setup &rarr; tests &rarr; teardown) |
 | `http.rs` | HTTP client (reqwest) |
-| `capture.rs` | JSONPath extraction |
+| `capture.rs` | JSONPath + header extraction |
+| `cookie.rs` | Automatic cookie jar |
 | `assert/` | Status, body, headers, duration |
 | `report/` | Human, JSON, JUnit, TAP, HTML |
 | `scripting.rs` | Lua scripting engine (mlua) |

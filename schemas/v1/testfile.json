@@ -32,16 +32,22 @@
       "description": "Inline environment variables (lowest priority in resolution chain)",
       "additionalProperties": { "type": "string" }
     },
+    "cookies": {
+      "type": "string",
+      "description": "Cookie handling mode: 'auto' (default) or 'off'",
+      "enum": ["auto", "off"],
+      "default": "auto"
+    },
     "defaults": { "$ref": "#/$defs/Defaults" },
     "setup": {
       "type": "array",
-      "description": "Steps run once before all tests",
-      "items": { "$ref": "#/$defs/Step" }
+      "description": "Steps run once before all tests. Supports include directives.",
+      "items": { "$ref": "#/$defs/StepOrInclude" }
     },
     "teardown": {
       "type": "array",
-      "description": "Steps run once after all tests, even on failure",
-      "items": { "$ref": "#/$defs/Step" }
+      "description": "Steps run once after all tests, even on failure. Supports include directives.",
+      "items": { "$ref": "#/$defs/StepOrInclude" }
     },
     "tests": {
       "type": "object",
@@ -50,8 +56,8 @@
     },
     "steps": {
       "type": "array",
-      "description": "Flat steps (simple format)",
-      "items": { "$ref": "#/$defs/Step" }
+      "description": "Flat steps (simple format). Supports include directives.",
+      "items": { "$ref": "#/$defs/StepOrInclude" }
     }
   },
   "anyOf": [
@@ -77,6 +83,12 @@
           "type": "integer",
           "description": "Default retry count for all steps",
           "minimum": 0
+        },
+        "delay": {
+          "type": "string",
+          "description": "Default delay before each request (e.g., '100ms', '2s')",
+          "pattern": "^\\d+(ms|s)$",
+          "examples": ["100ms", "1s"]
         }
       },
       "additionalProperties": false
@@ -96,12 +108,31 @@
         },
         "steps": {
           "type": "array",
-          "description": "Steps in this test group",
-          "items": { "$ref": "#/$defs/Step" },
+          "description": "Steps in this test group. Supports include directives.",
+          "items": { "$ref": "#/$defs/StepOrInclude" },
           "minItems": 1
         }
       },
       "required": ["steps"]
+    },
+    "StepOrInclude": {
+      "oneOf": [
+        { "$ref": "#/$defs/Step" },
+        { "$ref": "#/$defs/IncludeDirective" }
+      ]
+    },
+    "IncludeDirective": {
+      "type": "object",
+      "description": "Include steps from another .tarn.yaml file",
+      "required": ["include"],
+      "properties": {
+        "include": {
+          "type": "string",
+          "description": "Relative path to .tarn.yaml file to include",
+          "examples": ["./shared/auth-setup.tarn.yaml"]
+        }
+      },
+      "additionalProperties": false
     },
     "Step": {
       "type": "object",
@@ -116,9 +147,20 @@
         "request": { "$ref": "#/$defs/Request" },
         "capture": {
           "type": "object",
-          "description": "JSONPath expressions to capture values from the response for use in later steps. Keys become variable names accessible via {{ capture.key }}",
-          "additionalProperties": { "type": "string" },
-          "examples": [{ "user_id": "$.id", "token": "$.auth.token" }]
+          "description": "Capture values from the response. Values can be JSONPath strings or extended capture objects with header/jsonpath/regex fields.",
+          "additionalProperties": {
+            "oneOf": [
+              {
+                "type": "string",
+                "description": "JSONPath expression (e.g., '$.id', '$.user.token')"
+              },
+              { "$ref": "#/$defs/ExtendedCapture" }
+            ]
+          },
+          "examples": [
+            { "user_id": "$.id", "token": "$.auth.token" },
+            { "session": { "header": "set-cookie", "regex": "session=([^;]+)" } }
+          ]
         },
         "assert": { "$ref": "#/$defs/Assertion" },
         "retries": {
@@ -133,9 +175,60 @@
         },
         "delay": {
           "type": "string",
-          "description": "Delay before executing this step",
+          "description": "Delay before executing this step (overrides defaults.delay)",
           "pattern": "^\\d+(ms|s)$",
           "examples": ["500ms", "2s"]
+        },
+        "poll": { "$ref": "#/$defs/PollConfig" },
+        "script": {
+          "type": "string",
+          "description": "Lua script to run after HTTP response for custom validation"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExtendedCapture": {
+      "type": "object",
+      "description": "Extended capture specification supporting headers and regex extraction",
+      "properties": {
+        "header": {
+          "type": "string",
+          "description": "Capture from a response header (case-insensitive)"
+        },
+        "jsonpath": {
+          "type": "string",
+          "description": "Capture from body via JSONPath (explicit form)"
+        },
+        "regex": {
+          "type": "string",
+          "description": "Regex to extract a sub-match (capture group 1 is used)"
+        }
+      },
+      "oneOf": [
+        { "required": ["header"] },
+        { "required": ["jsonpath"] }
+      ],
+      "additionalProperties": false
+    },
+    "PollConfig": {
+      "type": "object",
+      "description": "Polling configuration: re-execute until condition is met",
+      "required": ["until", "interval", "max_attempts"],
+      "properties": {
+        "until": {
+          "$ref": "#/$defs/Assertion",
+          "description": "Assertions that must pass for polling to stop"
+        },
+        "interval": {
+          "type": "string",
+          "description": "Time between attempts",
+          "pattern": "^\\d+(ms|s)$",
+          "examples": ["2s", "500ms"]
+        },
+        "max_attempts": {
+          "type": "integer",
+          "description": "Maximum number of polling attempts",
+          "minimum": 1
         }
       },
       "additionalProperties": false
@@ -161,6 +254,62 @@
         },
         "body": {
           "description": "Request body sent as JSON. Can be any valid JSON value (object, array, string, number, boolean, null)"
+        },
+        "graphql": { "$ref": "#/$defs/GraphqlRequest" },
+        "multipart": { "$ref": "#/$defs/MultipartBody" }
+      },
+      "additionalProperties": false
+    },
+    "GraphqlRequest": {
+      "type": "object",
+      "description": "GraphQL query definition",
+      "required": ["query"],
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "GraphQL query or mutation string"
+        },
+        "variables": {
+          "description": "Variables to pass to the query"
+        },
+        "operation_name": {
+          "type": "string",
+          "description": "Operation name when query contains multiple operations"
+        }
+      },
+      "additionalProperties": false
+    },
+    "MultipartBody": {
+      "type": "object",
+      "description": "Multipart form data body for file uploads",
+      "properties": {
+        "fields": {
+          "type": "array",
+          "description": "Text form fields",
+          "items": {
+            "type": "object",
+            "required": ["name", "value"],
+            "properties": {
+              "name": { "type": "string", "description": "Field name" },
+              "value": { "type": "string", "description": "Field value" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "files": {
+          "type": "array",
+          "description": "File upload fields",
+          "items": {
+            "type": "object",
+            "required": ["name", "path"],
+            "properties": {
+              "name": { "type": "string", "description": "Form field name" },
+              "path": { "type": "string", "description": "Path to file (relative to test file)" },
+              "content_type": { "type": "string", "description": "MIME content type" },
+              "filename": { "type": "string", "description": "Override filename in form" }
+            },
+            "additionalProperties": false
+          }
         }
       },
       "additionalProperties": false
@@ -170,10 +319,36 @@
       "description": "Assertions on the HTTP response",
       "properties": {
         "status": {
-          "type": "integer",
-          "description": "Expected HTTP status code",
-          "minimum": 100,
-          "maximum": 599
+          "description": "Expected HTTP status code. Supports exact (200), shorthand ('2xx'), set ({ in: [200, 201] }), or range ({ gte: 400, lt: 500 })",
+          "oneOf": [
+            {
+              "type": "integer",
+              "description": "Exact status code",
+              "minimum": 100,
+              "maximum": 599
+            },
+            {
+              "type": "string",
+              "description": "Shorthand range (e.g., '2xx', '4xx', '5xx')",
+              "pattern": "^[1-5]xx$"
+            },
+            {
+              "type": "object",
+              "description": "Complex status assertion",
+              "properties": {
+                "in": {
+                  "type": "array",
+                  "items": { "type": "integer", "minimum": 100, "maximum": 599 },
+                  "description": "Set of allowed status codes"
+                },
+                "gte": { "type": "integer", "description": "Greater than or equal" },
+                "gt": { "type": "integer", "description": "Greater than" },
+                "lte": { "type": "integer", "description": "Less than or equal" },
+                "lt": { "type": "integer", "description": "Less than" }
+              },
+              "additionalProperties": false
+            }
+          ]
         },
         "duration": {
           "type": "string",

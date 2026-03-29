@@ -90,8 +90,13 @@ pub fn run_bench(
     let method = step.request.method.clone();
     let step_name = step.name.clone();
 
-    // Expected status from assertions (if any)
-    let expected_status = step.assertions.as_ref().and_then(|a| a.status);
+    // Expected status from assertions (if any) — extract exact status for bench mode
+    let expected_status = step.assertions.as_ref().and_then(|a| {
+        a.status.as_ref().and_then(|s| match s {
+            crate::model::StatusAssertion::Exact(code) => Some(*code),
+            _ => None, // Bench mode only supports exact status checks
+        })
+    });
 
     // Run the benchmark using tokio runtime
     let rt = tokio::runtime::Runtime::new()

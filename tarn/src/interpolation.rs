@@ -1,4 +1,5 @@
 use crate::builtin;
+use crate::capture;
 use regex::Regex;
 use std::collections::HashMap;
 
@@ -6,7 +7,7 @@ use std::collections::HashMap;
 #[derive(Default)]
 pub struct Context {
     pub env: HashMap<String, String>,
-    pub captures: HashMap<String, String>,
+    pub captures: HashMap<String, serde_json::Value>,
 }
 
 impl Context {
@@ -31,9 +32,16 @@ pub fn interpolate(template: &str, ctx: &Context) -> String {
 }
 
 /// Interpolate all string values in a JSON value recursively.
+/// Preserves types when a JSON string value is a single capture expression.
 pub fn interpolate_json(value: &serde_json::Value, ctx: &Context) -> serde_json::Value {
     match value {
-        serde_json::Value::String(s) => serde_json::Value::String(interpolate(s, ctx)),
+        serde_json::Value::String(s) => {
+            // If the entire string is a single capture expression, preserve its type
+            if let Some(typed_value) = try_resolve_typed(s.trim(), ctx) {
+                return typed_value;
+            }
+            serde_json::Value::String(interpolate(s, ctx))
+        }
         serde_json::Value::Array(arr) => {
             serde_json::Value::Array(arr.iter().map(|v| interpolate_json(v, ctx)).collect())
         }
@@ -59,6 +67,17 @@ pub fn interpolate_headers(
         .collect()
 }
 
+/// Try to resolve a string as a single typed capture expression.
+/// Returns the typed JSON value if the string is exactly `{{ capture.name }}`.
+fn try_resolve_typed(s: &str, ctx: &Context) -> Option<serde_json::Value> {
+    let re = Regex::new(r"^\{\{\s*capture\.(\w+)\s*\}\}$").unwrap();
+    if let Some(caps) = re.captures(s) {
+        let name = &caps[1];
+        return ctx.captures.get(name).cloned();
+    }
+    None
+}
+
 /// Resolve a single expression (the content inside `{{ ... }}`).
 fn resolve_expression(expr: &str, ctx: &Context) -> String {
     // env.var_name
@@ -70,12 +89,12 @@ fn resolve_expression(expr: &str, ctx: &Context) -> String {
             .unwrap_or_else(|| format!("{{{{ env.{} }}}}", var_name));
     }
 
-    // capture.var_name
+    // capture.var_name — convert typed value to string for string contexts
     if let Some(var_name) = expr.strip_prefix("capture.") {
         return ctx
             .captures
             .get(var_name)
-            .cloned()
+            .map(capture::value_to_string)
             .unwrap_or_else(|| format!("{{{{ capture.{} }}}}", var_name));
     }
 
@@ -95,7 +114,10 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn make_ctx(env: &[(&str, &str)], captures: &[(&str, &str)]) -> Context {
+    fn make_ctx(
+        env: &[(&str, &str)],
+        captures: &[(&str, serde_json::Value)],
+    ) -> Context {
         Context {
             env: env
                 .iter()
@@ -103,7 +125,20 @@ mod tests {
                 .collect(),
             captures: captures
                 .iter()
+                .map(|(k, v)| (k.to_string(), v.clone()))
+                .collect(),
+        }
+    }
+
+    fn make_string_ctx(env: &[(&str, &str)], captures: &[(&str, &str)]) -> Context {
+        Context {
+            env: env
+                .iter()
                 .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            captures: captures
+                .iter()
+                .map(|(k, v)| (k.to_string(), json!(v)))
                 .collect(),
         }
     }
@@ -112,7 +147,7 @@ mod tests {
 
     #[test]
     fn interpolate_env_variable() {
-        let ctx = make_ctx(&[("base_url", "http://localhost:3000")], &[]);
+        let ctx = make_string_ctx(&[("base_url", "http://localhost:3000")], &[]);
         assert_eq!(
             interpolate("{{ env.base_url }}/health", &ctx),
             "http://localhost:3000/health"
@@ -121,7 +156,7 @@ mod tests {
 
     #[test]
     fn interpolate_capture_variable() {
-        let ctx = make_ctx(&[], &[("user_id", "usr_123")]);
+        let ctx = make_string_ctx(&[], &[("user_id", "usr_123")]);
         assert_eq!(
             interpolate("/users/{{ capture.user_id }}", &ctx),
             "/users/usr_123"
@@ -130,7 +165,7 @@ mod tests {
 
     #[test]
     fn interpolate_builtin_uuid() {
-        let ctx = make_ctx(&[], &[]);
+        let ctx = make_string_ctx(&[], &[]);
         let result = interpolate("{{ $uuid }}", &ctx);
         assert_ne!(result, "{{ $uuid }}");
         assert_eq!(result.len(), 36);
@@ -138,7 +173,7 @@ mod tests {
 
     #[test]
     fn interpolate_builtin_random_hex() {
-        let ctx = make_ctx(&[], &[]);
+        let ctx = make_string_ctx(&[], &[]);
         let result = interpolate("prefix_{{ $random_hex(6) }}@test.com", &ctx);
         assert!(result.starts_with("prefix_"));
         assert!(result.ends_with("@test.com"));
@@ -148,7 +183,7 @@ mod tests {
 
     #[test]
     fn interpolate_builtin_timestamp() {
-        let ctx = make_ctx(&[], &[]);
+        let ctx = make_string_ctx(&[], &[]);
         let result = interpolate("{{ $timestamp }}", &ctx);
         let ts: i64 = result.parse().unwrap();
         assert!(ts > 1_000_000_000);
@@ -158,7 +193,7 @@ mod tests {
 
     #[test]
     fn interpolate_multiple_variables() {
-        let ctx = make_ctx(
+        let ctx = make_string_ctx(
             &[("base_url", "http://localhost:3000")],
             &[("token", "abc123")],
         );
@@ -170,14 +205,14 @@ mod tests {
 
     #[test]
     fn missing_env_variable_preserved() {
-        let ctx = make_ctx(&[], &[]);
+        let ctx = make_string_ctx(&[], &[]);
         let result = interpolate("{{ env.missing }}", &ctx);
         assert_eq!(result, "{{ env.missing }}");
     }
 
     #[test]
     fn missing_capture_variable_preserved() {
-        let ctx = make_ctx(&[], &[]);
+        let ctx = make_string_ctx(&[], &[]);
         let result = interpolate("{{ capture.missing }}", &ctx);
         assert_eq!(result, "{{ capture.missing }}");
     }
@@ -186,13 +221,13 @@ mod tests {
 
     #[test]
     fn no_templates_unchanged() {
-        let ctx = make_ctx(&[], &[]);
+        let ctx = make_string_ctx(&[], &[]);
         assert_eq!(interpolate("plain text", &ctx), "plain text");
     }
 
     #[test]
     fn empty_string() {
-        let ctx = make_ctx(&[], &[]);
+        let ctx = make_string_ctx(&[], &[]);
         assert_eq!(interpolate("", &ctx), "");
     }
 
@@ -200,7 +235,7 @@ mod tests {
 
     #[test]
     fn extra_whitespace_in_template() {
-        let ctx = make_ctx(&[("x", "val")], &[]);
+        let ctx = make_string_ctx(&[("x", "val")], &[]);
         assert_eq!(interpolate("{{  env.x  }}", &ctx), "val");
         assert_eq!(interpolate("{{env.x}}", &ctx), "val");
     }
@@ -209,7 +244,7 @@ mod tests {
 
     #[test]
     fn interpolate_json_string() {
-        let ctx = make_ctx(&[("name", "Alice")], &[]);
+        let ctx = make_string_ctx(&[("name", "Alice")], &[]);
         let val = json!("Hello {{ env.name }}");
         let result = interpolate_json(&val, &ctx);
         assert_eq!(result, json!("Hello Alice"));
@@ -217,7 +252,7 @@ mod tests {
 
     #[test]
     fn interpolate_json_object() {
-        let ctx = make_ctx(&[("email", "a@b.com")], &[]);
+        let ctx = make_string_ctx(&[("email", "a@b.com")], &[]);
         let val = json!({"email": "{{ env.email }}", "count": 5});
         let result = interpolate_json(&val, &ctx);
         assert_eq!(result["email"], "a@b.com");
@@ -226,7 +261,7 @@ mod tests {
 
     #[test]
     fn interpolate_json_nested() {
-        let ctx = make_ctx(&[("city", "NYC")], &[]);
+        let ctx = make_string_ctx(&[("city", "NYC")], &[]);
         let val = json!({"user": {"address": {"city": "{{ env.city }}"}}});
         let result = interpolate_json(&val, &ctx);
         assert_eq!(result["user"]["address"]["city"], "NYC");
@@ -234,7 +269,7 @@ mod tests {
 
     #[test]
     fn interpolate_json_array() {
-        let ctx = make_ctx(&[("tag", "test")], &[]);
+        let ctx = make_string_ctx(&[("tag", "test")], &[]);
         let val = json!(["{{ env.tag }}", "static"]);
         let result = interpolate_json(&val, &ctx);
         assert_eq!(result[0], "test");
@@ -243,17 +278,52 @@ mod tests {
 
     #[test]
     fn interpolate_json_preserves_non_strings() {
-        let ctx = make_ctx(&[], &[]);
+        let ctx = make_string_ctx(&[], &[]);
         let val = json!({"num": 42, "bool": true, "null": null});
         let result = interpolate_json(&val, &ctx);
         assert_eq!(result, val);
+    }
+
+    // --- Type-aware capture interpolation in JSON ---
+
+    #[test]
+    fn interpolate_json_preserves_number_capture() {
+        let ctx = make_ctx(&[], &[("count", json!(42))]);
+        let val = json!({"count": "{{ capture.count }}"});
+        let result = interpolate_json(&val, &ctx);
+        assert_eq!(result["count"], json!(42));
+        assert!(result["count"].is_number());
+    }
+
+    #[test]
+    fn interpolate_json_preserves_bool_capture() {
+        let ctx = make_ctx(&[], &[("active", json!(true))]);
+        let val = json!({"active": "{{ capture.active }}"});
+        let result = interpolate_json(&val, &ctx);
+        assert_eq!(result["active"], json!(true));
+        assert!(result["active"].is_boolean());
+    }
+
+    #[test]
+    fn interpolate_json_mixed_string_stays_string() {
+        let ctx = make_ctx(&[], &[("count", json!(42))]);
+        let val = json!("count is {{ capture.count }}");
+        let result = interpolate_json(&val, &ctx);
+        assert_eq!(result, json!("count is 42"));
+    }
+
+    #[test]
+    fn interpolate_capture_number_in_url_becomes_string() {
+        let ctx = make_ctx(&[], &[("id", json!(42))]);
+        let result = interpolate("/users/{{ capture.id }}", &ctx);
+        assert_eq!(result, "/users/42");
     }
 
     // --- Header interpolation ---
 
     #[test]
     fn interpolate_headers_basic() {
-        let ctx = make_ctx(&[], &[("token", "xyz")]);
+        let ctx = make_string_ctx(&[], &[("token", "xyz")]);
         let mut headers = HashMap::new();
         headers.insert("Authorization".into(), "Bearer {{ capture.token }}".into());
         headers.insert("Accept".into(), "application/json".into());
@@ -267,7 +337,7 @@ mod tests {
 
     #[test]
     fn unknown_expression_preserved() {
-        let ctx = make_ctx(&[], &[]);
+        let ctx = make_string_ctx(&[], &[]);
         let result = interpolate("{{ something.else }}", &ctx);
         assert_eq!(result, "{{ something.else }}");
     }

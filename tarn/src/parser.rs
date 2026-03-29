@@ -1,6 +1,7 @@
 use crate::error::TarnError;
 use crate::model::TestFile;
-use std::path::Path;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 
 /// Parse a .tarn.yaml file into a TestFile struct.
 pub fn parse_file(path: &Path) -> Result<TestFile, TarnError> {
@@ -11,10 +12,137 @@ pub fn parse_file(path: &Path) -> Result<TestFile, TarnError> {
 
 /// Parse YAML content string into a TestFile struct.
 pub fn parse_str(content: &str, path: &Path) -> Result<TestFile, TarnError> {
-    let test_file: TestFile = serde_yaml::from_str(content)
-        .map_err(|e| TarnError::Parse(enhance_parse_error(content, &e, path)))?;
-    validate_test_file(&test_file, path)?;
-    Ok(test_file)
+    // Check if includes need resolution (fast path: skip if no include directives)
+    if content.contains("include:") {
+        // Two-pass: resolve includes first at the YAML value level
+        let mut raw_value: serde_yaml::Value = serde_yaml::from_str(content)
+            .map_err(|e| TarnError::Parse(enhance_parse_error(content, &e, path)))?;
+
+        let base_dir = path.parent().unwrap_or(Path::new("."));
+        let mut visited = HashSet::new();
+        if let Ok(canonical) = std::fs::canonicalize(path) {
+            visited.insert(canonical);
+        } else {
+            visited.insert(path.to_path_buf());
+        }
+        resolve_includes(&mut raw_value, base_dir, &mut visited)?;
+
+        let test_file: TestFile = serde_yaml::from_value(raw_value)
+            .map_err(|e| TarnError::Parse(format!("{}: {}", path.display(), e)))?;
+        validate_test_file(&test_file, path)?;
+        Ok(test_file)
+    } else {
+        // Fast path: direct deserialization (no includes)
+        let test_file: TestFile = serde_yaml::from_str(content)
+            .map_err(|e| TarnError::Parse(enhance_parse_error(content, &e, path)))?;
+        validate_test_file(&test_file, path)?;
+        Ok(test_file)
+    }
+}
+
+/// Resolve `include:` directives in step arrays at the YAML value level.
+/// Replaces `{ include: "./path.tarn.yaml" }` entries with the steps from the included file.
+fn resolve_includes(
+    value: &mut serde_yaml::Value,
+    base_dir: &Path,
+    visited: &mut HashSet<PathBuf>,
+) -> Result<(), TarnError> {
+    // Process setup, teardown, steps arrays
+    for key in &["setup", "teardown", "steps"] {
+        if let Some(steps) = value.get_mut(*key) {
+            resolve_step_includes(steps, base_dir, visited)?;
+        }
+    }
+
+    // Process tests.*.steps arrays
+    if let Some(serde_yaml::Value::Mapping(tests)) = value.get_mut("tests") {
+        let keys: Vec<serde_yaml::Value> = tests.keys().cloned().collect();
+        for key in keys {
+            if let Some(test_group) = tests.get_mut(&key) {
+                if let Some(steps) = test_group.get_mut("steps") {
+                    resolve_step_includes(steps, base_dir, visited)?;
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Resolve include directives within a step array (YAML sequence).
+fn resolve_step_includes(
+    steps: &mut serde_yaml::Value,
+    base_dir: &Path,
+    visited: &mut HashSet<PathBuf>,
+) -> Result<(), TarnError> {
+    if let serde_yaml::Value::Sequence(seq) = steps {
+        let mut new_seq = Vec::new();
+
+        for item in seq.iter() {
+            if let Some(include_path) = item
+                .as_mapping()
+                .and_then(|m| m.get(serde_yaml::Value::String("include".to_string())))
+                .and_then(|v| v.as_str())
+            {
+                // This is an include directive
+                let full_path = base_dir.join(include_path);
+                let canonical = std::fs::canonicalize(&full_path).map_err(|e| {
+                    TarnError::Parse(format!(
+                        "Include file not found: {} (resolved to {}): {}",
+                        include_path,
+                        full_path.display(),
+                        e
+                    ))
+                })?;
+
+                if !visited.insert(canonical.clone()) {
+                    return Err(TarnError::Parse(format!(
+                        "Circular include detected: {}",
+                        canonical.display()
+                    )));
+                }
+
+                let content = std::fs::read_to_string(&canonical).map_err(|e| {
+                    TarnError::Parse(format!(
+                        "Failed to read include file {}: {}",
+                        canonical.display(),
+                        e
+                    ))
+                })?;
+
+                let mut included: serde_yaml::Value = serde_yaml::from_str(&content)
+                    .map_err(|e| {
+                        TarnError::Parse(format!(
+                            "Failed to parse include file {}: {}",
+                            canonical.display(),
+                            e
+                        ))
+                    })?;
+
+                // Recursively resolve includes in the included file
+                let included_base = canonical.parent().unwrap_or(Path::new("."));
+                resolve_includes(&mut included, included_base, visited)?;
+
+                // Extract steps from the included file: setup + steps
+                if let Some(serde_yaml::Value::Sequence(setup_steps)) = included.get("setup") {
+                    new_seq.extend(setup_steps.iter().cloned());
+                }
+                if let Some(serde_yaml::Value::Sequence(main_steps)) = included.get("steps") {
+                    new_seq.extend(main_steps.iter().cloned());
+                }
+
+                // Remove from visited to allow re-inclusion in sibling arrays
+                visited.remove(&canonical);
+            } else {
+                // Regular step — keep as-is
+                new_seq.push(item.clone());
+            }
+        }
+
+        *seq = new_seq;
+    }
+
+    Ok(())
 }
 
 /// Produce enhanced parse error messages with suggestions.
@@ -41,8 +169,17 @@ fn enhance_parse_error(raw: &str, err: &serde_yaml::Error, path: &Path) -> Strin
         }
     }
 
-    // Check for common field name typos
     let err_str = err.to_string();
+
+    // Check for body assertion format mistake (list instead of map)
+    if err_str.contains("invalid type: sequence, expected a map") {
+        return format!(
+            "{}\n  hint: Body assertions use map format, not a list.\n  Use:\n    body:\n      \"$.field\": \"value\"\n  Not:\n    body:\n      - path: \"$.field\"\n        eq: \"value\"",
+            base_msg
+        );
+    }
+
+    // Check for common field name typos
     if err_str.contains("unknown field") {
         let typo_suggestions = [
             ("step", "steps"),
@@ -129,6 +266,22 @@ fn validate_test_file(tf: &TestFile, path: &Path) -> Result<(), TarnError> {
         if step.request.body.is_some() && step.request.graphql.is_some() {
             return Err(TarnError::Validation(format!(
                 "{}: Step '{}' cannot have both 'body' and 'graphql' on request",
+                path.display(),
+                step.name
+            )));
+        }
+        // Reject steps with both body and multipart
+        if step.request.body.is_some() && step.request.multipart.is_some() {
+            return Err(TarnError::Validation(format!(
+                "{}: Step '{}' cannot have both 'body' and 'multipart' on request",
+                path.display(),
+                step.name
+            )));
+        }
+        // Reject multipart with graphql
+        if step.request.multipart.is_some() && step.request.graphql.is_some() {
+            return Err(TarnError::Validation(format!(
+                "{}: Step '{}' cannot have both 'multipart' and 'graphql' on request",
                 path.display(),
                 step.name
             )));
@@ -396,5 +549,152 @@ steps:
             "Expected tab hint in error, got: {}",
             msg
         );
+    }
+
+    #[test]
+    fn parse_error_body_assertion_list_format_hint() {
+        let result = parse_yaml(
+            r#"
+name: Bad body
+steps:
+  - name: test
+    request:
+      method: GET
+      url: "http://localhost:3000"
+    assert:
+      status: 200
+      body:
+        - path: "$.name"
+          eq: "Alice"
+"#,
+        );
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("map format"),
+            "Expected body format hint, got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn validates_body_multipart_conflict() {
+        let result = parse_yaml(
+            r#"
+name: Conflict
+steps:
+  - name: test
+    request:
+      method: POST
+      url: "http://localhost:3000"
+      body:
+        name: "test"
+      multipart:
+        fields:
+          - name: "title"
+            value: "test"
+"#,
+        );
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("cannot have both 'body' and 'multipart'"));
+    }
+
+    // --- Include tests ---
+
+    #[test]
+    fn resolve_includes_from_disk() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Create shared setup file
+        let shared_content = r#"
+name: Shared auth
+steps:
+  - name: Login
+    request:
+      method: POST
+      url: "http://localhost:3000/login"
+"#;
+        std::fs::write(dir.path().join("shared.tarn.yaml"), shared_content).unwrap();
+
+        // Create main test file with include
+        let main_content = r#"
+name: Main test
+setup:
+  - include: ./shared.tarn.yaml
+steps:
+  - name: Check
+    request:
+      method: GET
+      url: "http://localhost:3000/check"
+"#;
+        let main_path = dir.path().join("main.tarn.yaml");
+        std::fs::write(&main_path, main_content).unwrap();
+
+        let tf = parse_file(&main_path).unwrap();
+        assert_eq!(tf.name, "Main test");
+        // The include should have resolved — setup should contain the Login step
+        assert_eq!(tf.setup.len(), 1);
+        assert_eq!(tf.setup[0].name, "Login");
+    }
+
+    #[test]
+    fn resolve_includes_circular_detection() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // a.tarn.yaml includes b.tarn.yaml
+        let a_content = r#"
+name: A
+setup:
+  - include: ./b.tarn.yaml
+steps:
+  - name: step
+    request:
+      method: GET
+      url: "http://localhost:3000"
+"#;
+        std::fs::write(dir.path().join("a.tarn.yaml"), a_content).unwrap();
+
+        // b.tarn.yaml includes a.tarn.yaml (circular!)
+        let b_content = r#"
+name: B
+steps:
+  - include: ./a.tarn.yaml
+"#;
+        std::fs::write(dir.path().join("b.tarn.yaml"), b_content).unwrap();
+
+        let result = parse_file(&dir.path().join("a.tarn.yaml"));
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Circular include"));
+    }
+
+    #[test]
+    fn resolve_includes_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let content = r#"
+name: Missing include
+setup:
+  - include: ./nonexistent.tarn.yaml
+steps:
+  - name: step
+    request:
+      method: GET
+      url: "http://localhost:3000"
+"#;
+        let path = dir.path().join("test.tarn.yaml");
+        std::fs::write(&path, content).unwrap();
+
+        let result = parse_file(&path);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Include file not found"));
     }
 }

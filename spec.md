@@ -76,15 +76,20 @@ env:
   admin_email: "admin@example.com"
   admin_password: "${ADMIN_PASSWORD}"  # from shell env
 
+# Cookie handling: "auto" (default) or "off"
+# cookies: "off"
+
 # Default headers/settings applied to every request in this file
 defaults:
   headers:
     Content-Type: "application/json"
     Accept: "application/json"
   timeout: 5000  # ms
+  delay: "100ms"  # default delay before each request
 
 # Setup runs once before all tests in this file
 # Uses the same step format as tests
+# Supports include directives: - include: ./shared/auth.tarn.yaml
 setup:
   - name: Authenticate
     request:
@@ -97,6 +102,12 @@ setup:
       auth_token: "$.token"
       # capture uses JSONPath expressions
       # captured values are available as {{ capture.auth_token }}
+      # captures preserve types (numbers stay numbers, booleans stay booleans)
+      #
+      # Extended capture from headers:
+      # session_token:
+      #   header: "set-cookie"
+      #   regex: "session_token=([^;]+)"
     assert:
       status: 200
 
@@ -133,7 +144,13 @@ tests:
           created_at: "$.createdAt"
         assert:
           # --- Status ---
-          status: 201
+          status: 201           # exact match
+          # status: "2xx"       # shorthand range
+          # status:             # complex range
+          #   gte: 200
+          #   lt: 300
+          # status:             # set of values
+          #   in: [200, 201]
 
           # --- Response time ---
           duration: "< 500ms"
@@ -583,7 +600,8 @@ tarn/
 │   ├── interpolation.rs     # {{ variable }} template engine
 │   ├── runner.rs            # Orchestrator: setup → tests → teardown
 │   ├── http.rs              # HTTP request execution (reqwest)
-│   ├── capture.rs           # JSONPath extraction from responses
+│   ├── capture.rs           # JSONPath + header extraction from responses
+│   ├── cookie.rs            # Automatic cookie jar (Set-Cookie/Cookie)
 │   ├── assert/
 │   │   ├── mod.rs           # Assertion dispatcher
 │   │   ├── status.rs        # Status code assertions

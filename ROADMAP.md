@@ -141,15 +141,9 @@ These make Tarn competitive and enable real adoption at scale.
 **Effort:** Medium-High
 **Impact:** Medium
 
-### 12. Includes / reusable blocks
+### 12. ~~Includes / reusable blocks~~ ✅ DONE
 
-**Why:** DRY. Auth setup, common headers, shared assertions repeat across files.
-**What:**
-- `include: ./shared/auth-setup.tarn.yaml` in setup block
-- Shared assertion templates: `assert: { $ref: "./asserts/standard-error.yaml" }`
-- Shared request fragments
-**Effort:** Medium
-**Impact:** Medium — maintainability at scale
+**Shipped.** `- include: ./shared/auth-setup.tarn.yaml` in setup/teardown/steps/tests.*.steps. Resolved at parse time with circular include detection.
 
 ### 13. Test data factories / richer built-ins
 

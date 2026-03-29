@@ -20,7 +20,7 @@ pub fn run_assertions(
     let mut results = Vec::new();
 
     // Status assertion
-    if let Some(expected_status) = assertion.status {
+    if let Some(ref expected_status) = assertion.status {
         results.push(status::assert_status(expected_status, response_status));
     }
 
@@ -45,11 +45,12 @@ pub fn run_assertions(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::StatusAssertion;
 
     #[test]
     fn run_assertions_status_only() {
         let assertion = Assertion {
-            status: Some(200),
+            status: Some(StatusAssertion::Exact(200)),
             duration: None,
             headers: None,
             body: None,
@@ -64,7 +65,7 @@ mod tests {
     #[test]
     fn run_assertions_status_fails() {
         let assertion = Assertion {
-            status: Some(200),
+            status: Some(StatusAssertion::Exact(200)),
             duration: None,
             headers: None,
             body: None,

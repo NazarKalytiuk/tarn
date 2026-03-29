@@ -3,6 +3,7 @@ use crate::assert::types::{
     AssertionResult, FailureCategory, FileResult, RequestInfo, ResponseInfo, StepResult, TestResult,
 };
 use crate::capture;
+use crate::cookie::CookieJar;
 use crate::error::TarnError;
 use crate::http;
 use crate::interpolation::{self, Context};
@@ -66,10 +67,36 @@ pub fn run_file(
     }
 
     // Build interpolation context with resolved env
-    let mut captures: HashMap<String, String> = HashMap::new();
+    let mut captures: HashMap<String, serde_json::Value> = HashMap::new();
+
+    // Cookie jar: enabled by default, disabled with `cookies: "off"`
+    let cookies_enabled = test_file
+        .cookies
+        .as_deref()
+        .map(|c| c != "off")
+        .unwrap_or(true);
+    let mut cookie_jar = if cookies_enabled {
+        Some(CookieJar::new())
+    } else {
+        None
+    };
+
+    // Resolve base directory for file paths (e.g., multipart file references)
+    let base_dir = Path::new(file_path)
+        .parent()
+        .unwrap_or(Path::new("."))
+        .to_path_buf();
 
     // Run setup steps
-    let setup_results = run_steps(&test_file.setup, env, &mut captures, test_file, opts)?;
+    let setup_results = run_steps(
+        &test_file.setup,
+        env,
+        &mut captures,
+        test_file,
+        opts,
+        cookie_jar.as_mut(),
+        &base_dir,
+    )?;
     let setup_failed = setup_results.iter().any(|s| !s.passed);
 
     let mut test_results = Vec::new();
@@ -78,8 +105,15 @@ pub fn run_file(
         if !test_file.steps.is_empty() {
             // Simple format: flat steps
             let mut step_captures = captures.clone();
-            let step_results =
-                run_steps(&test_file.steps, env, &mut step_captures, test_file, opts)?;
+            let step_results = run_steps(
+                &test_file.steps,
+                env,
+                &mut step_captures,
+                test_file,
+                opts,
+                cookie_jar.as_mut(),
+                &base_dir,
+            )?;
             let passed = step_results.iter().all(|s| s.passed);
             let duration_ms = step_results.iter().map(|s| s.duration_ms).sum();
             test_results.push(TestResult {
@@ -108,8 +142,15 @@ pub fn run_file(
             }
 
             let mut test_captures = captures.clone();
-            let step_results =
-                run_steps(&test_group.steps, env, &mut test_captures, test_file, opts)?;
+            let step_results = run_steps(
+                &test_group.steps,
+                env,
+                &mut test_captures,
+                test_file,
+                opts,
+                cookie_jar.as_mut(),
+                &base_dir,
+            )?;
             let passed = step_results.iter().all(|s| s.passed);
             let duration_ms = step_results.iter().map(|s| s.duration_ms).sum();
             test_results.push(TestResult {
@@ -123,7 +164,15 @@ pub fn run_file(
     }
 
     // Run teardown steps (always, even on failure)
-    let teardown_results = run_steps(&test_file.teardown, env, &mut captures, test_file, opts)?;
+    let teardown_results = run_steps(
+        &test_file.teardown,
+        env,
+        &mut captures,
+        test_file,
+        opts,
+        cookie_jar.as_mut(),
+        &base_dir,
+    )?;
 
     let all_passed = !setup_failed
         && test_results.iter().all(|t| t.passed)
@@ -144,14 +193,27 @@ pub fn run_file(
 fn run_steps(
     steps: &[Step],
     env: &HashMap<String, String>,
-    captures: &mut HashMap<String, String>,
+    captures: &mut HashMap<String, serde_json::Value>,
     test_file: &TestFile,
     opts: &RunOptions,
+    cookie_jar: Option<&mut CookieJar>,
+    base_dir: &Path,
 ) -> Result<Vec<StepResult>, TarnError> {
     let mut results = Vec::new();
 
+    // We need to reborrow cookie_jar on each iteration
+    let jar_cell = std::cell::RefCell::new(cookie_jar);
+
     for step in steps {
-        let result = run_step(step, env, captures, test_file, opts)?;
+        let result = run_step(
+            step,
+            env,
+            captures,
+            test_file,
+            opts,
+            jar_cell.borrow_mut().as_deref_mut(),
+            base_dir,
+        )?;
         results.push(result);
     }
 
@@ -174,8 +236,9 @@ fn parse_delay(spec: &str) -> Option<u64> {
 fn prepare_request(
     step: &Step,
     env: &HashMap<String, String>,
-    captures: &HashMap<String, String>,
+    captures: &HashMap<String, serde_json::Value>,
     test_file: &TestFile,
+    cookie_jar: Option<&CookieJar>,
 ) -> (
     String,
     HashMap<String, String>,
@@ -197,6 +260,18 @@ fn prepare_request(
         .unwrap_or_default();
     for (k, v) in &step.request.headers {
         merged_headers.insert(k.clone(), v.clone());
+    }
+
+    // Inject cookies from jar (if not already set by the user)
+    if let Some(jar) = cookie_jar {
+        if !merged_headers
+            .keys()
+            .any(|k| k.eq_ignore_ascii_case("cookie"))
+        {
+            if let Some(cookie_header) = jar.cookie_header() {
+                merged_headers.insert("Cookie".to_string(), cookie_header);
+            }
+        }
     }
 
     // GraphQL: build body from graphql block and auto-set Content-Type
@@ -234,16 +309,23 @@ fn prepare_request(
 }
 
 /// Run a single step: interpolate, execute HTTP request, run assertions, extract captures.
-/// Supports retries, polling, GraphQL, Lua scripts, step-level timeout, delay, verbose, dry-run.
+/// Supports retries, polling, GraphQL, multipart, Lua scripts, step-level timeout, delay, verbose, dry-run.
+/// Capture failures are handled gracefully — the step is marked as failed instead of aborting the run.
 fn run_step(
     step: &Step,
     env: &HashMap<String, String>,
-    captures: &mut HashMap<String, String>,
+    captures: &mut HashMap<String, serde_json::Value>,
     test_file: &TestFile,
     opts: &RunOptions,
+    mut cookie_jar: Option<&mut CookieJar>,
+    base_dir: &Path,
 ) -> Result<StepResult, TarnError> {
-    // Apply delay before step execution
-    if let Some(ref delay_spec) = step.delay {
+    // Apply delay: step-level > defaults > none
+    let delay_spec = step
+        .delay
+        .as_ref()
+        .or_else(|| test_file.defaults.as_ref().and_then(|d| d.delay.as_ref()));
+    if let Some(delay_spec) = delay_spec {
         if let Some(delay_ms) = parse_delay(delay_spec) {
             std::thread::sleep(std::time::Duration::from_millis(delay_ms));
         }
@@ -251,10 +333,11 @@ fn run_step(
 
     // Dispatch to poll mode if configured
     if let Some(ref poll) = step.poll {
-        return run_step_poll(step, poll, env, captures, test_file, opts);
+        return run_step_poll(step, poll, env, captures, test_file, opts, cookie_jar, base_dir);
     }
 
-    let (url, headers, body, timeout, ctx) = prepare_request(step, env, captures, test_file);
+    let (url, headers, body, timeout, ctx) =
+        prepare_request(step, env, captures, test_file, cookie_jar.as_deref());
 
     // Verbose: print request details
     if opts.verbose {
@@ -294,8 +377,24 @@ fn run_step(
     // Execute with retries
     let mut last_result = None;
     for attempt in 0..=max_retries {
-        let response =
-            http::execute_request(&step.request.method, &url, &headers, body.as_ref(), timeout)?;
+        // Choose between multipart and regular request
+        let response = if let Some(ref multipart) = step.request.multipart {
+            http::execute_multipart_request(
+                &step.request.method,
+                &url,
+                &headers,
+                multipart,
+                timeout,
+                base_dir,
+            )?
+        } else {
+            http::execute_request(&step.request.method, &url, &headers, body.as_ref(), timeout)?
+        };
+
+        // Capture cookies from response
+        if let Some(ref mut jar) = cookie_jar.as_deref_mut() {
+            jar.capture_from_response(&response.raw_headers);
+        }
 
         if opts.verbose {
             eprintln!("  <-- {} ({}ms)", response.status, response.duration_ms);
@@ -320,10 +419,46 @@ fn run_step(
         let passed = assertion_results.iter().all(|a| a.passed);
 
         if passed {
-            // Extract captures on success
-            if !step.capture.is_empty() {
-                let new_captures = capture::extract_captures(&response.body, &step.capture)?;
-                captures.extend(new_captures);
+            // Extract captures on success — graceful failure (P0 fix)
+            let capture_result = if !step.capture.is_empty() {
+                match capture::extract_captures(&response.body, &response.headers, &step.capture) {
+                    Ok(new_captures) => {
+                        captures.extend(new_captures);
+                        None
+                    }
+                    Err(e) => Some(e),
+                }
+            } else {
+                None
+            };
+
+            // If capture failed, mark step as failed instead of aborting
+            if let Some(capture_err) = capture_result {
+                let mut all_assertions = assertion_results;
+                all_assertions.push(AssertionResult::fail(
+                    "capture",
+                    "successful extraction",
+                    "extraction failed",
+                    format!("{}", capture_err),
+                ));
+                return Ok(StepResult {
+                    name: step.name.clone(),
+                    passed: false,
+                    duration_ms: response.duration_ms,
+                    assertion_results: all_assertions,
+                    request_info: Some(RequestInfo {
+                        method: step.request.method.clone(),
+                        url,
+                        headers,
+                        body,
+                    }),
+                    response_info: Some(ResponseInfo {
+                        status: response.status,
+                        headers: response.headers,
+                        body: Some(response.body),
+                    }),
+                    error_category: Some(FailureCategory::CaptureError),
+                });
             }
 
             // Run Lua script if present
@@ -372,13 +507,16 @@ fn run_step(
 }
 
 /// Execute a step with polling: re-execute until `poll.until` assertions pass.
+#[allow(clippy::too_many_arguments)]
 fn run_step_poll(
     step: &Step,
     poll: &PollConfig,
     env: &HashMap<String, String>,
-    captures: &mut HashMap<String, String>,
+    captures: &mut HashMap<String, serde_json::Value>,
     test_file: &TestFile,
     opts: &RunOptions,
+    mut cookie_jar: Option<&mut CookieJar>,
+    base_dir: &Path,
 ) -> Result<StepResult, TarnError> {
     let interval_ms = parse_delay(&poll.interval).unwrap_or(1000);
 
@@ -387,7 +525,8 @@ fn run_step_poll(
             std::thread::sleep(std::time::Duration::from_millis(interval_ms));
         }
 
-        let (url, headers, body, timeout, ctx) = prepare_request(step, env, captures, test_file);
+        let (url, headers, body, timeout, ctx) =
+            prepare_request(step, env, captures, test_file, cookie_jar.as_deref());
 
         if opts.verbose {
             eprintln!(
@@ -399,8 +538,24 @@ fn run_step_poll(
             );
         }
 
-        let response =
-            http::execute_request(&step.request.method, &url, &headers, body.as_ref(), timeout)?;
+        // Choose between multipart and regular request
+        let response = if let Some(ref multipart) = step.request.multipart {
+            http::execute_multipart_request(
+                &step.request.method,
+                &url,
+                &headers,
+                multipart,
+                timeout,
+                base_dir,
+            )?
+        } else {
+            http::execute_request(&step.request.method, &url, &headers, body.as_ref(), timeout)?
+        };
+
+        // Capture cookies
+        if let Some(ref mut jar) = cookie_jar.as_deref_mut() {
+            jar.capture_from_response(&response.raw_headers);
+        }
 
         // Check poll.until condition
         let until_interpolated = interpolate_assertion(&poll.until, &ctx);
@@ -430,9 +585,35 @@ fn run_step_poll(
 
             let passed = assertion_results.iter().all(|a| a.passed);
 
+            // Extract captures — graceful failure
             if passed && !step.capture.is_empty() {
-                let new_captures = capture::extract_captures(&response.body, &step.capture)?;
-                captures.extend(new_captures);
+                match capture::extract_captures(&response.body, &response.headers, &step.capture) {
+                    Ok(new_captures) => {
+                        captures.extend(new_captures);
+                    }
+                    Err(e) => {
+                        let mut all_assertions = assertion_results;
+                        all_assertions.push(AssertionResult::fail(
+                            "capture",
+                            "successful extraction",
+                            "extraction failed",
+                            format!("{}", e),
+                        ));
+                        return Ok(StepResult {
+                            name: step.name.clone(),
+                            passed: false,
+                            duration_ms: response.duration_ms,
+                            assertion_results: all_assertions,
+                            request_info: None,
+                            response_info: Some(ResponseInfo {
+                                status: response.status,
+                                headers: response.headers,
+                                body: Some(response.body),
+                            }),
+                            error_category: Some(FailureCategory::CaptureError),
+                        });
+                    }
+                }
             }
 
             // Run Lua script if present
@@ -476,7 +657,7 @@ fn run_step_poll(
 fn run_script_if_present(
     step: &Step,
     response: &http::HttpResponse,
-    captures: &mut HashMap<String, String>,
+    captures: &mut HashMap<String, serde_json::Value>,
     mut assertion_results: Vec<AssertionResult>,
 ) -> Result<(Vec<AssertionResult>, bool), TarnError> {
     if let Some(ref script) = step.script {

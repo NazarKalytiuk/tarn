@@ -27,9 +27,12 @@ steps:
         name: "Jane Doe"
         email: "jane@example.com"
     capture:
-      user_id: "$.id"
+      user_id: "$.id"                  # JSONPath (type-preserving)
+      # session:                       # header capture with regex
+      #   header: "set-cookie"
+      #   regex: "session=([^;]+)"
     assert:
-      status: 201
+      status: 201                      # also: "2xx", { in: [200,201] }, { gte: 200, lt: 300 }
       body:
         "$.name": "Jane Doe"
         "$.id": { type: string, not_empty: true }
@@ -133,6 +136,30 @@ Add to your project's `.claude/settings.json`:
 - **`tarn_run`** — Run tests, returns structured JSON results
 - **`tarn_validate`** — Validate YAML syntax without executing
 - **`tarn_list`** — List all available tests and their steps
+
+## Cookies
+
+Automatic cookie handling is on by default. Set-Cookie headers are captured and Cookie headers are sent on subsequent requests. Disable per file with `cookies: "off"`.
+
+## Multipart Upload
+
+```yaml
+request:
+  method: POST
+  url: "{{ env.base_url }}/upload"
+  multipart:
+    fields:
+      - name: "title"
+        value: "My Photo"
+    files:
+      - name: "file"
+        path: "./fixtures/test.jpg"
+        content_type: "image/jpeg"
+```
+
+## Includes
+
+Reuse shared steps: `- include: ./shared/auth.tarn.yaml` in setup/teardown/steps.
 
 ## File Extension
 

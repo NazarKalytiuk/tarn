@@ -1,5 +1,7 @@
 use crate::error::TarnError;
+use crate::model::MultipartBody;
 use std::collections::HashMap;
+use std::path::Path;
 use std::time::Instant;
 
 /// Response from an HTTP request.
@@ -7,6 +9,8 @@ use std::time::Instant;
 pub struct HttpResponse {
     pub status: u16,
     pub headers: HashMap<String, String>,
+    /// Raw headers preserving duplicates (e.g., multiple Set-Cookie)
+    pub raw_headers: Vec<(String, String)>,
     pub body: serde_json::Value,
     pub duration_ms: u64,
 }
@@ -19,7 +23,10 @@ pub fn execute_request(
     body: Option<&serde_json::Value>,
     timeout_ms: Option<u64>,
 ) -> Result<HttpResponse, TarnError> {
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::blocking::Client::builder()
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .build()
+        .map_err(|e| TarnError::Http(format!("Failed to build HTTP client: {}", e)))?;
 
     let mut builder = match method.to_uppercase().as_str() {
         "GET" => client.get(url),
@@ -56,12 +63,102 @@ pub fn execute_request(
     let response = builder.send().map_err(|e| enhance_http_error(url, &e))?;
     let duration_ms = start.elapsed().as_millis() as u64;
 
+    parse_response(response, duration_ms)
+}
+
+/// Execute an HTTP request with multipart form data.
+pub fn execute_multipart_request(
+    method: &str,
+    url: &str,
+    headers: &HashMap<String, String>,
+    multipart: &MultipartBody,
+    timeout_ms: Option<u64>,
+    base_dir: &Path,
+) -> Result<HttpResponse, TarnError> {
+    let client = reqwest::blocking::Client::builder()
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .build()
+        .map_err(|e| TarnError::Http(format!("Failed to build HTTP client: {}", e)))?;
+
+    let mut builder = match method.to_uppercase().as_str() {
+        "POST" => client.post(url),
+        "PUT" => client.put(url),
+        "PATCH" => client.patch(url),
+        other => {
+            return Err(TarnError::Http(format!(
+                "Multipart requests require POST/PUT/PATCH, got: {}",
+                other
+            )));
+        }
+    };
+
+    // Apply timeout
+    if let Some(ms) = timeout_ms {
+        builder = builder.timeout(std::time::Duration::from_millis(ms));
+    }
+
+    // Apply headers (except Content-Type — reqwest sets it for multipart)
+    for (key, value) in headers {
+        if !key.eq_ignore_ascii_case("content-type") {
+            builder = builder.header(key, value);
+        }
+    }
+
+    // Build multipart form
+    let mut form = reqwest::blocking::multipart::Form::new();
+
+    for field in &multipart.fields {
+        form = form.text(field.name.clone(), field.value.clone());
+    }
+
+    for file in &multipart.files {
+        let file_path = base_dir.join(&file.path);
+        let mut part = reqwest::blocking::multipart::Part::file(&file_path).map_err(|e| {
+            TarnError::Http(format!(
+                "Failed to read file '{}': {}",
+                file_path.display(),
+                e
+            ))
+        })?;
+
+        if let Some(ref ct) = file.content_type {
+            part = part.mime_str(ct).map_err(|e| {
+                TarnError::Http(format!("Invalid content type '{}': {}", ct, e))
+            })?;
+        }
+
+        if let Some(ref filename) = file.filename {
+            part = part.file_name(filename.clone());
+        }
+
+        form = form.part(file.name.clone(), part);
+    }
+
+    builder = builder.multipart(form);
+
+    let start = Instant::now();
+    let response = builder.send().map_err(|e| enhance_http_error(url, &e))?;
+    let duration_ms = start.elapsed().as_millis() as u64;
+
+    parse_response(response, duration_ms)
+}
+
+/// Parse a reqwest response into our HttpResponse.
+fn parse_response(
+    response: reqwest::blocking::Response,
+    duration_ms: u64,
+) -> Result<HttpResponse, TarnError> {
     let status = response.status().as_u16();
 
     let mut response_headers = HashMap::new();
+    let mut raw_headers = Vec::new();
     for (name, value) in response.headers() {
         if let Ok(v) = value.to_str() {
-            response_headers.insert(name.as_str().to_string(), v.to_string());
+            let name_str = name.as_str().to_string();
+            let value_str = v.to_string();
+            raw_headers.push((name_str.clone(), value_str.clone()));
+            // HashMap keeps last value for duplicate keys
+            response_headers.insert(name_str, value_str);
         }
     }
 
@@ -78,6 +175,7 @@ pub fn execute_request(
     Ok(HttpResponse {
         status,
         headers: response_headers,
+        raw_headers,
         body,
         duration_ms,
     })
@@ -158,5 +256,26 @@ mod tests {
             "Expected timeout or connection error, got: {}",
             msg
         );
+    }
+
+    #[test]
+    fn multipart_rejects_get_method() {
+        let mp = MultipartBody {
+            fields: vec![],
+            files: vec![],
+        };
+        let result = execute_multipart_request(
+            "GET",
+            "http://localhost:1",
+            &HashMap::new(),
+            &mp,
+            None,
+            Path::new("."),
+        );
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("POST/PUT/PATCH"));
     }
 }

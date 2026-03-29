@@ -33,7 +33,8 @@ Key modules in `src/`:
 - **interpolation.rs** - `{{ env.x }}` and `{{ capture.x }}` template resolution across all string fields
 - **runner.rs** - Orchestrator: load file -> resolve env -> run setup -> run tests -> run teardown
 - **http.rs** - Request execution via reqwest (blocking initially)
-- **capture.rs** - JSONPath extraction from responses for variable chaining between steps
+- **capture.rs** - JSONPath + header extraction from responses for variable chaining between steps (type-preserving)
+- **cookie.rs** - Automatic cookie jar: captures Set-Cookie, sends Cookie on subsequent requests
 - **assert/** - Assertion modules: status, headers, body (JSONPath), duration, types
 - **report/** - Output formatters behind a Reporter trait: human (colored), json, junit, tap
 - **builtin.rs** - Built-in functions: `$uuid`, `$random_hex(n)`, `$random_int(min,max)`, `$timestamp`, `$now_iso`
@@ -68,7 +69,7 @@ steps:
       status: 200
 ```
 
-Full format supports: `env`, `defaults`, `setup`, `teardown`, `tests` (with `steps`), `capture`, and rich assertions (see spec.md for the complete assertion reference).
+Full format supports: `env`, `defaults` (with `delay`), `setup`, `teardown`, `tests` (with `steps`), `capture` (JSONPath + header), `cookies`, `multipart`, `include`, and rich assertions including status ranges (see spec.md for the complete assertion reference).
 
 ## Exit Codes
 
@@ -95,6 +96,12 @@ The spec defines 6 ordered phases. Check `spec.md` "Implementation Plan" section
 - Tests within a file run sequentially; steps within a test are sequential
 - Each test is independent but steps within a test share captured variables
 - Setup runs once before all tests; teardown runs even if tests fail
+- Capture failures are graceful — step is marked failed, run continues (no exit code 3 abort)
+- Captures preserve JSON types (numbers, booleans) — not coerced to strings
+- Automatic cookie jar is on by default; disable with `cookies: "off"` per file
+- Status assertions support exact (`200`), shorthand (`"2xx"`), sets (`in: [200, 201]`), ranges (`gte: 400, lt: 500`)
+- Supports multipart/form-data via `multipart:` field (separate from `body:`)
+- Shared setup via `include:` directives in step arrays, resolved at parse time
 
 
 # Testing Strategy

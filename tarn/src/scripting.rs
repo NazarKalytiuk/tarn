@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 /// Result of running a Lua script.
 #[derive(Debug)]
 pub struct ScriptResult {
-    pub captures: HashMap<String, String>,
+    pub captures: HashMap<String, serde_json::Value>,
     pub assertion_results: Vec<AssertionResult>,
 }
 
@@ -16,7 +16,7 @@ pub struct ScriptResult {
 pub fn run_script(
     script: &str,
     response: &HttpResponse,
-    captures: &HashMap<String, String>,
+    captures: &HashMap<String, serde_json::Value>,
     step_name: &str,
 ) -> Result<ScriptResult, TarnError> {
     let lua = Lua::new();
@@ -54,13 +54,16 @@ pub fn run_script(
         .set("response", response_table)
         .map_err(|e| TarnError::Script(e.to_string()))?;
 
-    // Captures table
+    // Captures table — push typed JSON values to Lua
     let captures_table = lua
         .create_table()
         .map_err(|e| TarnError::Script(e.to_string()))?;
     for (k, v) in captures {
+        let lua_val = lua
+            .to_value(v)
+            .map_err(|e| TarnError::Script(format!("Failed to convert capture '{}' to Lua: {}", k, e)))?;
         captures_table
-            .set(k.as_str(), v.as_str())
+            .set(k.as_str(), lua_val)
             .map_err(|e| TarnError::Script(e.to_string()))?;
     }
     lua.globals()
@@ -99,8 +102,8 @@ pub fn run_script(
         .exec()
         .map_err(|e| TarnError::Script(format!("Lua error in step '{}': {}", step_name, e)))?;
 
-    // Extract modified captures
-    let final_captures: HashMap<String, String> = {
+    // Extract modified captures — convert Lua types to serde_json::Value
+    let final_captures: HashMap<String, serde_json::Value> = {
         let captures_table: LuaTable = lua
             .globals()
             .get("captures")
@@ -108,15 +111,8 @@ pub fn run_script(
         let mut result = HashMap::new();
         for pair in captures_table.pairs::<String, LuaValue>() {
             let (k, v) = pair.map_err(|e| TarnError::Script(e.to_string()))?;
-            let v_str = match v {
-                LuaValue::String(s) => s.to_string_lossy().to_string(),
-                LuaValue::Integer(i) => i.to_string(),
-                LuaValue::Number(n) => n.to_string(),
-                LuaValue::Boolean(b) => b.to_string(),
-                LuaValue::Nil => "null".to_string(),
-                _ => format!("{:?}", v),
-            };
-            result.insert(k, v_str);
+            let v_json = lua_value_to_json(v);
+            result.insert(k, v_json);
         }
         result
     };
@@ -129,6 +125,22 @@ pub fn run_script(
     })
 }
 
+/// Convert a Lua value to a serde_json::Value.
+fn lua_value_to_json(v: LuaValue) -> serde_json::Value {
+    match v {
+        LuaValue::String(s) => serde_json::Value::String(s.to_string_lossy().to_string()),
+        LuaValue::Integer(i) => serde_json::json!(i),
+        LuaValue::Number(n) => {
+            serde_json::Number::from_f64(n)
+                .map(serde_json::Value::Number)
+                .unwrap_or(serde_json::Value::Null)
+        }
+        LuaValue::Boolean(b) => serde_json::Value::Bool(b),
+        LuaValue::Nil => serde_json::Value::Null,
+        _ => serde_json::Value::String(format!("{:?}", v)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -138,6 +150,7 @@ mod tests {
         HttpResponse {
             status,
             headers: HashMap::new(),
+            raw_headers: vec![],
             body,
             duration_ms: 50,
         }
@@ -180,7 +193,20 @@ mod tests {
             "test",
         )
         .unwrap();
-        assert_eq!(result.captures.get("user_id").unwrap(), "usr_123");
+        assert_eq!(result.captures.get("user_id").unwrap(), &json!("usr_123"));
+    }
+
+    #[test]
+    fn script_sets_typed_captures() {
+        let resp = make_response(200, json!({"count": 42}));
+        let result = run_script(
+            "captures.count = response.body.count",
+            &resp,
+            &HashMap::new(),
+            "test",
+        )
+        .unwrap();
+        assert_eq!(result.captures.get("count").unwrap(), &json!(42));
     }
 
     #[test]
@@ -211,9 +237,24 @@ mod tests {
     fn script_reads_existing_captures() {
         let resp = make_response(200, json!({}));
         let mut caps = HashMap::new();
-        caps.insert("token".to_string(), "abc123".to_string());
+        caps.insert("token".to_string(), json!("abc123"));
         let result = run_script(
             "assert(captures.token == 'abc123', 'token check')",
+            &resp,
+            &caps,
+            "test",
+        )
+        .unwrap();
+        assert!(result.assertion_results[0].passed);
+    }
+
+    #[test]
+    fn script_reads_typed_captures() {
+        let resp = make_response(200, json!({}));
+        let mut caps = HashMap::new();
+        caps.insert("count".to_string(), json!(42));
+        let result = run_script(
+            "assert(captures.count == 42, 'number preserved')",
             &resp,
             &caps,
             "test",

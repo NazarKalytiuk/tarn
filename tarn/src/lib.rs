@@ -3,6 +3,7 @@ pub mod bench;
 pub mod builtin;
 pub mod capture;
 pub mod config;
+pub mod cookie;
 pub mod env;
 pub mod error;
 pub mod http;
