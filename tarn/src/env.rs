@@ -1,6 +1,6 @@
 use crate::error::TarnError;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Resolve environment variables with the priority chain:
 /// CLI --var > shell env ${VAR} > tarn.env.local.yaml > tarn.env.{name}.yaml > tarn.env.yaml > inline env: block
@@ -10,6 +10,17 @@ pub fn resolve_env(
     cli_vars: &[(String, String)],
     base_dir: &Path,
 ) -> Result<HashMap<String, String>, TarnError> {
+    resolve_env_with_file(inline_env, env_name, cli_vars, base_dir, "tarn.env.yaml")
+}
+
+/// Resolve environment variables using a configurable env file name.
+pub fn resolve_env_with_file(
+    inline_env: &HashMap<String, String>,
+    env_name: Option<&str>,
+    cli_vars: &[(String, String)],
+    base_dir: &Path,
+    env_file_name: &str,
+) -> Result<HashMap<String, String>, TarnError> {
     let mut env = HashMap::new();
 
     // Layer 1 (lowest): inline env: block from test file
@@ -18,7 +29,7 @@ pub fn resolve_env(
     }
 
     // Layer 2: tarn.env.yaml (default env file)
-    let default_env_file = base_dir.join("tarn.env.yaml");
+    let default_env_file = base_dir.join(env_file_name);
     if default_env_file.exists() {
         let file_env = load_env_file(&default_env_file)?;
         for (k, v) in file_env {
@@ -28,7 +39,7 @@ pub fn resolve_env(
 
     // Layer 3: tarn.env.{name}.yaml (environment-specific)
     if let Some(name) = env_name {
-        let named_env_file = base_dir.join(format!("tarn.env.{}.yaml", name));
+        let named_env_file = base_dir.join(env_variant_filename(env_file_name, name));
         if named_env_file.exists() {
             let file_env = load_env_file(&named_env_file)?;
             for (k, v) in file_env {
@@ -38,7 +49,7 @@ pub fn resolve_env(
     }
 
     // Layer 4: tarn.env.local.yaml (gitignored, secrets)
-    let local_env_file = base_dir.join("tarn.env.local.yaml");
+    let local_env_file = base_dir.join(env_variant_filename(env_file_name, "local"));
     if local_env_file.exists() {
         let file_env = load_env_file(&local_env_file)?;
         for (k, v) in file_env {
@@ -62,6 +73,19 @@ pub fn resolve_env(
     }
 
     Ok(env)
+}
+
+fn env_variant_filename(env_file_name: &str, suffix: &str) -> PathBuf {
+    let path = Path::new(env_file_name);
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(env_file_name);
+
+    match path.extension().and_then(|ext| ext.to_str()) {
+        Some(ext) => PathBuf::from(format!("{stem}.{suffix}.{ext}")),
+        None => PathBuf::from(format!("{stem}.{suffix}")),
+    }
 }
 
 /// Load an env file (YAML key-value pairs).
@@ -336,5 +360,42 @@ mod tests {
         // No tarn.env.staging.yaml exists
         let env = resolve_env(&HashMap::new(), Some("staging"), &[], dir.path()).unwrap();
         assert!(env.is_empty());
+    }
+
+    #[test]
+    fn custom_env_file_supports_named_and_local_variants() {
+        let dir = TempDir::new().unwrap();
+        setup_env_files(
+            &dir,
+            &[
+                ("custom.env.yaml", "base_url: http://default"),
+                ("custom.env.staging.yaml", "base_url: http://staging"),
+                ("custom.env.local.yaml", "token: secret"),
+            ],
+        );
+
+        let env = resolve_env_with_file(
+            &HashMap::new(),
+            Some("staging"),
+            &[],
+            dir.path(),
+            "custom.env.yaml",
+        )
+        .unwrap();
+
+        assert_eq!(env.get("base_url").unwrap(), "http://staging");
+        assert_eq!(env.get("token").unwrap(), "secret");
+    }
+
+    #[test]
+    fn env_variant_filename_inserts_suffix_before_extension() {
+        assert_eq!(
+            env_variant_filename("tarn.env.yaml", "local"),
+            PathBuf::from("tarn.env.local.yaml")
+        );
+        assert_eq!(
+            env_variant_filename("custom.env.yaml", "staging"),
+            PathBuf::from("custom.env.staging.yaml")
+        );
     }
 }

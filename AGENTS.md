@@ -86,13 +86,16 @@ Priority (highest to lowest): `--var` flag > shell env > `tarn.env.local.yaml` >
 ```json
 {
   "schema_version": 1,
-  "status": "PASSED|FAILED",
+  "summary": {
+    "status": "PASSED|FAILED"
+  },
   "files": [{
     "file": "tests/users.tarn.yaml",
     "tests": [{
       "steps": [{
         "name": "Create user",
         "status": "PASSED|FAILED",
+        "failure_category": "assertion_failed",
         "assertions": {
           "failures": [{
             "assertion": "status",
@@ -111,6 +114,8 @@ Priority (highest to lowest): `--var` flag > shell env > `tarn.env.local.yaml` >
 ```
 
 Request/response are only included for failed steps.
+`request` is available for failed executed steps; `response` is omitted when no HTTP response exists (for example, connection failure).
+Schema files live in `schemas/v1/testfile.json` and `schemas/v1/report.json`.
 
 ## MCP Server
 
@@ -136,6 +141,27 @@ Add to your project's `.claude/settings.json`:
 - **`tarn_run`** — Run tests, returns structured JSON results
 - **`tarn_validate`** — Validate YAML syntax without executing
 - **`tarn_list`** — List all available tests and their steps
+
+### Recommended Agent Loop
+
+1. Call `tarn_validate` after generating or editing YAML.
+2. Call `tarn_run` and inspect `failure_category` first.
+3. If `response` exists, fix assertions/captures against the real payload.
+4. If `request.url` still contains `{{ ... }}`, fix env/capture interpolation before retrying.
+5. Rerun until summary status is `PASSED`.
+
+### Common Failure Categories
+
+- `assertion_failed` — request succeeded, assertion mismatch
+- `connection_error` — DNS/connect/TLS failure before a usable response
+- `timeout` — request exceeded allowed time
+- `parse_error` — invalid YAML/config/JSONPath surface
+- `capture_error` — assertions passed, capture extraction failed
+
+### Non-JSON Responses
+
+- Plain text / HTML responses are preserved as JSON strings in structured output.
+- To assert a whole string response body, use `body: { "$": "expected text" }`.
 
 ## Cookies
 
@@ -163,4 +189,4 @@ Reuse shared steps: `- include: ./shared/auth.tarn.yaml` in setup/teardown/steps
 
 ## File Extension
 
-Tests use `.tarn.yaml`. Schema validation: add `# yaml-language-server: $schema=https://raw.githubusercontent.com/NazarKalytiuk/hive/main/schemas/v1/testfile.json` at the top of test files for IDE autocompletion.
+Tests use `.tarn.yaml`. Schema validation: add `# yaml-language-server: $schema=https://raw.githubusercontent.com/NazarKalytiuk/tarn/main/schemas/v1/testfile.json` at the top of test files for IDE autocompletion.

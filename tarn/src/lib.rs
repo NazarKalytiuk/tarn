@@ -10,6 +10,7 @@ pub mod http;
 pub mod interpolation;
 pub mod model;
 pub mod parser;
+pub mod regex_cache;
 pub mod report;
 pub mod runner;
 pub mod scripting;

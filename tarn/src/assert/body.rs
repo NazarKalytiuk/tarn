@@ -1,6 +1,6 @@
 use crate::assert::types::AssertionResult;
+use crate::regex_cache;
 use indexmap::IndexMap;
-use regex::Regex;
 use serde_json::Value;
 use serde_json_path::JsonPath;
 
@@ -360,7 +360,7 @@ fn assert_operator_map(
             }
             "matches" => {
                 let pattern = val.as_str().unwrap_or("");
-                match Regex::new(pattern) {
+                match regex_cache::get(pattern) {
                     Ok(re) => {
                         let actual_str = match actual_val {
                             Value::String(s) => s.clone(),

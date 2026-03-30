@@ -2,8 +2,14 @@ use crate::assert::types::AssertionResult;
 use crate::error::TarnError;
 use crate::http::HttpResponse;
 use mlua::prelude::*;
+use mlua::{Error as LuaError, HookTriggers, LuaOptions, StdLib, VmState};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+
+const SCRIPT_MEMORY_LIMIT_BYTES: usize = 4 * 1024 * 1024;
+const SCRIPT_HOOK_GRANULARITY: u32 = 1_000;
+const SCRIPT_MAX_INSTRUCTIONS: usize = 100_000;
 
 /// Result of running a Lua script.
 #[derive(Debug)]
@@ -19,7 +25,7 @@ pub fn run_script(
     captures: &HashMap<String, serde_json::Value>,
     step_name: &str,
 ) -> Result<ScriptResult, TarnError> {
-    let lua = Lua::new();
+    let lua = create_sandboxed_lua()?;
 
     // Build response table
     let response_table = lua
@@ -123,6 +129,44 @@ pub fn run_script(
         captures: final_captures,
         assertion_results,
     })
+}
+
+fn create_sandboxed_lua() -> Result<Lua, TarnError> {
+    let lua = Lua::new_with(
+        StdLib::TABLE | StdLib::STRING | StdLib::MATH | StdLib::UTF8,
+        LuaOptions::default(),
+    )
+    .map_err(|e| TarnError::Script(format!("Failed to initialize Lua sandbox: {}", e)))?;
+
+    lua.set_memory_limit(SCRIPT_MEMORY_LIMIT_BYTES)
+        .map_err(|e| TarnError::Script(format!("Failed to configure Lua memory limit: {}", e)))?;
+
+    let executed = Arc::new(AtomicUsize::new(0));
+    let executed_clone = executed.clone();
+    lua.set_hook(
+        HookTriggers::new().every_nth_instruction(SCRIPT_HOOK_GRANULARITY),
+        move |_lua, _debug| {
+            let total = executed_clone
+                .fetch_add(SCRIPT_HOOK_GRANULARITY as usize, Ordering::Relaxed)
+                + SCRIPT_HOOK_GRANULARITY as usize;
+            if total > SCRIPT_MAX_INSTRUCTIONS {
+                Err(LuaError::runtime(
+                    "script exceeded the instruction limit and was terminated",
+                ))
+            } else {
+                Ok(VmState::Continue)
+            }
+        },
+    );
+
+    let globals = lua.globals();
+    for name in ["dofile", "loadfile", "collectgarbage"] {
+        globals
+            .set(name, LuaValue::Nil)
+            .map_err(|e| TarnError::Script(format!("Failed to harden Lua globals: {}", e)))?;
+    }
+
+    Ok(lua)
 }
 
 /// Convert a Lua value to a serde_json::Value.
@@ -259,5 +303,40 @@ mod tests {
         )
         .unwrap();
         assert!(result.assertion_results[0].passed);
+    }
+
+    #[test]
+    fn script_cannot_access_os_library() {
+        let resp = make_response(200, json!({}));
+        let result = run_script(
+            "assert(os == nil, 'os hidden')",
+            &resp,
+            &HashMap::new(),
+            "test",
+        )
+        .unwrap();
+        assert!(result.assertion_results[0].passed);
+    }
+
+    #[test]
+    fn script_cannot_load_files() {
+        let resp = make_response(200, json!({}));
+        let result = run_script("dofile('secret.lua')", &resp, &HashMap::new(), "test");
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("attempt to call a nil value"));
+    }
+
+    #[test]
+    fn script_instruction_limit_is_enforced() {
+        let resp = make_response(200, json!({}));
+        let result = run_script("while true do end", &resp, &HashMap::new(), "test");
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("instruction limit"));
     }
 }

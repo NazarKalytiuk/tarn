@@ -12,7 +12,7 @@ inputs:
     required: false
     default: "tests"
   env:
-    description: "Environment name to use (loads hive.env.{name}.yaml)"
+    description: "Environment name to use (loads tarn.env.{name}.yaml)"
     required: false
     default: ""
   format:

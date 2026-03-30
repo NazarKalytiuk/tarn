@@ -91,6 +91,7 @@ The spec defines 6 ordered phases. Check `spec.md` "Implementation Plan" section
 ## Design Decisions
 
 - JSON output includes full request/response ONLY for failed steps (keeps output compact)
+- Runtime failures are still emitted as structured failed steps in JSON; connection failures usually have `request` but no `response`
 - Secrets in headers are redacted to `***` in output
 - Assertions on the same JSONPath use AND logic (all must pass)
 - Tests within a file run sequentially; steps within a test are sequential
@@ -102,6 +103,24 @@ The spec defines 6 ordered phases. Check `spec.md` "Implementation Plan" section
 - Status assertions support exact (`200`), shorthand (`"2xx"`), sets (`in: [200, 201]`), ranges (`gte: 400, lt: 500`)
 - Supports multipart/form-data via `multipart:` field (separate from `body:`)
 - Shared setup via `include:` directives in step arrays, resolved at parse time
+- Project config currently controls `test_dir`, `env_file`, and fallback defaults for `timeout`, `retries`, and `parallel`
+
+## AI Workflow
+
+Preferred diagnosis loop:
+
+1. `cargo run -- validate <file>` for syntax/config issues
+2. `cargo run -- run <file> --format json`
+3. inspect `failure_category`
+4. inspect `assertions.failures`
+5. inspect optional `request` / `response`
+6. patch YAML or application code
+
+Useful docs:
+
+- `docs/AI_WORKFLOW_DEMO.md`
+- `docs/MCP_WORKFLOW.md`
+- `schemas/v1/report.json`
 
 
 # Testing Strategy

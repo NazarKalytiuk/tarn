@@ -21,4 +21,16 @@ jobs:
       - run: cargo clippy -- -D warnings
       - run: cargo build --all
       - run: cargo test --all
+      - run: cargo package -p tarn
       - run: cargo build --release -p tarn
+      - run: bash scripts/ci/smoke.sh
+
+  macos-smoke:
+    name: macOS Smoke
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p tarn -p demo-server
+      - run: bash scripts/ci/smoke.sh

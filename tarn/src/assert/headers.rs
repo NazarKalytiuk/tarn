@@ -1,5 +1,5 @@
 use crate::assert::types::AssertionResult;
-use regex::Regex;
+use crate::regex_cache;
 use std::collections::HashMap;
 
 /// Assert response headers.
@@ -64,7 +64,7 @@ fn evaluate_header_spec(label: &str, spec: &str, actual: &str) -> AssertionResul
     // Check for "matches" prefix
     else if let Some(rest) = spec.strip_prefix("matches ") {
         let pattern = rest.trim_matches('"');
-        match Regex::new(pattern) {
+        match regex_cache::get(pattern) {
             Ok(re) => {
                 if re.is_match(actual) {
                     AssertionResult::pass(label, format!("matches \"{}\"", pattern), actual)

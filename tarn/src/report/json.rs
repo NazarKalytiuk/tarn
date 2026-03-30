@@ -148,6 +148,7 @@ fn redact_secrets(headers: &HashMap<String, String>) -> HashMap<String, String> 
 mod tests {
     use super::*;
     use crate::assert::types::*;
+    use jsonschema::validator_for;
 
     fn make_passing_run() -> RunResult {
         RunResult {
@@ -338,5 +339,28 @@ mod tests {
         let parsed: Value = serde_json::from_str(&output).unwrap();
         let step = &parsed["files"][0]["tests"][0]["steps"][0];
         assert_eq!(step["failure_category"], "assertion_failed");
+    }
+
+    #[test]
+    fn passing_output_matches_report_schema() {
+        validate_against_schema(&render(&make_passing_run()));
+    }
+
+    #[test]
+    fn failing_output_matches_report_schema() {
+        validate_against_schema(&render(&make_failing_run()));
+    }
+
+    fn validate_against_schema(output: &str) {
+        let schema: Value =
+            serde_json::from_str(include_str!("../../../schemas/v1/report.json")).unwrap();
+        let instance: Value = serde_json::from_str(output).unwrap();
+        let validator = validator_for(&schema).unwrap();
+        let result = validator.validate(&instance);
+        assert!(
+            result.is_ok(),
+            "schema validation failed: {:?}",
+            result.err()
+        );
     }
 }

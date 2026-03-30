@@ -220,6 +220,47 @@ fn run_steps(
     Ok(results)
 }
 
+fn runtime_failure_step(
+    step: &Step,
+    duration_ms: u64,
+    request_info: RequestInfo,
+    error: TarnError,
+) -> StepResult {
+    let error_category = match &error {
+        TarnError::Http(message) => Some(http_failure_category(message)),
+        TarnError::Capture(_) => Some(FailureCategory::CaptureError),
+        TarnError::Parse(_)
+        | TarnError::Config(_)
+        | TarnError::Interpolation(_)
+        | TarnError::Validation(_) => Some(FailureCategory::ParseError),
+        TarnError::Io(_) => Some(FailureCategory::ConnectionError),
+        TarnError::Script(_) => None,
+    };
+
+    StepResult {
+        name: step.name.clone(),
+        passed: false,
+        duration_ms,
+        assertion_results: vec![AssertionResult::fail(
+            "runtime",
+            "step completed successfully",
+            "runtime error",
+            error.to_string(),
+        )],
+        request_info: Some(request_info),
+        response_info: None,
+        error_category,
+    }
+}
+
+fn http_failure_category(message: &str) -> FailureCategory {
+    if message.to_ascii_lowercase().contains("timed out") {
+        FailureCategory::Timeout
+    } else {
+        FailureCategory::ConnectionError
+    }
+}
+
 /// Parse a delay spec like "500ms" or "2s" into milliseconds.
 fn parse_delay(spec: &str) -> Option<u64> {
     let spec = spec.trim();
@@ -375,6 +416,12 @@ fn run_step(
             .as_ref()
             .and_then(|name| cookie_jars.get(name.as_str())),
     );
+    let request_info = RequestInfo {
+        method: step.request.method.clone(),
+        url: url.clone(),
+        headers: headers.clone(),
+        body: body.clone(),
+    };
 
     // Verbose: print request details
     if opts.verbose {
@@ -423,9 +470,25 @@ fn run_step(
                 multipart,
                 timeout,
                 base_dir,
-            )?
+            )
         } else {
-            http::execute_request(&step.request.method, &url, &headers, body.as_ref(), timeout)?
+            http::execute_request(&step.request.method, &url, &headers, body.as_ref(), timeout)
+        };
+
+        let response = match response {
+            Ok(response) => response,
+            Err(error) => {
+                if opts.verbose {
+                    eprintln!("  !! {}", error);
+                }
+                if attempt < max_retries {
+                    std::thread::sleep(std::time::Duration::from_millis(
+                        100 * (attempt as u64 + 1),
+                    ));
+                    continue;
+                }
+                return Ok(runtime_failure_step(step, 0, request_info.clone(), error));
+            }
         };
 
         // Capture cookies from response into the appropriate jar
@@ -484,12 +547,7 @@ fn run_step(
                     passed: false,
                     duration_ms: response.duration_ms,
                     assertion_results: all_assertions,
-                    request_info: Some(RequestInfo {
-                        method: step.request.method.clone(),
-                        url,
-                        headers,
-                        body,
-                    }),
+                    request_info: Some(request_info.clone()),
                     response_info: Some(ResponseInfo {
                         status: response.status,
                         headers: response.headers,
@@ -514,7 +572,7 @@ fn run_step(
             });
         }
 
-        last_result = Some((response, assertion_results, body.clone()));
+        last_result = Some((response, assertion_results));
 
         if attempt < max_retries {
             std::thread::sleep(std::time::Duration::from_millis(100 * (attempt as u64 + 1)));
@@ -522,19 +580,14 @@ fn run_step(
     }
 
     // All attempts failed
-    let (response, assertion_results, body) = last_result.unwrap();
+    let (response, assertion_results) = last_result.unwrap();
 
     Ok(StepResult {
         name: step.name.clone(),
         passed: false,
         duration_ms: response.duration_ms,
         assertion_results,
-        request_info: Some(RequestInfo {
-            method: step.request.method.clone(),
-            url,
-            headers,
-            body,
-        }),
+        request_info: Some(request_info),
         response_info: Some(ResponseInfo {
             status: response.status,
             headers: response.headers,
@@ -578,6 +631,12 @@ fn run_step_poll(
                 .as_ref()
                 .and_then(|name| cookie_jars.get(name.as_str())),
         );
+        let request_info = RequestInfo {
+            method: step.request.method.clone(),
+            url: url.clone(),
+            headers: headers.clone(),
+            body: body.clone(),
+        };
 
         if opts.verbose {
             eprintln!(
@@ -598,9 +657,14 @@ fn run_step_poll(
                 multipart,
                 timeout,
                 base_dir,
-            )?
+            )
         } else {
-            http::execute_request(&step.request.method, &url, &headers, body.as_ref(), timeout)?
+            http::execute_request(&step.request.method, &url, &headers, body.as_ref(), timeout)
+        };
+
+        let response = match response {
+            Ok(response) => response,
+            Err(error) => return Ok(runtime_failure_step(step, 0, request_info, error)),
         };
 
         // Capture cookies into the appropriate jar
@@ -656,7 +720,7 @@ fn run_step_poll(
                             passed: false,
                             duration_ms: response.duration_ms,
                             assertion_results: all_assertions,
-                            request_info: None,
+                            request_info: Some(request_info.clone()),
                             response_info: Some(ResponseInfo {
                                 status: response.status,
                                 headers: response.headers,
@@ -809,6 +873,52 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let files = discover_test_files(dir.path()).unwrap();
         assert!(files.is_empty());
+    }
+
+    #[test]
+    fn discover_test_files_scales_to_large_suites() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..250 {
+            std::fs::write(dir.path().join(format!("test-{i}.tarn.yaml")), "name: t\nsteps:\n  - name: s\n    request:\n      method: GET\n      url: http://localhost\n").unwrap();
+        }
+
+        let files = discover_test_files(dir.path()).unwrap();
+        assert_eq!(files.len(), 250);
+        assert!(files.first().unwrap().ends_with("test-0.tarn.yaml"));
+    }
+
+    #[test]
+    fn run_file_returns_failed_step_on_connection_error() {
+        let yaml = r#"
+name: Runtime failure
+steps:
+  - name: GET missing server
+    request:
+      method: GET
+      url: "http://127.0.0.1:1/health"
+    timeout: 50
+    assert:
+      status: 200
+"#;
+        let test_file: crate::model::TestFile = serde_yaml::from_str(yaml).unwrap();
+
+        let result = run_file(
+            &test_file,
+            "runtime.tarn.yaml",
+            &HashMap::new(),
+            &[],
+            &RunOptions::default(),
+        )
+        .unwrap();
+
+        let step = &result.test_results[0].step_results[0];
+        assert!(!step.passed);
+        assert_eq!(step.error_category, Some(FailureCategory::ConnectionError));
+        assert_eq!(
+            step.request_info.as_ref().unwrap().url,
+            "http://127.0.0.1:1/health"
+        );
+        assert!(step.response_info.is_none());
     }
 
     // --- Tag filtering ---

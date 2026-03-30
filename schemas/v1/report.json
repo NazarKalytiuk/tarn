@@ -1,0 +1,168 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/NazarKalytiuk/tarn/main/schemas/v1/report.json",
+  "title": "Tarn JSON Report v1",
+  "type": "object",
+  "required": ["schema_version", "version", "timestamp", "duration_ms", "files", "summary"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "version": { "const": "1" },
+    "timestamp": { "type": "string" },
+    "duration_ms": { "type": "integer", "minimum": 0 },
+    "files": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/fileResult" }
+    },
+    "summary": { "$ref": "#/$defs/runSummary" }
+  },
+  "$defs": {
+    "status": {
+      "type": "string",
+      "enum": ["PASSED", "FAILED"]
+    },
+    "failureCategory": {
+      "type": "string",
+      "enum": ["assertion_failed", "connection_error", "timeout", "parse_error", "capture_error"]
+    },
+    "requestInfo": {
+      "type": "object",
+      "required": ["method", "url", "headers", "body"],
+      "properties": {
+        "method": { "type": "string" },
+        "url": { "type": "string" },
+        "headers": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "body": {}
+      }
+    },
+    "responseInfo": {
+      "type": "object",
+      "required": ["status", "headers", "body"],
+      "properties": {
+        "status": { "type": "integer", "minimum": 100, "maximum": 599 },
+        "headers": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "body": {}
+      }
+    },
+    "assertionDetail": {
+      "type": "object",
+      "required": ["assertion", "passed", "expected", "actual", "message"],
+      "properties": {
+        "assertion": { "type": "string" },
+        "passed": { "type": "boolean" },
+        "expected": { "type": "string" },
+        "actual": { "type": "string" },
+        "message": { "type": "string" }
+      }
+    },
+    "assertionFailure": {
+      "type": "object",
+      "required": ["assertion", "expected", "actual", "message"],
+      "properties": {
+        "assertion": { "type": "string" },
+        "expected": { "type": "string" },
+        "actual": { "type": "string" },
+        "message": { "type": "string" }
+      }
+    },
+    "assertionSummary": {
+      "type": "object",
+      "required": ["total", "passed", "failed", "details"],
+      "properties": {
+        "total": { "type": "integer", "minimum": 0 },
+        "passed": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 },
+        "details": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/assertionDetail" }
+        },
+        "failures": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/assertionFailure" }
+        }
+      }
+    },
+    "stepResult": {
+      "type": "object",
+      "required": ["name", "status", "duration_ms", "assertions"],
+      "properties": {
+        "name": { "type": "string" },
+        "status": { "$ref": "#/$defs/status" },
+        "duration_ms": { "type": "integer", "minimum": 0 },
+        "assertions": { "$ref": "#/$defs/assertionSummary" },
+        "failure_category": { "$ref": "#/$defs/failureCategory" },
+        "request": { "$ref": "#/$defs/requestInfo" },
+        "response": { "$ref": "#/$defs/responseInfo" }
+      }
+    },
+    "testResult": {
+      "type": "object",
+      "required": ["name", "description", "status", "duration_ms", "steps"],
+      "properties": {
+        "name": { "type": "string" },
+        "description": { "type": ["string", "null"] },
+        "status": { "$ref": "#/$defs/status" },
+        "duration_ms": { "type": "integer", "minimum": 0 },
+        "steps": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/stepResult" }
+        }
+      }
+    },
+    "fileSummary": {
+      "type": "object",
+      "required": ["total", "passed", "failed"],
+      "properties": {
+        "total": { "type": "integer", "minimum": 0 },
+        "passed": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "fileResult": {
+      "type": "object",
+      "required": ["file", "name", "status", "duration_ms", "summary", "setup", "tests", "teardown"],
+      "properties": {
+        "file": { "type": "string" },
+        "name": { "type": "string" },
+        "status": { "$ref": "#/$defs/status" },
+        "duration_ms": { "type": "integer", "minimum": 0 },
+        "summary": { "$ref": "#/$defs/fileSummary" },
+        "setup": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/stepResult" }
+        },
+        "tests": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/testResult" }
+        },
+        "teardown": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/stepResult" }
+        }
+      }
+    },
+    "runSummary": {
+      "type": "object",
+      "required": ["files", "tests", "steps", "status"],
+      "properties": {
+        "files": { "type": "integer", "minimum": 0 },
+        "tests": { "type": "integer", "minimum": 0 },
+        "status": { "$ref": "#/$defs/status" },
+        "steps": {
+          "type": "object",
+          "required": ["total", "passed", "failed"],
+          "properties": {
+            "total": { "type": "integer", "minimum": 0 },
+            "passed": { "type": "integer", "minimum": 0 },
+            "failed": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    }
+  }
+}

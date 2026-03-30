@@ -1,0 +1,19 @@
+name: Demo server hello world
+steps:
+  - name: GET /health
+    request:
+      method: GET
+      url: "{{ env.base_url }}/health"
+    assert:
+      status: 200
+      body:
+        "$.status": "ok"
+
+  - name: GET /unicode
+    request:
+      method: GET
+      url: "{{ env.base_url }}/unicode"
+    assert:
+      status: 200
+      body:
+        "$.message": "Привіт, Tarn 👋"

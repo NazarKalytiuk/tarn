@@ -34,10 +34,7 @@ pub fn run_watch_loop(watch_paths: &[String], run_fn: impl Fn() -> i32) -> ! {
     loop {
         match rx.recv() {
             Ok(Ok(event)) => {
-                let dominated = event.paths.iter().any(|p| {
-                    let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                    name.ends_with(".tarn.yaml") || name.starts_with("tarn.env")
-                });
+                let dominated = should_rerun(&event.paths);
                 if dominated && last_run.elapsed() > debounce {
                     last_run = Instant::now();
                     clear_screen();
@@ -53,6 +50,31 @@ pub fn run_watch_loop(watch_paths: &[String], run_fn: impl Fn() -> i32) -> ! {
     }
 }
 
+fn should_rerun(paths: &[std::path::PathBuf]) -> bool {
+    paths.iter().any(|p| {
+        let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        name.ends_with(".tarn.yaml") || name.starts_with("tarn.env") || name == "tarn.config.yaml"
+    })
+}
+
 fn clear_screen() {
     eprint!("\x1B[2J\x1B[1;1H");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_rerun;
+    use std::path::PathBuf;
+
+    #[test]
+    fn reruns_for_test_files_and_env_files() {
+        assert!(should_rerun(&[PathBuf::from("tests/health.tarn.yaml")]));
+        assert!(should_rerun(&[PathBuf::from("tarn.env.local.yaml")]));
+        assert!(should_rerun(&[PathBuf::from("tarn.config.yaml")]));
+    }
+
+    #[test]
+    fn ignores_unrelated_files() {
+        assert!(!should_rerun(&[PathBuf::from("README.md")]));
+    }
 }

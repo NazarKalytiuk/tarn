@@ -1,12 +1,14 @@
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{generate, Shell};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process;
 
-use tarn::assert::types::RunResult;
+use tarn::assert::types::{FailureCategory, RunResult, StepResult, TestResult};
 use tarn::bench;
+use tarn::config::{self, TarnConfig};
 use tarn::env;
 use tarn::error::TarnError;
+use tarn::model::{Defaults, TestFile};
 use tarn::parser;
 use tarn::report::{self, OutputFormat};
 use tarn::runner;
@@ -174,7 +176,7 @@ fn main() {
             &format,
         ),
         Commands::Validate { path } => validate_command(path),
-        Commands::List { tag: _ } => list_command(),
+        Commands::List { tag } => list_command(tag.as_deref()),
         Commands::Init => init_command(),
         Commands::Update { check } => update_command(check),
         Commands::Completions { shell } => {
@@ -199,6 +201,14 @@ fn run_command(
     parallel: bool,
     jobs: Option<usize>,
 ) -> i32 {
+    let project =
+        match load_project_context(path.as_deref().map(Path::new).unwrap_or(Path::new("."))) {
+            Ok(project) => project,
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                return e.exit_code();
+            }
+        };
     let tag_filter = tag.map(runner::parse_tag_filter).unwrap_or_default();
     let output_format = match format.parse::<OutputFormat>() {
         Ok(f) => f,
@@ -230,6 +240,7 @@ fn run_command(
     }
 
     let run_opts = runner::RunOptions { verbose, dry_run };
+    let effective_parallel = parallel || project.config.parallel;
 
     // Build the run closure (used by both normal and watch mode)
     let do_run = || {
@@ -240,7 +251,7 @@ fn run_command(
             &tag_filter,
             &run_opts,
             output_format,
-            parallel,
+            effective_parallel,
             jobs,
         )
     };
@@ -314,11 +325,7 @@ fn execute_run(
         print!("{}", output);
     }
 
-    if run_result.passed() {
-        0
-    } else {
-        1
-    }
+    run_result_exit_code(&run_result)
 }
 
 fn run_files_sequential(
@@ -331,9 +338,11 @@ fn run_files_sequential(
     let mut results = Vec::new();
     for file_path in files {
         let path = Path::new(file_path);
-        let test_file = parser::parse_file(path).map_err(|e| (e.exit_code(), e.to_string()))?;
-        let base_dir = path.parent().unwrap_or(Path::new("."));
-        let resolved_env = env::resolve_env(&test_file.env, env_name, cli_vars, base_dir)
+        let mut test_file = parser::parse_file(path).map_err(|e| (e.exit_code(), e.to_string()))?;
+        let project = load_project_context(path.parent().unwrap_or(Path::new(".")))
+            .map_err(|e| (e.exit_code(), e.to_string()))?;
+        apply_project_defaults(&mut test_file, &project.config);
+        let resolved_env = resolve_env_for_file(&test_file, path, env_name, cli_vars)
             .map_err(|e| (e.exit_code(), e.to_string()))?;
         let result = runner::run_file(&test_file, file_path, &resolved_env, tag_filter, run_opts)
             .map_err(|e| (e.exit_code(), e.to_string()))?;
@@ -363,9 +372,12 @@ fn run_files_parallel(
         .par_iter()
         .map(|file_path| {
             let path = Path::new(file_path);
-            let test_file = parser::parse_file(path).map_err(|e| (e.exit_code(), e.to_string()))?;
-            let base_dir = path.parent().unwrap_or(Path::new("."));
-            let resolved_env = env::resolve_env(&test_file.env, env_name, cli_vars, base_dir)
+            let mut test_file =
+                parser::parse_file(path).map_err(|e| (e.exit_code(), e.to_string()))?;
+            let project = load_project_context(path.parent().unwrap_or(Path::new(".")))
+                .map_err(|e| (e.exit_code(), e.to_string()))?;
+            apply_project_defaults(&mut test_file, &project.config);
+            let resolved_env = resolve_env_for_file(&test_file, path, env_name, cli_vars)
                 .map_err(|e| (e.exit_code(), e.to_string()))?;
             runner::run_file(&test_file, file_path, &resolved_env, tag_filter, run_opts)
                 .map_err(|e| (e.exit_code(), e.to_string()))
@@ -397,16 +409,23 @@ fn bench_command(
     };
 
     let file_path = Path::new(path);
-    let test_file = match parser::parse_file(file_path) {
+    let mut test_file = match parser::parse_file(file_path) {
         Ok(tf) => tf,
         Err(e) => {
             eprintln!("Error: {}", e);
             return e.exit_code();
         }
     };
+    let project = match load_project_context(file_path.parent().unwrap_or(Path::new("."))) {
+        Ok(project) => project,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            return e.exit_code();
+        }
+    };
+    apply_project_defaults(&mut test_file, &project.config);
 
-    let base_dir = file_path.parent().unwrap_or(Path::new("."));
-    let resolved_env = match env::resolve_env(&test_file.env, env_name, &cli_vars, base_dir) {
+    let resolved_env = match resolve_env_for_file(&test_file, file_path, env_name, &cli_vars) {
         Ok(e) => e,
         Err(e) => {
             eprintln!("Error: {}", e);
@@ -464,12 +483,12 @@ fn resolve_files(path: Option<String>) -> Result<Vec<String>, TarnError> {
             }
         }
         None => {
-            // Default: look for tests/ directory or current dir
-            let tests_dir = Path::new("tests");
+            let project = load_project_context(Path::new("."))?;
+            let tests_dir = project.root_dir.join(&project.config.test_dir);
             if tests_dir.is_dir() {
-                runner::discover_test_files(tests_dir)
+                runner::discover_test_files(&tests_dir)
             } else {
-                runner::discover_test_files(Path::new("."))
+                runner::discover_test_files(&project.root_dir)
             }
         }
     }
@@ -508,7 +527,8 @@ fn validate_command(path: Option<String>) -> i32 {
     }
 }
 
-fn list_command() -> i32 {
+fn list_command(tag: Option<&str>) -> i32 {
+    let tag_filter = tag.map(runner::parse_tag_filter).unwrap_or_default();
     let files = match resolve_files(None) {
         Ok(f) => f,
         Err(e) => {
@@ -526,6 +546,22 @@ fn list_command() -> i32 {
         let path = Path::new(file_path);
         match parser::parse_file(path) {
             Ok(tf) => {
+                let matches_simple =
+                    !tf.steps.is_empty() && runner::matches_tags(&tf.tags, &tag_filter);
+                let matching_groups: Vec<_> = tf
+                    .tests
+                    .iter()
+                    .filter(|(_, group)| {
+                        let combined_tags: Vec<String> =
+                            tf.tags.iter().chain(group.tags.iter()).cloned().collect();
+                        runner::matches_tags(&combined_tags, &tag_filter)
+                    })
+                    .collect();
+
+                if !tag_filter.is_empty() && !matches_simple && matching_groups.is_empty() {
+                    continue;
+                }
+
                 println!("{}", file_path);
                 println!("  \u{25cf} {}", tf.name);
                 if !tf.tags.is_empty() {
@@ -534,10 +570,14 @@ fn list_command() -> i32 {
                 if !tf.setup.is_empty() {
                     println!("    setup: {} step(s)", tf.setup.len());
                 }
-                for step in &tf.steps {
+                for step in tf
+                    .steps
+                    .iter()
+                    .filter(|_| matches_simple || tag_filter.is_empty())
+                {
                     println!("    - {}", step.name);
                 }
-                for (name, group) in &tf.tests {
+                for (name, group) in matching_groups {
                     let desc = group
                         .description
                         .as_deref()
@@ -560,6 +600,92 @@ fn list_command() -> i32 {
     }
 
     0
+}
+
+#[derive(Debug, Clone)]
+struct ProjectContext {
+    root_dir: PathBuf,
+    config: TarnConfig,
+}
+
+fn load_project_context(start_dir: &Path) -> Result<ProjectContext, TarnError> {
+    let start_dir = absolute_path(start_dir);
+    let root_dir = config::find_project_root(&start_dir).unwrap_or(start_dir);
+    let config = config::load_config(&root_dir)?;
+    Ok(ProjectContext { root_dir, config })
+}
+
+fn resolve_env_for_file(
+    test_file: &TestFile,
+    file_path: &Path,
+    env_name: Option<&str>,
+    cli_vars: &[(String, String)],
+) -> Result<std::collections::HashMap<String, String>, TarnError> {
+    let start_dir = file_path.parent().unwrap_or(Path::new("."));
+    let project = load_project_context(start_dir)?;
+    env::resolve_env_with_file(
+        &test_file.env,
+        env_name,
+        cli_vars,
+        &project.root_dir,
+        &project.config.env_file,
+    )
+}
+
+fn apply_project_defaults(test_file: &mut TestFile, config: &TarnConfig) {
+    let defaults = test_file.defaults.get_or_insert_with(|| Defaults {
+        headers: Default::default(),
+        timeout: None,
+        retries: None,
+        delay: None,
+    });
+
+    if defaults.timeout.is_none() {
+        defaults.timeout = Some(config.timeout);
+    }
+
+    if defaults.retries.is_none() {
+        defaults.retries = Some(config.retries);
+    }
+}
+
+fn absolute_path(path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(path)
+    }
+}
+
+fn run_result_exit_code(run_result: &RunResult) -> i32 {
+    let mut exit_code = if run_result.passed() { 0 } else { 1 };
+
+    for step in all_steps(run_result) {
+        match step.error_category {
+            Some(FailureCategory::ConnectionError)
+            | Some(FailureCategory::Timeout)
+            | Some(FailureCategory::CaptureError) => return 3,
+            Some(FailureCategory::ParseError) => exit_code = exit_code.max(2),
+            Some(FailureCategory::AssertionFailed) | None => {}
+        }
+    }
+
+    exit_code
+}
+
+fn all_steps(run_result: &RunResult) -> impl Iterator<Item = &StepResult> {
+    run_result.file_results.iter().flat_map(|file| {
+        file.setup_results
+            .iter()
+            .chain(file.test_results.iter().flat_map(steps_from_test))
+            .chain(file.teardown_results.iter())
+    })
+}
+
+fn steps_from_test(test: &TestResult) -> impl Iterator<Item = &StepResult> {
+    test.step_results.iter()
 }
 
 fn update_command(check_only: bool) -> i32 {
@@ -630,7 +756,10 @@ steps:
 "#;
 
     let config_file = r#"test_dir: "tests"
+env_file: "tarn.env.yaml"
 timeout: 10000
+retries: 0
+parallel: false
 "#;
 
     let files = [
@@ -651,6 +780,182 @@ timeout: 10000
         }
     }
 
-    println!("\nProject initialized! Run `tarn run` to execute tests.");
+    println!(
+        "\nProject initialized! Update `tarn.env.yaml` to point at your API, or start one on http://localhost:3000, then run `tarn run`."
+    );
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tarn::assert::types::{AssertionResult, FileResult};
+
+    #[test]
+    fn resolve_env_for_file_uses_project_root_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let tests_dir = dir.path().join("suite");
+        std::fs::create_dir_all(&tests_dir).unwrap();
+        std::fs::write(
+            dir.path().join("tarn.config.yaml"),
+            "test_dir: suite\nenv_file: custom.env.yaml\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("custom.env.yaml"),
+            "base_url: http://from-root\n",
+        )
+        .unwrap();
+
+        let test_path = tests_dir.join("health.tarn.yaml");
+        std::fs::write(
+            &test_path,
+            "name: Health\nsteps:\n  - name: GET\n    request:\n      method: GET\n      url: \"{{ env.base_url }}/health\"\n",
+        )
+        .unwrap();
+
+        let test_file = parser::parse_file(&test_path).unwrap();
+        let env = resolve_env_for_file(&test_file, &test_path, None, &[]).unwrap();
+
+        assert_eq!(env.get("base_url").unwrap(), "http://from-root");
+    }
+
+    #[test]
+    fn resolve_env_for_file_finds_default_env_root_without_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let tests_dir = dir.path().join("tests");
+        std::fs::create_dir_all(&tests_dir).unwrap();
+        std::fs::write(
+            dir.path().join("tarn.env.yaml"),
+            "base_url: http://from-root\n",
+        )
+        .unwrap();
+
+        let test_path = tests_dir.join("health.tarn.yaml");
+        std::fs::write(
+            &test_path,
+            "name: Health\nsteps:\n  - name: GET\n    request:\n      method: GET\n      url: \"{{ env.base_url }}/health\"\n",
+        )
+        .unwrap();
+
+        let test_file = parser::parse_file(&test_path).unwrap();
+        let env = resolve_env_for_file(&test_file, &test_path, None, &[]).unwrap();
+
+        assert_eq!(env.get("base_url").unwrap(), "http://from-root");
+    }
+
+    #[test]
+    fn run_result_exit_code_prefers_runtime_failure_categories() {
+        let make_step = |category| StepResult {
+            name: "step".into(),
+            passed: false,
+            duration_ms: 0,
+            assertion_results: vec![AssertionResult::fail("runtime", "ok", "error", "boom")],
+            request_info: None,
+            response_info: None,
+            error_category: category,
+        };
+
+        let make_file = |step| FileResult {
+            file: "test.tarn.yaml".into(),
+            name: "test".into(),
+            passed: false,
+            duration_ms: 0,
+            setup_results: vec![],
+            test_results: vec![TestResult {
+                name: "group".into(),
+                description: None,
+                passed: false,
+                duration_ms: 0,
+                step_results: vec![step],
+            }],
+            teardown_results: vec![],
+        };
+
+        let parse_result = RunResult {
+            file_results: vec![make_file(make_step(Some(FailureCategory::ParseError)))],
+            duration_ms: 0,
+        };
+        assert_eq!(run_result_exit_code(&parse_result), 2);
+
+        let runtime_result = RunResult {
+            file_results: vec![make_file(make_step(Some(FailureCategory::ConnectionError)))],
+            duration_ms: 0,
+        };
+        assert_eq!(run_result_exit_code(&runtime_result), 3);
+    }
+
+    #[test]
+    fn apply_project_defaults_fills_missing_timeout_and_retries() {
+        let mut test_file = TestFile {
+            version: None,
+            name: "test".into(),
+            description: None,
+            tags: vec![],
+            env: Default::default(),
+            defaults: Some(Defaults {
+                headers: Default::default(),
+                timeout: None,
+                retries: None,
+                delay: None,
+            }),
+            setup: vec![],
+            teardown: vec![],
+            tests: Default::default(),
+            steps: vec![],
+            cookies: None,
+        };
+
+        apply_project_defaults(
+            &mut test_file,
+            &TarnConfig {
+                test_dir: "tests".into(),
+                env_file: "tarn.env.yaml".into(),
+                timeout: 1234,
+                retries: 2,
+                parallel: true,
+            },
+        );
+
+        let defaults = test_file.defaults.unwrap();
+        assert_eq!(defaults.timeout, Some(1234));
+        assert_eq!(defaults.retries, Some(2));
+    }
+
+    #[test]
+    fn apply_project_defaults_preserves_file_level_values() {
+        let mut test_file = TestFile {
+            version: None,
+            name: "test".into(),
+            description: None,
+            tags: vec![],
+            env: Default::default(),
+            defaults: Some(Defaults {
+                headers: Default::default(),
+                timeout: Some(5000),
+                retries: Some(4),
+                delay: None,
+            }),
+            setup: vec![],
+            teardown: vec![],
+            tests: Default::default(),
+            steps: vec![],
+            cookies: None,
+        };
+
+        apply_project_defaults(
+            &mut test_file,
+            &TarnConfig {
+                test_dir: "tests".into(),
+                env_file: "tarn.env.yaml".into(),
+                timeout: 1234,
+                retries: 2,
+                parallel: false,
+            },
+        );
+
+        let defaults = test_file.defaults.unwrap();
+        assert_eq!(defaults.timeout, Some(5000));
+        assert_eq!(defaults.retries, Some(4));
+    }
 }

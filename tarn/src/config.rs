@@ -1,6 +1,6 @@
 use crate::error::TarnError;
 use serde::Deserialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Project-level configuration from tarn.config.yaml.
 #[derive(Debug, Deserialize, Clone)]
@@ -67,6 +67,20 @@ pub fn load_config(base_dir: &Path) -> Result<TarnConfig, TarnError> {
     })?;
 
     Ok(config)
+}
+
+/// Find the nearest project root by walking ancestors for tarn.config.yaml or default env files.
+pub fn find_project_root(start_dir: &Path) -> Option<PathBuf> {
+    for dir in start_dir.ancestors() {
+        if dir.join("tarn.config.yaml").is_file()
+            || dir.join("tarn.env.yaml").is_file()
+            || dir.join("tarn.env.local.yaml").is_file()
+        {
+            return Some(dir.to_path_buf());
+        }
+    }
+
+    None
 }
 
 #[cfg(test)]
@@ -147,5 +161,40 @@ mod tests {
 
         let config = load_config(dir.path()).unwrap();
         assert_eq!(config.test_dir, "tests"); // all defaults
+    }
+
+    #[test]
+    fn find_project_root_finds_nearest_ancestor_with_config() {
+        let dir = TempDir::new().unwrap();
+        let nested = dir.path().join("tests").join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(dir.path().join("tarn.config.yaml"), "test_dir: tests\n").unwrap();
+
+        let root = find_project_root(&nested).unwrap();
+        assert_eq!(root, dir.path());
+    }
+
+    #[test]
+    fn find_project_root_returns_none_without_config() {
+        let dir = TempDir::new().unwrap();
+        let nested = dir.path().join("tests");
+        std::fs::create_dir_all(&nested).unwrap();
+
+        assert!(find_project_root(&nested).is_none());
+    }
+
+    #[test]
+    fn find_project_root_finds_default_env_without_config() {
+        let dir = TempDir::new().unwrap();
+        let nested = dir.path().join("tests");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(
+            dir.path().join("tarn.env.yaml"),
+            "base_url: http://localhost\n",
+        )
+        .unwrap();
+
+        let root = find_project_root(&nested).unwrap();
+        assert_eq!(root, dir.path());
     }
 }

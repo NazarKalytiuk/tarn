@@ -1,0 +1,40 @@
+name: Bug report
+description: Report a runtime, CLI, install, or JSON contract bug
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: Include `.tarn.yaml`, commands, and output when possible.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Tarn version
+      placeholder: v0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - CLI
+        - JSON output
+        - MCP
+        - Install/update
+        - GitHub Action
+        - Docs
+        - Other
+    validations:
+      required: true

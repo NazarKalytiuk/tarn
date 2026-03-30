@@ -1,7 +1,17 @@
 use crate::builtin;
 use crate::capture;
-use regex::Regex;
 use std::collections::HashMap;
+use std::sync::OnceLock;
+
+fn interpolation_regex() -> &'static regex::Regex {
+    static REGEX: OnceLock<regex::Regex> = OnceLock::new();
+    REGEX.get_or_init(|| regex::Regex::new(r"\{\{\s*(.+?)\s*\}\}").unwrap())
+}
+
+fn typed_capture_regex() -> &'static regex::Regex {
+    static REGEX: OnceLock<regex::Regex> = OnceLock::new();
+    REGEX.get_or_init(|| regex::Regex::new(r"^\{\{\s*capture\.(\w+)\s*\}\}$").unwrap())
+}
 
 /// Interpolation context holding all available variables.
 #[derive(Default)]
@@ -22,13 +32,12 @@ impl Context {
 ///   - `{{ capture.var_name }}` — captured values from previous steps
 ///   - `{{ $builtin }}` — built-in functions ($uuid, $random_hex, etc.)
 pub fn interpolate(template: &str, ctx: &Context) -> String {
-    let re = Regex::new(r"\{\{\s*(.+?)\s*\}\}").unwrap();
-
-    re.replace_all(template, |caps: &regex::Captures| {
-        let expr = caps[1].trim();
-        resolve_expression(expr, ctx)
-    })
-    .into_owned()
+    interpolation_regex()
+        .replace_all(template, |caps: &regex::Captures| {
+            let expr = caps[1].trim();
+            resolve_expression(expr, ctx)
+        })
+        .into_owned()
 }
 
 /// Interpolate all string values in a JSON value recursively.
@@ -70,8 +79,7 @@ pub fn interpolate_headers(
 /// Try to resolve a string as a single typed capture expression.
 /// Returns the typed JSON value if the string is exactly `{{ capture.name }}`.
 fn try_resolve_typed(s: &str, ctx: &Context) -> Option<serde_json::Value> {
-    let re = Regex::new(r"^\{\{\s*capture\.(\w+)\s*\}\}$").unwrap();
-    if let Some(caps) = re.captures(s) {
+    if let Some(caps) = typed_capture_regex().captures(s) {
         let name = &caps[1];
         return ctx.captures.get(name).cloned();
     }

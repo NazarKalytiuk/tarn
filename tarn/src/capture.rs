@@ -1,6 +1,6 @@
 use crate::error::TarnError;
 use crate::model::{CaptureSpec, ExtendedCapture};
-use regex::Regex;
+use crate::regex_cache;
 use serde_json::Value;
 use serde_json_path::JsonPath;
 use std::collections::HashMap;
@@ -71,8 +71,8 @@ fn extract_extended(
 
     // Apply regex if specified
     if let Some(ref regex_str) = ext.regex {
-        let re =
-            Regex::new(regex_str).map_err(|e| format!("Invalid regex '{}': {}", regex_str, e))?;
+        let re = regex_cache::get(regex_str)
+            .map_err(|e| format!("Invalid regex '{}': {}", regex_str, e))?;
         match re.captures(&source) {
             Some(caps) => {
                 // Use capture group 1 if it exists, otherwise the full match

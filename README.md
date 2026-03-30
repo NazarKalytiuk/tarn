@@ -4,9 +4,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/NazarKalytiuk/hive/actions/workflows/ci.yml"><img src="https://github.com/NazarKalytiuk/hive/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/NazarKalytiuk/hive/releases/latest"><img src="https://img.shields.io/github/v/release/NazarKalytiuk/hive" alt="Release"></a>
-  <a href="https://github.com/NazarKalytiuk/hive/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License"></a>
+  <a href="https://github.com/NazarKalytiuk/tarn/actions/workflows/ci.yml"><img src="https://github.com/NazarKalytiuk/tarn/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/NazarKalytiuk/tarn/releases/latest"><img src="https://img.shields.io/github/v/release/NazarKalytiuk/tarn" alt="Release"></a>
+  <a href="https://github.com/NazarKalytiuk/tarn/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License"></a>
 </p>
 
 ---
@@ -47,27 +47,48 @@ $ tarn run
 
 ```bash
 # One-liner (macOS / Linux)
-curl -fsSL https://raw.githubusercontent.com/NazarKalytiuk/hive/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/NazarKalytiuk/tarn/main/install.sh | sh
 
-# Or build from source
-cargo install --git https://github.com/NazarKalytiuk/hive.git --bin tarn
+# Install to a custom directory
+TARN_INSTALL_DIR="$HOME/.local/bin" curl -fsSL https://raw.githubusercontent.com/NazarKalytiuk/tarn/main/install.sh | sh
+
+# Or build/install from source
+cargo install --git https://github.com/NazarKalytiuk/tarn.git --bin tarn
 ```
 
-Binaries for **macOS** (Intel & Apple Silicon) and **Linux** (amd64 & arm64) on the [releases page](https://github.com/NazarKalytiuk/hive/releases).
+Binaries for **macOS** (Intel & Apple Silicon) and **Linux** (amd64 & arm64) on the [releases page](https://github.com/NazarKalytiuk/tarn/releases).
+Each release also includes `tarn-checksums.txt` for SHA256 verification.
+
+Installer notes:
+- `install.sh` verifies the downloaded archive against `tarn-checksums.txt`
+- `TARN_INSTALL_DIR` controls the install destination
+- `HIVE_INSTALL_DIR` is still accepted as a backward-compatible alias during the rename transition
+- Manual verification also works with `shasum -a 256 -c tarn-checksums.txt`
 
 ## Quick Start
 
 ```bash
-tarn init                              # scaffold project
+tarn init                              # scaffold tests/health.tarn.yaml + tarn.env.yaml
+# Edit tarn.env.yaml to point at your API, or start one on http://localhost:3000
 tarn run                               # run all tests
-tarn run tests/users.tarn.yaml         # run specific file
+tarn run tests/health.tarn.yaml        # run the scaffolded test directly
 tarn run --env staging                 # use staging environment
 tarn run --format json                 # structured output for LLM/CI
 tarn run --watch                       # re-run on file changes
 tarn run --parallel                    # run files in parallel
-tarn update                            # update to latest version
-tarn update --check                    # check without installing
+tarn list --tag smoke                  # inspect matching tests without running them
 ```
+
+## Hello World
+
+Want a fully local demo path from this repo?
+
+```bash
+PORT=3000 cargo run -p demo-server &
+cargo run -p tarn -- run examples/demo-server/hello-world.tarn.yaml
+```
+
+This exercises a local API with no external network dependency.
 
 ## Table of Contents
 
@@ -84,6 +105,7 @@ tarn update --check                    # check without installing
 - [Output Formats](#output-formats)
 - [Performance Testing](#performance-testing)
 - [MCP Server](#mcp-server)
+- [Troubleshooting](#troubleshooting)
 - [GitHub Action](#github-action)
 - [Configuration](#configuration)
 - [Step Options](#step-options)
@@ -387,6 +409,27 @@ Disable automatic cookies per file:
 cookies: "off"
 ```
 
+## Auth Today
+
+Tarn does not ship first-class auth blocks yet. Today the intended path is explicit headers plus env or captured values:
+
+```yaml
+request:
+  headers:
+    Authorization: "Bearer {{ env.token }}"
+    X-API-Key: "{{ env.api_key }}"
+```
+
+Basic auth works through a precomputed header:
+
+```yaml
+request:
+  headers:
+    Authorization: "Basic {{ env.basic_auth_b64 }}"
+```
+
+OAuth2 client-credentials is not built in yet. Fetch the token in a setup step, capture it, then reuse it in later requests.
+
 ### Step-Level Cookie Control
 
 Use `cookies: false` on a step to bypass the cookie jar entirely. No cookies are sent and no `Set-Cookie` headers are captured:
@@ -683,6 +726,11 @@ Structured JSON with versioned schema. Key design:
 - Full request/response included **only for failed steps**
 - `failure_category` on failures: `assertion_failed`, `connection_error`, `timeout`, `parse_error`, `capture_error`
 - Secrets redacted to `***`
+- `request` is present for failed executed steps; `response` is omitted for connection/setup failures where no response exists
+
+Schema files:
+- test files: `schemas/v1/testfile.json`
+- JSON report output: `schemas/v1/report.json`
 
 ```json
 {
@@ -772,10 +820,52 @@ For Cursor, add to `.cursor/mcp.json`:
 
 The MCP server lets your AI agent write `.tarn.yaml` tests, execute them, parse structured results, and iterate &mdash; all without leaving the editor.
 
+Typical agent loop:
+
+1. `tarn_list` to discover tests and steps
+2. `tarn_validate` after generating YAML
+3. `tarn_run` to get structured failures
+4. inspect `failure_category`, `assertions.failures`, and optional `request`/`response`
+5. patch the test or application code
+6. rerun until summary status is `PASSED`
+
+See [docs/MCP_WORKFLOW.md](/Users/nazarkalituk/Documents/hive-api-test/docs/MCP_WORKFLOW.md) and [docs/AI_WORKFLOW_DEMO.md](/Users/nazarkalituk/Documents/hive-api-test/docs/AI_WORKFLOW_DEMO.md).
+
+## Troubleshooting
+
+Common cases:
+
+- `connection_error`: server is down, wrong host/port, DNS issue, TLS/connect failure
+- `timeout`: step timed out before receiving a complete response
+- `assertion_failed`: request succeeded, but status/header/body/duration check failed
+- `capture_error`: the step passed assertions, but extraction failed afterward
+- `parse_error`: invalid YAML, invalid JSONPath, or invalid config surface
+
+Agent diagnosis loop:
+
+1. run `tarn validate` first for syntax/config errors
+2. run `tarn run --format json`
+3. read `failure_category` before reading the message text
+4. if `response` exists, inspect it before editing assertions
+5. if `request.url` still contains `{{ ... }}`, fix env/capture interpolation before retrying
+
+Non-JSON bodies:
+
+- Tarn preserves plain text / HTML responses as JSON strings in the structured report
+- use `body: { "$": "plain text response" }` to assert the whole root string when needed
+
+## Not Yet Shipped
+
+Tracked, but intentionally deferred from the first public release:
+
+- OpenAPI import / scaffold generation
+- first-class auth helpers beyond manual headers and env vars
+- Windows release artifacts
+
 ## GitHub Action
 
 ```yaml
-- uses: NazarKalytiuk/hive@v1
+- uses: NazarKalytiuk/tarn@v1
   with:
     path: tests/
     format: junit
@@ -802,7 +892,14 @@ test_dir: "tests"
 env_file: "tarn.env.yaml"
 timeout: 10000
 retries: 0
+parallel: false
 ```
+
+Behavior:
+- `test_dir` sets the default discovery directory for `tarn run`, `tarn validate`, and `tarn list`
+- `env_file` changes the root env file name; Tarn also checks `.{name}` and `.local` variants
+- `timeout` and `retries` act as project defaults when a test file does not set `defaults.timeout` or `defaults.retries`
+- `parallel: true` makes parallel file execution the default for `tarn run`
 
 ### File-level defaults
 
@@ -840,12 +937,13 @@ delay: "2s"    # wait before executing
 Add to the top of your `.tarn.yaml` files for IDE autocompletion:
 
 ```yaml
-# yaml-language-server: $schema=https://raw.githubusercontent.com/NazarKalytiuk/hive/main/schemas/v1/testfile.json
+# yaml-language-server: $schema=https://raw.githubusercontent.com/NazarKalytiuk/tarn/main/schemas/v1/testfile.json
 name: My test
 steps: ...
 ```
 
 The schema is bundled at `schemas/v1/testfile.json` in the repository.
+The structured report schema is bundled at `schemas/v1/report.json`.
 
 ## Shell Completions
 
@@ -858,18 +956,21 @@ tarn completions fish > ~/.config/fish/completions/tarn.fish
 ## Development
 
 ```bash
-git clone https://github.com/NazarKalytiuk/hive.git
-cd hive
+git clone https://github.com/NazarKalytiuk/tarn.git
+cd tarn
 
 cargo build                    # build
-cargo test --all               # 365+ tests
+cargo test --all               # test suite
 cargo clippy                   # lint
 cargo fmt                      # format
+bash scripts/ci/smoke.sh       # release-path smoke test
 
 # Run demo server + examples
 PORT=3333 cargo run -p demo-server &
 cargo run -p tarn -- run examples/ --var base_url=http://localhost:3333
 ```
+
+See [docs/RELEASE_VERIFICATION.md](docs/RELEASE_VERIFICATION.md) for the broader release-candidate checklist, including watch-mode and installer verification.
 
 ### Architecture
 

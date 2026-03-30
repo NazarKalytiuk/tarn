@@ -3,6 +3,13 @@ name = "tarn"
 version = "0.1.0"
 edition = "2021"
 description = "CLI-first API testing tool"
+license = "MIT"
+repository = "https://github.com/NazarKalytiuk/tarn"
+homepage = "https://github.com/NazarKalytiuk/tarn"
+documentation = "https://github.com/NazarKalytiuk/tarn#readme"
+readme = "../README.md"
+keywords = ["api", "testing", "cli", "http", "graphql"]
+categories = ["command-line-utilities", "development-tools::testing"]
 
 [[bin]]
 name = "tarn"
@@ -39,3 +46,7 @@ predicates = "3"
 tempfile = "3"
 pretty_assertions = "1"
 jsonschema = "0.28"
+axum = "0.8"
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+rcgen = "0.13"
+rustls = "0.23"

@@ -3,7 +3,7 @@
 set -e
 
 REPO="NazarKalytiuk/tarn"
-INSTALL_DIR="${HIVE_INSTALL_DIR:-/usr/local/bin}"
+INSTALL_DIR="${TARN_INSTALL_DIR:-${HIVE_INSTALL_DIR:-/usr/local/bin}}"
 
 # Detect OS and architecture
 OS="$(uname -s)"
@@ -35,12 +35,35 @@ fi
 echo "Installing tarn ${TAG} (${OS_TAG}/${ARCH_TAG})..."
 
 URL="https://github.com/${REPO}/releases/download/${TAG}/${ARTIFACT}.tar.gz"
+CHECKSUM_URL="https://github.com/${REPO}/releases/download/${TAG}/tarn-checksums.txt"
 
 # Download and extract
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 
 curl -fsSL "$URL" -o "$TMPDIR/${ARTIFACT}.tar.gz"
+curl -fsSL "$CHECKSUM_URL" -o "$TMPDIR/tarn-checksums.txt"
+
+EXPECTED_SHA="$(grep " ${ARTIFACT}.tar.gz$" "$TMPDIR/tarn-checksums.txt" | awk '{print $1}')"
+if [ -z "$EXPECTED_SHA" ]; then
+  echo "Error: Checksum not found for ${ARTIFACT}.tar.gz"
+  exit 1
+fi
+
+if command -v sha256sum >/dev/null 2>&1; then
+  ACTUAL_SHA="$(sha256sum "$TMPDIR/${ARTIFACT}.tar.gz" | awk '{print $1}')"
+elif command -v shasum >/dev/null 2>&1; then
+  ACTUAL_SHA="$(shasum -a 256 "$TMPDIR/${ARTIFACT}.tar.gz" | awk '{print $1}')"
+else
+  echo "Error: Neither sha256sum nor shasum is available for checksum verification"
+  exit 1
+fi
+
+if [ "$EXPECTED_SHA" != "$ACTUAL_SHA" ]; then
+  echo "Error: Checksum verification failed for ${ARTIFACT}.tar.gz"
+  exit 1
+fi
+
 tar xzf "$TMPDIR/${ARTIFACT}.tar.gz" -C "$TMPDIR"
 
 # Install

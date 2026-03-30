@@ -1,7 +1,7 @@
 use axum::{
     extract::{Json, Path, Query, State},
     http::{HeaderMap, StatusCode},
-    response::IntoResponse,
+    response::{Html, IntoResponse, Redirect},
     routing::{delete, get, patch, post},
     Router,
 };
@@ -106,6 +106,51 @@ async fn health() -> impl IntoResponse {
         StatusCode::OK,
         headers,
         Json(serde_json::json!({"status": "ok"})),
+    )
+}
+
+async fn plain_text() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [("content-type", "text/plain; charset=utf-8")],
+        "plain text response",
+    )
+}
+
+async fn empty_response() -> impl IntoResponse {
+    StatusCode::NO_CONTENT
+}
+
+async fn unicode_json() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "message": "Привіт, Tarn 👋",
+            "emoji": "🌍"
+        })),
+    )
+}
+
+async fn redirect_to_health() -> impl IntoResponse {
+    Redirect::temporary("/health")
+}
+
+async fn large_response() -> impl IntoResponse {
+    let blob = "x".repeat(1024 * 1024);
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "blob": blob,
+            "size": 1024 * 1024
+        })),
+    )
+}
+
+async fn html_error_page() -> impl IntoResponse {
+    (
+        StatusCode::BAD_GATEWAY,
+        [("content-type", "text/html; charset=utf-8")],
+        Html("<html><body><h1>Upstream failure</h1></body></html>"),
     )
 }
 
@@ -396,6 +441,12 @@ pub fn create_app() -> Router {
 
     Router::new()
         .route("/health", get(health))
+        .route("/plain-text", get(plain_text))
+        .route("/empty", get(empty_response))
+        .route("/unicode", get(unicode_json))
+        .route("/redirect-health", get(redirect_to_health))
+        .route("/large", get(large_response))
+        .route("/html-error", get(html_error_page))
         .route("/auth/login", post(login))
         .route("/users", post(create_user))
         .route("/users", get(list_users))

@@ -2,6 +2,7 @@ use crate::error::TarnError;
 use crate::model::MultipartBody;
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::OnceLock;
 use std::time::Instant;
 
 /// Response from an HTTP request.
@@ -15,6 +16,19 @@ pub struct HttpResponse {
     pub duration_ms: u64,
 }
 
+fn shared_client() -> Result<&'static reqwest::blocking::Client, TarnError> {
+    static CLIENT: OnceLock<Result<reqwest::blocking::Client, String>> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::blocking::Client::builder()
+                .redirect(reqwest::redirect::Policy::limited(10))
+                .build()
+                .map_err(|e| format!("Failed to build HTTP client: {}", e))
+        })
+        .as_ref()
+        .map_err(|e| TarnError::Http(e.clone()))
+}
+
 /// Execute an HTTP request and return the response.
 pub fn execute_request(
     method: &str,
@@ -23,10 +37,7 @@ pub fn execute_request(
     body: Option<&serde_json::Value>,
     timeout_ms: Option<u64>,
 ) -> Result<HttpResponse, TarnError> {
-    let client = reqwest::blocking::Client::builder()
-        .redirect(reqwest::redirect::Policy::limited(10))
-        .build()
-        .map_err(|e| TarnError::Http(format!("Failed to build HTTP client: {}", e)))?;
+    let client = shared_client()?;
 
     let mut builder = match method.to_uppercase().as_str() {
         "GET" => client.get(url),
@@ -75,10 +86,7 @@ pub fn execute_multipart_request(
     timeout_ms: Option<u64>,
     base_dir: &Path,
 ) -> Result<HttpResponse, TarnError> {
-    let client = reqwest::blocking::Client::builder()
-        .redirect(reqwest::redirect::Policy::limited(10))
-        .build()
-        .map_err(|e| TarnError::Http(format!("Failed to build HTTP client: {}", e)))?;
+    let client = shared_client()?;
 
     let mut builder = match method.to_uppercase().as_str() {
         "POST" => client.post(url),
@@ -183,10 +191,23 @@ fn parse_response(
 
 /// Produce actionable error messages from reqwest errors.
 fn enhance_http_error(url: &str, err: &reqwest::Error) -> TarnError {
-    if err.is_connect() {
+    let details = error_chain_text(err);
+    let lower = details.to_ascii_lowercase();
+
+    if lower.contains("certificate")
+        || lower.contains("tls")
+        || lower.contains("ssl")
+        || lower.contains("unknown issuer")
+        || lower.contains("bad certificate")
+    {
+        TarnError::Http(format!(
+            "TLS verification failed for {}. Check the server certificate or trust settings. ({})",
+            url, details
+        ))
+    } else if err.is_connect() {
         TarnError::Http(format!(
             "Connection refused to {} — is the server running? ({})",
-            url, err
+            url, details
         ))
     } else if err.is_timeout() {
         TarnError::Http(format!(
@@ -199,8 +220,20 @@ fn enhance_http_error(url: &str, err: &reqwest::Error) -> TarnError {
             url
         ))
     } else {
-        TarnError::Http(format!("Request to {} failed: {}", url, err))
+        TarnError::Http(format!("Request to {} failed: {}", url, details))
     }
+}
+
+fn error_chain_text(err: &reqwest::Error) -> String {
+    use std::error::Error as _;
+
+    let mut parts = vec![err.to_string()];
+    let mut source = err.source();
+    while let Some(next) = source {
+        parts.push(next.to_string());
+        source = next.source();
+    }
+    parts.join(": ")
 }
 
 #[cfg(test)]
