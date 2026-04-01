@@ -3,140 +3,191 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Tarn Docs</title>
-    <meta name="description" content="Canonical guides for Tarn, the AI-first API testing CLI.">
+    <title>Tarn &mdash; AI-first API Testing CLI</title>
+    <meta name="description" content="YAML-simple API tests with structured JSON failures, MCP tools, and machine-readable output. One binary, zero runtime dependencies.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
-    <div class="site-shell">
-      <header class="site-header">
-        <div class="site-header__inner">
-          <a class="brand" href="./index.html">
-            <span class="brand__eyebrow">Tarn Docs</span>
-            <span class="brand__title">AI-first API testing, without framework drag</span>
+    <header class="site-header">
+      <div class="site-header__inner">
+        <a class="brand" href="./index.html">
+          <span class="brand__icon"><svg viewBox="0 0 24 24"><path d="M12 2L2 19h20L12 2zm0 4l7 13H5l7-13z"/></svg></span>
+          Tarn
+        </a>
+        <nav class="nav">
+          <a href="./index.html" class="active">Home</a>
+          <a href="./getting-started.html">Get Started</a>
+          <a href="./test-files.html">Test Files</a>
+          <a href="./ai-workflows.html">AI Workflows</a>
+          <a href="./mcp.html">MCP</a>
+          <a href="./examples.html">Examples</a>
+          <a href="https://github.com/NazarKalytiuk/hive" class="nav__gh" target="_blank" rel="noopener">
+            <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
           </a>
-          <nav class="nav">
-            <a href="./getting-started.html">Getting Started</a>
-            <a href="./test-files.html">Test Files</a>
-            <a href="./ai-workflows.html">AI Workflows</a>
-            <a href="./mcp.html">MCP</a>
-            <a href="./examples.html">Examples</a>
-          </nav>
+        </nav>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div class="container">
+          <span class="hero__badge">CLI-first &middot; AI-native &middot; Zero dependencies</span>
+          <h1 class="hero__title">API Testing for the AI Age</h1>
+          <p class="hero__lead">YAML-simple test authoring. Structured JSON failures with stable error codes and remediation hints. MCP tools. One binary, zero runtime dependencies.</p>
+          <div class="hero__actions">
+            <a class="btn btn--primary" href="./getting-started.html">Get Started</a>
+            <a class="btn btn--ghost" href="https://github.com/NazarKalytiuk/hive" target="_blank" rel="noopener">
+              <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+              View on GitHub
+            </a>
+          </div>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot terminal__dot--red"></span>
+              <span class="terminal__dot terminal__dot--yellow"></span>
+              <span class="terminal__dot terminal__dot--green"></span>
+              <span class="terminal__title">terminal</span>
+            </div>
+            <div class="terminal__body">
+<span class="prompt">$</span> tarn init<br>
+<span class="comment"># scaffold project with example tests</span><br>
+<br>
+<span class="prompt">$</span> tarn run <span class="flag">--format</span> <span class="value">json</span> <span class="flag">--json-mode</span> <span class="value">compact</span><br>
+<span class="comment"># structured output for agents and CI</span><br>
+<br>
+<span class="prompt">$</span> tarn fmt <span class="flag">--check</span><br>
+<span class="comment"># normalize YAML formatting</span><br>
+<br>
+<span class="prompt">$</span> tarn validate<br>
+<span class="comment"># catch config issues before execution</span>
+            </div>
+          </div>
+
+          <div class="stats">
+            <div class="stat">
+              <span class="stat__value">1 binary</span>
+              <span class="stat__label">No runtime, no test framework project to bootstrap.</span>
+            </div>
+            <div class="stat">
+              <span class="stat__value">7 formats</span>
+              <span class="stat__label">Human, JSON, JUnit, TAP, HTML, curl, and curl-all.</span>
+            </div>
+            <div class="stat">
+              <span class="stat__value">MCP native</span>
+              <span class="stat__label">tarn_run, tarn_validate, tarn_list, tarn_fix_plan.</span>
+            </div>
+            <div class="stat">
+              <span class="stat__value">AI-first</span>
+              <span class="stat__label">Failure categories, error codes, remediation hints.</span>
+            </div>
+          </div>
         </div>
-      </header>
+      </section>
 
-      <main>
-        <section class="hero">
-          <div class="container">
-            <div class="hero__panel">
-              <span class="eyebrow">Canonical Guides</span>
-              <h1>Ship API tests that agents can actually debug.</h1>
-              <p class="lede">
-                Tarn keeps the authoring surface YAML-simple, but pushes hard on the machine loop:
-                structured JSON failures, stable error codes, remediation hints, MCP tools, setup and teardown,
-                named cookie jars, polling, Lua, and multi-format reporting.
-              </p>
-              <div class="hero__actions">
-                <a class="button button--primary" href="./getting-started.html">Start Here</a>
-                <a class="button button--secondary" href="./ai-workflows.html">See the AI Loop</a>
-              </div>
-              <pre class="hero__terminal"><code>$ tarn init
-$ tarn run --format json --json-mode compact
-$ tarn fmt --check
-$ tarn-mcp</code></pre>
-              <div class="kpi-row">
-                <div class="kpi">
-                  <strong>1 binary</strong>
-                  <span>No runtime, no test framework project to bootstrap.</span>
-                </div>
-                <div class="kpi">
-                  <strong>7 formats</strong>
-                  <span>Human, JSON, JUnit, TAP, HTML, curl, and curl-all.</span>
-                </div>
-                <div class="kpi">
-                  <strong>MCP-native</strong>
-                  <span>`tarn_run`, `tarn_validate`, `tarn_list`, `tarn_fix_plan`.</span>
-                </div>
-                <div class="kpi">
-                  <strong>Example-driven</strong>
-                  <span>Local demo-server corpus used as parser regression coverage.</span>
-                </div>
-              </div>
+      <hr class="divider">
+
+      <section class="section">
+        <div class="container">
+          <div class="section__header">
+            <span class="section__badge">Why Tarn</span>
+            <h2 class="section__title">Built for the agent loop.</h2>
+            <p class="section__lead">Tarn's wedge is not "YAML tests exist." It is that failures come back as structured data with a stable taxonomy an agent can reason over.</p>
+          </div>
+          <div class="features">
+            <div class="feature">
+              <div class="feature__icon">&#x2726;</div>
+              <h3 class="feature__title">Structured Failures</h3>
+              <p class="feature__text">Every failure includes a category, error code, and remediation hints. Agents branch on taxonomy, not regex.</p>
+            </div>
+            <div class="feature">
+              <div class="feature__icon feature__icon--cyan">&#x2318;</div>
+              <h3 class="feature__title">MCP Tools</h3>
+              <p class="feature__text">tarn-mcp exposes list, validate, run, and fix_plan as structured tools. No stdout scraping needed.</p>
+            </div>
+            <div class="feature">
+              <div class="feature__icon feature__icon--violet">&#x2B21;</div>
+              <h3 class="feature__title">Rich Assertions</h3>
+              <p class="feature__text">JSONPath, status shorthand, type checks, UUID validation, date matching, schema validation, and unified diffs.</p>
+            </div>
+            <div class="feature">
+              <div class="feature__icon">&#x21C4;</div>
+              <h3 class="feature__title">Capture Chains</h3>
+              <p class="feature__text">Type-preserving captures from JSONPath, headers, cookies, regex, status, and URL. Chain with transforms.</p>
+            </div>
+            <div class="feature">
+              <div class="feature__icon feature__icon--cyan">&#x25CE;</div>
+              <h3 class="feature__title">Cookie Jars</h3>
+              <p class="feature__text">Automatic cookie jar by default. Named jars for multi-user session testing. Per-step disable switch.</p>
+            </div>
+            <div class="feature">
+              <div class="feature__icon feature__icon--violet">&#x21BB;</div>
+              <h3 class="feature__title">Polling &amp; Retries</h3>
+              <p class="feature__text">Poll until assertions pass. Step-level retries for transient failures. Configurable intervals and limits.</p>
             </div>
           </div>
-        </section>
-
-        <section class="section section--tight">
-          <div class="container">
-            <div class="section__header">
-              <span class="eyebrow">Guides</span>
-              <h2>Follow the shortest path first.</h2>
-              <p class="intro">The site pages are optimized for onboarding. The repository markdown remains the deeper source material for strategy, release notes, and workflow details.</p>
-            </div>
-            <div class="grid grid--3">
-              <article class="card">
-                <h3><a href="./getting-started.html">Getting Started</a></h3>
-                <p>Install Tarn, scaffold a project, run the local demo server, and understand `tarn fmt`, `validate`, and `run` in one pass.</p>
-              </article>
-              <article class="card">
-                <h3><a href="./test-files.html">Writing Test Files</a></h3>
-                <p>Request structure, assertions, captures, cookies, polling, multipart, GraphQL, and redaction without having to jump through the whole README.</p>
-              </article>
-              <article class="card">
-                <h3><a href="./ai-workflows.html">AI Workflows</a></h3>
-                <p>How compact JSON, failure categories, error codes, remediation hints, and curl exports tighten the agent retry loop.</p>
-              </article>
-              <article class="card">
-                <h3><a href="./mcp.html">MCP Integration</a></h3>
-                <p>Set up `tarn-mcp` in Claude Code, Cursor, or Windsurf and keep the agent on a structured tool surface instead of shell output scraping.</p>
-              </article>
-              <article class="card">
-                <h3><a href="./examples.html">Examples</a></h3>
-                <p>Browse the local example corpus for auth, redirects, cookies, forms, multipart, error responses, and authenticated CRUD flows.</p>
-              </article>
-              <article class="card">
-                <h3><a href="../INDEX.md">Deep Docs</a></h3>
-                <p>Canonical product, roadmap, migration, comparison, release, and launch documents still live in the repository markdown for longer-form context.</p>
-              </article>
-            </div>
-          </div>
-        </section>
-
-        <section class="section">
-          <div class="container">
-            <div class="section__header">
-              <span class="eyebrow">Repository Canon</span>
-              <h2>What stays in markdown.</h2>
-              <p class="intro">The site is the fast path. These documents are still the repo-level source for planning and operational detail.</p>
-            </div>
-            <div class="grid grid--2">
-              <article class="card">
-                <h3>Strategy and Positioning</h3>
-                <ul>
-                  <li><a href="../TARN_PRODUCT_STRATEGY.md">Tarn Product Strategy</a></li>
-                  <li><a href="../TARN_VS_HURL_COMPARISON.md">Tarn vs Hurl Comparison</a></li>
-                  <li><a href="../HURL_MIGRATION.md">Hurl Migration Guide</a></li>
-                </ul>
-              </article>
-              <article class="card">
-                <h3>Execution and Operations</h3>
-                <ul>
-                  <li><a href="../TARN_COMPETITIVENESS_ROADMAP.md">Competitiveness Roadmap</a></li>
-                  <li><a href="../MCP_WORKFLOW.md">MCP Workflow</a></li>
-                  <li><a href="../AI_WORKFLOW_DEMO.md">AI Workflow Demo</a></li>
-                  <li><a href="../RELEASE_VERIFICATION.md">Release Verification</a></li>
-                </ul>
-              </article>
-            </div>
-          </div>
-        </section>
-      </main>
-
-      <footer class="site-footer">
-        <div class="site-footer__inner">
-          Tarn docs site. Static, zero-build, and deployable from `docs/site/` via GitHub Pages.
         </div>
-      </footer>
-    </div>
+      </section>
+
+      <hr class="divider">
+
+      <section class="section">
+        <div class="container">
+          <div class="section__header">
+            <span class="section__badge">Guides</span>
+            <h2 class="section__title">Follow the shortest path first.</h2>
+            <p class="section__lead">Optimized for onboarding. The repository markdown remains the deeper source for strategy and workflow details.</p>
+          </div>
+          <div class="grid grid--3">
+            <article class="card">
+              <div class="card__icon">01</div>
+              <h3 class="card__title"><a href="./getting-started.html">Getting Started</a></h3>
+              <p class="card__text">Install Tarn, scaffold a project, run the demo server, and understand fmt, validate, and run in one pass.</p>
+            </article>
+            <article class="card">
+              <div class="card__icon card__icon--cyan">02</div>
+              <h3 class="card__title"><a href="./test-files.html">Writing Test Files</a></h3>
+              <p class="card__text">Requests, assertions, captures, cookies, polling, multipart, GraphQL, and redaction.</p>
+            </article>
+            <article class="card">
+              <div class="card__icon card__icon--violet">03</div>
+              <h3 class="card__title"><a href="./ai-workflows.html">AI Workflows</a></h3>
+              <p class="card__text">How compact JSON, failure categories, error codes, and curl exports tighten the agent retry loop.</p>
+            </article>
+            <article class="card">
+              <div class="card__icon">04</div>
+              <h3 class="card__title"><a href="./mcp.html">MCP Integration</a></h3>
+              <p class="card__text">Set up tarn-mcp in Claude Code, Cursor, or Windsurf with a structured tool surface.</p>
+            </article>
+            <article class="card">
+              <div class="card__icon card__icon--cyan">05</div>
+              <h3 class="card__title"><a href="./examples.html">Examples</a></h3>
+              <p class="card__text">Browse the local corpus for auth, redirects, cookies, forms, multipart, and CRUD flows.</p>
+            </article>
+            <article class="card">
+              <div class="card__icon card__icon--violet">
+                <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+              </div>
+              <h3 class="card__title"><a href="https://github.com/NazarKalytiuk/hive" target="_blank" rel="noopener">Repository</a></h3>
+              <p class="card__text">Full source, strategy docs, roadmap, comparison matrix, and release notes on GitHub.</p>
+            </article>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="site-footer__inner">
+        <span class="footer__brand"><a href="./index.html">Tarn</a> &mdash; AI-first API testing CLI</span>
+        <div class="footer__links">
+          <a href="./getting-started.html">Docs</a>
+          <a href="./examples.html">Examples</a>
+          <a href="https://github.com/NazarKalytiuk/hive" target="_blank" rel="noopener">GitHub</a>
+        </div>
+      </div>
+    </footer>
   </body>
-  </html>
+</html>

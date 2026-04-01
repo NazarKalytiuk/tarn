@@ -3,96 +3,132 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Tarn Docs · Getting Started</title>
+    <title>Tarn &mdash; Getting Started</title>
     <meta name="description" content="Install Tarn, scaffold a project, and run your first local suite.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
-    <div class="site-shell">
-      <header class="site-header">
-        <div class="site-header__inner">
-          <a class="brand" href="./index.html">
-            <span class="brand__eyebrow">Tarn Docs</span>
-            <span class="brand__title">Getting Started</span>
+    <header class="site-header">
+      <div class="site-header__inner">
+        <a class="brand" href="./index.html">
+          <span class="brand__icon"><svg viewBox="0 0 24 24"><path d="M12 2L2 19h20L12 2zm0 4l7 13H5l7-13z"/></svg></span>
+          Tarn
+        </a>
+        <nav class="nav">
+          <a href="./index.html">Home</a>
+          <a href="./getting-started.html" class="active">Get Started</a>
+          <a href="./test-files.html">Test Files</a>
+          <a href="./ai-workflows.html">AI Workflows</a>
+          <a href="./mcp.html">MCP</a>
+          <a href="./examples.html">Examples</a>
+          <a href="https://github.com/NazarKalytiuk/hive" class="nav__gh" target="_blank" rel="noopener">
+            <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
           </a>
-          <nav class="nav">
-            <a href="./index.html">Home</a>
-            <a href="./test-files.html">Test Files</a>
-            <a href="./ai-workflows.html">AI Workflows</a>
-            <a href="./mcp.html">MCP</a>
-            <a href="./examples.html">Examples</a>
-          </nav>
-        </div>
-      </header>
+        </nav>
+      </div>
+    </header>
 
-      <main class="page">
-        <div class="container">
-          <section class="page__hero">
-            <span class="eyebrow">Guide 01</span>
-            <h1>Get Tarn running in minutes.</h1>
-            <p class="intro">Scaffold once, point `tarn.env.yaml` at a real API, and keep iteration tight with `tarn fmt`, `validate`, `run`, and `watch`.</p>
-          </section>
+    <main class="page">
+      <div class="container">
+        <section class="page__hero">
+          <span class="badge">Guide 01</span>
+          <h1>Get Tarn running in&nbsp;minutes.</h1>
+          <p class="lead">Scaffold once, point <code class="ic">tarn.env.yaml</code> at a real API, and keep iteration tight with <code class="ic">tarn fmt</code>, <code class="ic">validate</code>, <code class="ic">run</code>, and <code class="ic">watch</code>.</p>
+        </section>
 
-          <div class="page__layout">
-            <article class="page__content">
-              <h2>Install</h2>
-              <pre class="code-block"><code>curl -fsSL https://raw.githubusercontent.com/NazarKalytiuk/tarn/main/install.sh | sh
-
-# or from source
-cargo install --git https://github.com/NazarKalytiuk/tarn.git --bin tarn</code></pre>
-
-              <h2>Scaffold a project</h2>
-              <pre class="code-block"><code>tarn init
-</code></pre>
-              <p>The scaffold keeps the default `tests/health.tarn.yaml` runnable, and puts heavier auth, polling, multipart, and multi-user examples under <span class="inline-code">examples/</span> so your first `tarn run` does not immediately depend on app-specific endpoints.</p>
-
-              <h2>Core loop</h2>
-              <pre class="code-block"><code>tarn fmt tests/ --check
-tarn validate
-tarn run --format human
-tarn run --format json --json-mode compact
-tarn run --watch</code></pre>
-
-              <h2>Run the local demo path</h2>
-              <pre class="code-block"><code>PORT=3000 cargo run -p demo-server &
-cargo run -p tarn -- run examples/demo-server/hello-world.tarn.yaml</code></pre>
-              <p>The demo server covers health checks, Unicode JSON, redirects, cookies, form echoing, plain-text responses, HTML error pages, slow responses, and authenticated CRUD.</p>
-
-              <h2>What to edit first</h2>
-              <ul>
-                <li>Set <span class="inline-code">base_url</span> in <span class="inline-code">tarn.env.yaml</span>.</li>
-                <li>Run <span class="inline-code">tarn fmt</span> after hand-editing YAML to normalize aliases and field order.</li>
-                <li>Use <span class="inline-code">tarn validate</span> before the first live run if you generated the file with an LLM.</li>
-                <li>Switch to <span class="inline-code">--format json --json-mode compact</span> when the output is for automation, not humans.</li>
-              </ul>
-            </article>
-
-            <aside class="page__aside">
-              <h3>Quick Links</h3>
-              <div class="aside-list">
-                <a href="../INDEX.md">
-                  <strong>Docs Index</strong>
-                  <span>Canonical markdown docs</span>
-                </a>
-                <a href="../../README.md">
-                  <strong>README</strong>
-                  <span>Full repo reference</span>
-                </a>
-                <a href="./examples.html">
-                  <strong>Example Corpus</strong>
-                  <span>Runnable suites and templates</span>
-                </a>
+        <div class="page__layout">
+          <article class="page__content">
+            <h2>Install</h2>
+            <div class="code-block">
+              <div class="code-block__header">
+                <span class="code-block__dot code-block__dot--red"></span>
+                <span class="code-block__dot code-block__dot--yellow"></span>
+                <span class="code-block__dot code-block__dot--green"></span>
               </div>
-            </aside>
-          </div>
-        </div>
-      </main>
+              <pre><span class="prompt">$</span> curl -fsSL https://raw.githubusercontent.com/NazarKalytiuk/tarn/main/install.sh | sh
 
-      <footer class="site-footer">
-        <div class="site-footer__inner">
-          Continue with <a href="./test-files.html">Writing Test Files</a>.
+<span class="comment"># or from source</span>
+<span class="prompt">$</span> cargo install --git https://github.com/NazarKalytiuk/tarn.git --bin tarn</pre>
+            </div>
+
+            <h2>Scaffold a project</h2>
+            <div class="code-block">
+              <div class="code-block__header">
+                <span class="code-block__dot code-block__dot--red"></span>
+                <span class="code-block__dot code-block__dot--yellow"></span>
+                <span class="code-block__dot code-block__dot--green"></span>
+              </div>
+              <pre><span class="prompt">$</span> tarn init</pre>
+            </div>
+            <p>The scaffold keeps the default <code class="ic">tests/health.tarn.yaml</code> runnable, and puts heavier auth, polling, multipart, and multi-user examples under <code class="ic">examples/</code> so your first <code class="ic">tarn run</code> does not immediately depend on app-specific endpoints.</p>
+
+            <h2>Core loop</h2>
+            <div class="code-block">
+              <div class="code-block__header">
+                <span class="code-block__dot code-block__dot--red"></span>
+                <span class="code-block__dot code-block__dot--yellow"></span>
+                <span class="code-block__dot code-block__dot--green"></span>
+              </div>
+              <pre><span class="prompt">$</span> tarn fmt tests/ <span class="flag">--check</span>
+<span class="prompt">$</span> tarn validate
+<span class="prompt">$</span> tarn run <span class="flag">--format</span> <span class="value">human</span>
+<span class="prompt">$</span> tarn run <span class="flag">--format</span> <span class="value">json</span> <span class="flag">--json-mode</span> <span class="value">compact</span>
+<span class="prompt">$</span> tarn run <span class="flag">--watch</span></pre>
+            </div>
+
+            <h2>Run the local demo path</h2>
+            <div class="code-block">
+              <div class="code-block__header">
+                <span class="code-block__dot code-block__dot--red"></span>
+                <span class="code-block__dot code-block__dot--yellow"></span>
+                <span class="code-block__dot code-block__dot--green"></span>
+              </div>
+              <pre><span class="prompt">$</span> PORT=3000 cargo run -p demo-server &amp;
+<span class="prompt">$</span> cargo run -p tarn -- run examples/demo-server/hello-world.tarn.yaml</pre>
+            </div>
+            <p>The demo server covers health checks, Unicode JSON, redirects, cookies, form echoing, plain-text responses, HTML error pages, slow responses, and authenticated CRUD.</p>
+
+            <h2>What to edit first</h2>
+            <ul>
+              <li>Set <code class="ic">base_url</code> in <code class="ic">tarn.env.yaml</code>.</li>
+              <li>Run <code class="ic">tarn fmt</code> after hand-editing YAML to normalize aliases and field order.</li>
+              <li>Use <code class="ic">tarn validate</code> before the first live run if you generated the file with an LLM.</li>
+              <li>Switch to <code class="ic">--format json --json-mode compact</code> when the output is for automation, not humans.</li>
+            </ul>
+          </article>
+
+          <aside class="page__sidebar">
+            <div class="sidebar-card">
+              <h3>Quick Links</h3>
+              <a class="sidebar-link" href="https://github.com/NazarKalytiuk/hive/blob/main/docs/INDEX.md" target="_blank" rel="noopener">
+                <strong>Docs Index</strong>
+                <span>Canonical markdown docs</span>
+              </a>
+              <a class="sidebar-link" href="https://github.com/NazarKalytiuk/hive/blob/main/README.md" target="_blank" rel="noopener">
+                <strong>README</strong>
+                <span>Full repo reference</span>
+              </a>
+              <a class="sidebar-link" href="./examples.html">
+                <strong>Example Corpus</strong>
+                <span>Runnable suites and templates</span>
+              </a>
+            </div>
+          </aside>
         </div>
-      </footer>
-    </div>
+      </div>
+    </main>
+
+    <footer class="site-footer">
+      <div class="site-footer__inner">
+        <span class="footer__brand"><a href="./index.html">Tarn</a> &mdash; AI-first API testing CLI</span>
+        <div class="footer__links">
+          <a href="./test-files.html">Next: Test Files</a>
+          <a href="https://github.com/NazarKalytiuk/hive" target="_blank" rel="noopener">GitHub</a>
+        </div>
+      </div>
+    </footer>
   </body>
-  </html>
+</html>

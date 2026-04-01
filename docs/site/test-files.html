@@ -3,123 +3,160 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Tarn Docs · Test Files</title>
+    <title>Tarn &mdash; Writing Test Files</title>
     <meta name="description" content="Author Tarn test files with requests, assertions, captures, polling, and cookies.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
-    <div class="site-shell">
-      <header class="site-header">
-        <div class="site-header__inner">
-          <a class="brand" href="./index.html">
-            <span class="brand__eyebrow">Tarn Docs</span>
-            <span class="brand__title">Writing Test Files</span>
+    <header class="site-header">
+      <div class="site-header__inner">
+        <a class="brand" href="./index.html">
+          <span class="brand__icon"><svg viewBox="0 0 24 24"><path d="M12 2L2 19h20L12 2zm0 4l7 13H5l7-13z"/></svg></span>
+          Tarn
+        </a>
+        <nav class="nav">
+          <a href="./index.html">Home</a>
+          <a href="./getting-started.html">Get Started</a>
+          <a href="./test-files.html" class="active">Test Files</a>
+          <a href="./ai-workflows.html">AI Workflows</a>
+          <a href="./mcp.html">MCP</a>
+          <a href="./examples.html">Examples</a>
+          <a href="https://github.com/NazarKalytiuk/hive" class="nav__gh" target="_blank" rel="noopener">
+            <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
           </a>
-          <nav class="nav">
-            <a href="./index.html">Home</a>
-            <a href="./getting-started.html">Getting Started</a>
-            <a href="./ai-workflows.html">AI Workflows</a>
-            <a href="./mcp.html">MCP</a>
-            <a href="./examples.html">Examples</a>
-          </nav>
-        </div>
-      </header>
+        </nav>
+      </div>
+    </header>
 
-      <main class="page">
-        <div class="container">
-          <section class="page__hero">
-            <span class="eyebrow">Guide 02</span>
-            <h1>Keep the DSL small. Push depth into runtime behavior.</h1>
-            <p class="intro">Tarn files stay YAML-first: requests, assertions, captures, retries, polling, cookies, and optional Lua, without turning into a custom programming language.</p>
-          </section>
+    <main class="page">
+      <div class="container">
+        <section class="page__hero">
+          <span class="badge">Guide 02</span>
+          <h1>Keep the DSL small. Push depth into runtime.</h1>
+          <p class="lead">Tarn files stay YAML-first: requests, assertions, captures, retries, polling, cookies, and optional Lua, without turning into a custom programming language.</p>
+        </section>
 
-          <div class="page__layout">
-            <article class="page__content">
-              <h2>Minimal test</h2>
-              <pre class="code-block"><code>name: Health check
-steps:
-  - name: GET /health
-    request:
-      method: GET
-      url: "{{ env.base_url }}/health"
-    assert:
-      status: 200
-      body:
-        "$.status": "ok"</code></pre>
-
-              <h2>Request surface</h2>
-              <ul>
-                <li><strong>JSON body</strong>: <span class="inline-code">request.body</span></li>
-                <li><strong>Form encoding</strong>: <span class="inline-code">request.form</span></li>
-                <li><strong>GraphQL</strong>: <span class="inline-code">request.graphql</span></li>
-                <li><strong>Multipart</strong>: <span class="inline-code">request.multipart</span></li>
-                <li><strong>Custom methods</strong>: any valid HTTP token, not just a fixed enum</li>
-              </ul>
-
-              <h2>Assertions</h2>
-              <p>Body assertions are keyed by JSONPath. Operator maps combine with AND.</p>
-              <pre class="code-block"><code>assert:
-  status: 201
-  body:
-    "$.id": { is_uuid: true, not_empty: true }
-    "$.createdAt": { is_date: true }
-    "$.tags": { type: array, length: 2, contains: "smoke" }
-    "$": "plain text response"</code></pre>
-              <p>Whole-body text and JSON mismatches emit unified diffs in human and JSON reporting.</p>
-
-              <h2>Captures and transforms</h2>
-              <pre class="code-block"><code>capture:
-  user_id: "$.id"
-  final_url:
-    url: true
-  request_id:
-    header: "x-request-id"
-  session_cookie:
-    cookie: "session"
-
-# later
-url: "{{ env.base_url }}/users/{{ capture.user_id }}"
-header: "{{ capture.request_id | split('-') | first | to_string }}"</code></pre>
-              <p>Capture sources include JSONPath, header, cookie, body regex, status, and final URL. Transforms include <span class="inline-code">first</span>, <span class="inline-code">last</span>, <span class="inline-code">count</span>, <span class="inline-code">join</span>, <span class="inline-code">split</span>, <span class="inline-code">replace</span>, <span class="inline-code">to_int</span>, and <span class="inline-code">to_string</span>.</p>
-
-              <h2>Polling, retries, cookies</h2>
-              <ul>
-                <li><strong>Polling</strong>: re-executes until assertions in <span class="inline-code">poll.until</span> pass.</li>
-                <li><strong>Retries</strong>: step-level retry count for transient failures.</li>
-                <li><strong>Cookies</strong>: automatic jar by default, step-level off switch, or named jars for multi-user sessions.</li>
-              </ul>
-
-              <h2>Schema support</h2>
-              <pre class="code-block"><code># yaml-language-server: $schema=https://raw.githubusercontent.com/NazarKalytiuk/tarn/main/schemas/v1/testfile.json</code></pre>
-              <p>The VS Code extension in <a href="../../editors/vscode/README.md">editors/vscode</a> wires this automatically for Tarn files.</p>
-            </article>
-
-            <aside class="page__aside">
-              <h3>Deep Dives</h3>
-              <div class="aside-list">
-                <a href="../../README.md">
-                  <strong>README Test File Format</strong>
-                  <span>Longer reference view</span>
-                </a>
-                <a href="../../schemas/v1/testfile.json">
-                  <strong>Test File Schema</strong>
-                  <span>Exact JSON Schema contract</span>
-                </a>
-                <a href="./examples.html">
-                  <strong>Example Files</strong>
-                  <span>Patterns you can copy directly</span>
-                </a>
+        <div class="page__layout">
+          <article class="page__content">
+            <h2>Minimal test</h2>
+            <div class="code-block">
+              <div class="code-block__header">
+                <span class="code-block__dot code-block__dot--red"></span>
+                <span class="code-block__dot code-block__dot--yellow"></span>
+                <span class="code-block__dot code-block__dot--green"></span>
               </div>
-            </aside>
-          </div>
-        </div>
-      </main>
+              <pre><span class="key">name:</span> <span class="str">Health check</span>
+<span class="key">steps:</span>
+  - <span class="key">name:</span> <span class="str">GET /health</span>
+    <span class="key">request:</span>
+      <span class="key">method:</span> GET
+      <span class="key">url:</span> <span class="str">"{{ env.base_url }}/health"</span>
+    <span class="key">assert:</span>
+      <span class="key">status:</span> 200
+      <span class="key">body:</span>
+        <span class="str">"$.status"</span>: <span class="str">"ok"</span></pre>
+            </div>
 
-      <footer class="site-footer">
-        <div class="site-footer__inner">
-          Next: <a href="./ai-workflows.html">make the output legible to agents and CI</a>.
+            <h2>Request surface</h2>
+            <ul>
+              <li><strong>JSON body</strong>: <code class="ic">request.body</code></li>
+              <li><strong>Form encoding</strong>: <code class="ic">request.form</code></li>
+              <li><strong>GraphQL</strong>: <code class="ic">request.graphql</code></li>
+              <li><strong>Multipart</strong>: <code class="ic">request.multipart</code></li>
+              <li><strong>Custom methods</strong>: any valid HTTP token, not just a fixed enum</li>
+            </ul>
+
+            <h2>Assertions</h2>
+            <p>Body assertions are keyed by JSONPath. Operator maps combine with AND.</p>
+            <div class="code-block">
+              <div class="code-block__header">
+                <span class="code-block__dot code-block__dot--red"></span>
+                <span class="code-block__dot code-block__dot--yellow"></span>
+                <span class="code-block__dot code-block__dot--green"></span>
+              </div>
+              <pre><span class="key">assert:</span>
+  <span class="key">status:</span> 201
+  <span class="key">body:</span>
+    <span class="str">"$.id"</span>: { <span class="key">is_uuid:</span> true, <span class="key">not_empty:</span> true }
+    <span class="str">"$.createdAt"</span>: { <span class="key">is_date:</span> true }
+    <span class="str">"$.tags"</span>: { <span class="key">type:</span> array, <span class="key">length:</span> 2, <span class="key">contains:</span> <span class="str">"smoke"</span> }
+    <span class="str">"$"</span>: <span class="str">"plain text response"</span></pre>
+            </div>
+            <p>Whole-body text and JSON mismatches emit unified diffs in human and JSON reporting.</p>
+
+            <h2>Captures and transforms</h2>
+            <div class="code-block">
+              <div class="code-block__header">
+                <span class="code-block__dot code-block__dot--red"></span>
+                <span class="code-block__dot code-block__dot--yellow"></span>
+                <span class="code-block__dot code-block__dot--green"></span>
+              </div>
+              <pre><span class="key">capture:</span>
+  <span class="key">user_id:</span> <span class="str">"$.id"</span>
+  <span class="key">final_url:</span>
+    <span class="key">url:</span> true
+  <span class="key">request_id:</span>
+    <span class="key">header:</span> <span class="str">"x-request-id"</span>
+  <span class="key">session_cookie:</span>
+    <span class="key">cookie:</span> <span class="str">"session"</span>
+
+<span class="comment"># later</span>
+<span class="key">url:</span> <span class="str">"{{ env.base_url }}/users/{{ capture.user_id }}"</span>
+<span class="key">header:</span> <span class="str">"{{ capture.request_id | split('-') | first | to_string }}"</span></pre>
+            </div>
+            <p>Capture sources include JSONPath, header, cookie, body regex, status, and final URL. Transforms include <code class="ic">first</code>, <code class="ic">last</code>, <code class="ic">count</code>, <code class="ic">join</code>, <code class="ic">split</code>, <code class="ic">replace</code>, <code class="ic">to_int</code>, and <code class="ic">to_string</code>.</p>
+
+            <h2>Polling, retries, cookies</h2>
+            <ul>
+              <li><strong>Polling</strong>: re-executes until assertions in <code class="ic">poll.until</code> pass.</li>
+              <li><strong>Retries</strong>: step-level retry count for transient failures.</li>
+              <li><strong>Cookies</strong>: automatic jar by default, step-level off switch, or named jars for multi-user sessions.</li>
+            </ul>
+
+            <h2>Schema support</h2>
+            <div class="code-block">
+              <div class="code-block__header">
+                <span class="code-block__dot code-block__dot--red"></span>
+                <span class="code-block__dot code-block__dot--yellow"></span>
+                <span class="code-block__dot code-block__dot--green"></span>
+              </div>
+              <pre><span class="comment"># yaml-language-server: $schema=https://raw.githubusercontent.com/NazarKalytiuk/tarn/main/schemas/v1/testfile.json</span></pre>
+            </div>
+            <p>The VS Code extension in <a href="https://github.com/NazarKalytiuk/hive/tree/main/editors/vscode" target="_blank" rel="noopener">editors/vscode</a> wires this automatically for Tarn files.</p>
+          </article>
+
+          <aside class="page__sidebar">
+            <div class="sidebar-card">
+              <h3>Deep Dives</h3>
+              <a class="sidebar-link" href="https://github.com/NazarKalytiuk/hive/blob/main/README.md" target="_blank" rel="noopener">
+                <strong>README Reference</strong>
+                <span>Full test file format docs</span>
+              </a>
+              <a class="sidebar-link" href="https://github.com/NazarKalytiuk/hive/blob/main/schemas/v1/testfile.json" target="_blank" rel="noopener">
+                <strong>Test File Schema</strong>
+                <span>Exact JSON Schema contract</span>
+              </a>
+              <a class="sidebar-link" href="./examples.html">
+                <strong>Example Files</strong>
+                <span>Patterns you can copy directly</span>
+              </a>
+            </div>
+          </aside>
         </div>
-      </footer>
-    </div>
+      </div>
+    </main>
+
+    <footer class="site-footer">
+      <div class="site-footer__inner">
+        <span class="footer__brand"><a href="./index.html">Tarn</a> &mdash; AI-first API testing CLI</span>
+        <div class="footer__links">
+          <a href="./ai-workflows.html">Next: AI Workflows</a>
+          <a href="https://github.com/NazarKalytiuk/hive" target="_blank" rel="noopener">GitHub</a>
+        </div>
+      </div>
+    </footer>
   </body>
-  </html>
+</html>

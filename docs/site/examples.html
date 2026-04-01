@@ -3,96 +3,111 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Tarn Docs · Examples</title>
+    <title>Tarn &mdash; Examples</title>
     <meta name="description" content="Browse Tarn example suites and scaffolds.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
-    <div class="site-shell">
-      <header class="site-header">
-        <div class="site-header__inner">
-          <a class="brand" href="./index.html">
-            <span class="brand__eyebrow">Tarn Docs</span>
-            <span class="brand__title">Example Corpus</span>
+    <header class="site-header">
+      <div class="site-header__inner">
+        <a class="brand" href="./index.html">
+          <span class="brand__icon"><svg viewBox="0 0 24 24"><path d="M12 2L2 19h20L12 2zm0 4l7 13H5l7-13z"/></svg></span>
+          Tarn
+        </a>
+        <nav class="nav">
+          <a href="./index.html">Home</a>
+          <a href="./getting-started.html">Get Started</a>
+          <a href="./test-files.html">Test Files</a>
+          <a href="./ai-workflows.html">AI Workflows</a>
+          <a href="./mcp.html">MCP</a>
+          <a href="./examples.html" class="active">Examples</a>
+          <a href="https://github.com/NazarKalytiuk/hive" class="nav__gh" target="_blank" rel="noopener">
+            <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
           </a>
-          <nav class="nav">
-            <a href="./index.html">Home</a>
-            <a href="./getting-started.html">Getting Started</a>
-            <a href="./test-files.html">Test Files</a>
-            <a href="./ai-workflows.html">AI Workflows</a>
-            <a href="./mcp.html">MCP</a>
-          </nav>
-        </div>
-      </header>
+        </nav>
+      </div>
+    </header>
 
-      <main class="page">
-        <div class="container">
-          <section class="page__hero">
-            <span class="eyebrow">Guide 05</span>
-            <h1>Copy from examples that already map to real endpoints.</h1>
-            <p class="intro">The repo examples now do double duty: onboarding material and parser/schema regression coverage.</p>
-          </section>
+    <main class="page">
+      <div class="container">
+        <section class="page__hero">
+          <span class="badge">Guide 05</span>
+          <h1>Copy from examples that already map to real&nbsp;endpoints.</h1>
+          <p class="lead">The repo examples do double duty: onboarding material and parser/schema regression coverage.</p>
+        </section>
 
-          <div class="page__layout">
-            <article class="page__content">
-              <h2>Init scaffolds</h2>
-              <ul>
-                <li><a href="../../examples/init/health.tarn.yaml">health.tarn.yaml</a>: safe first-run smoke test</li>
-                <li><a href="../../examples/init/auth-flow.tarn.yaml">auth-flow.tarn.yaml</a>: setup + bearer token reuse</li>
-                <li><a href="../../examples/init/polling-job.tarn.yaml">polling-job.tarn.yaml</a>: poll until ready</li>
-                <li><a href="../../examples/init/multipart-upload.tarn.yaml">multipart-upload.tarn.yaml</a>: file upload structure</li>
-                <li><a href="../../examples/init/multi-user-session.tarn.yaml">multi-user-session.tarn.yaml</a>: named cookie jars</li>
-              </ul>
+        <div class="page__layout">
+          <article class="page__content">
+            <h2>Init scaffolds</h2>
+            <ul>
+              <li><a href="https://github.com/NazarKalytiuk/hive/blob/main/examples/init/health.tarn.yaml" target="_blank" rel="noopener">health.tarn.yaml</a> &mdash; safe first-run smoke test</li>
+              <li><a href="https://github.com/NazarKalytiuk/hive/blob/main/examples/init/auth-flow.tarn.yaml" target="_blank" rel="noopener">auth-flow.tarn.yaml</a> &mdash; setup + bearer token reuse</li>
+              <li><a href="https://github.com/NazarKalytiuk/hive/blob/main/examples/init/polling-job.tarn.yaml" target="_blank" rel="noopener">polling-job.tarn.yaml</a> &mdash; poll until ready</li>
+              <li><a href="https://github.com/NazarKalytiuk/hive/blob/main/examples/init/multipart-upload.tarn.yaml" target="_blank" rel="noopener">multipart-upload.tarn.yaml</a> &mdash; file upload structure</li>
+              <li><a href="https://github.com/NazarKalytiuk/hive/blob/main/examples/init/multi-user-session.tarn.yaml" target="_blank" rel="noopener">multi-user-session.tarn.yaml</a> &mdash; named cookie jars</li>
+            </ul>
 
-              <h2>Local demo-server suites</h2>
-              <ul>
-                <li><a href="../../examples/demo-server/hello-world.tarn.yaml">hello-world.tarn.yaml</a></li>
-                <li><a href="../../examples/demo-server/redirects.tarn.yaml">redirects.tarn.yaml</a></li>
-                <li><a href="../../examples/demo-server/cookies.tarn.yaml">cookies.tarn.yaml</a></li>
-                <li><a href="../../examples/demo-server/form-and-text.tarn.yaml">form-and-text.tarn.yaml</a></li>
-                <li><a href="../../examples/demo-server/error-responses.tarn.yaml">error-responses.tarn.yaml</a></li>
-                <li><a href="../../examples/demo-server/auth-user-lifecycle.tarn.yaml">auth-user-lifecycle.tarn.yaml</a></li>
-              </ul>
+            <h2>Local demo-server suites</h2>
+            <ul>
+              <li><a href="https://github.com/NazarKalytiuk/hive/blob/main/examples/demo-server/hello-world.tarn.yaml" target="_blank" rel="noopener">hello-world.tarn.yaml</a></li>
+              <li><a href="https://github.com/NazarKalytiuk/hive/blob/main/examples/demo-server/redirects.tarn.yaml" target="_blank" rel="noopener">redirects.tarn.yaml</a></li>
+              <li><a href="https://github.com/NazarKalytiuk/hive/blob/main/examples/demo-server/cookies.tarn.yaml" target="_blank" rel="noopener">cookies.tarn.yaml</a></li>
+              <li><a href="https://github.com/NazarKalytiuk/hive/blob/main/examples/demo-server/form-and-text.tarn.yaml" target="_blank" rel="noopener">form-and-text.tarn.yaml</a></li>
+              <li><a href="https://github.com/NazarKalytiuk/hive/blob/main/examples/demo-server/error-responses.tarn.yaml" target="_blank" rel="noopener">error-responses.tarn.yaml</a></li>
+              <li><a href="https://github.com/NazarKalytiuk/hive/blob/main/examples/demo-server/auth-user-lifecycle.tarn.yaml" target="_blank" rel="noopener">auth-user-lifecycle.tarn.yaml</a></li>
+            </ul>
 
-              <h2>Public API and feature demos</h2>
-              <ul>
-                <li><a href="../../examples/minimal.tarn.yaml">minimal.tarn.yaml</a></li>
-                <li><a href="../../examples/auth.tarn.yaml">auth.tarn.yaml</a></li>
-                <li><a href="../../examples/assertions.tarn.yaml">assertions.tarn.yaml</a></li>
-                <li><a href="../../examples/crud.tarn.yaml">crud.tarn.yaml</a></li>
-                <li><a href="../../examples/variables.tarn.yaml">variables.tarn.yaml</a></li>
-                <li><a href="../../examples/public-api/httpbin.tarn.yaml">public-api/httpbin.tarn.yaml</a></li>
-                <li><a href="../../examples/public-api/jsonplaceholder.tarn.yaml">public-api/jsonplaceholder.tarn.yaml</a></li>
-              </ul>
+            <h2>Public API and feature demos</h2>
+            <ul>
+              <li><a href="https://github.com/NazarKalytiuk/hive/blob/main/examples/minimal.tarn.yaml" target="_blank" rel="noopener">minimal.tarn.yaml</a></li>
+              <li><a href="https://github.com/NazarKalytiuk/hive/blob/main/examples/auth.tarn.yaml" target="_blank" rel="noopener">auth.tarn.yaml</a></li>
+              <li><a href="https://github.com/NazarKalytiuk/hive/blob/main/examples/assertions.tarn.yaml" target="_blank" rel="noopener">assertions.tarn.yaml</a></li>
+              <li><a href="https://github.com/NazarKalytiuk/hive/blob/main/examples/crud.tarn.yaml" target="_blank" rel="noopener">crud.tarn.yaml</a></li>
+              <li><a href="https://github.com/NazarKalytiuk/hive/blob/main/examples/variables.tarn.yaml" target="_blank" rel="noopener">variables.tarn.yaml</a></li>
+              <li><a href="https://github.com/NazarKalytiuk/hive/blob/main/examples/public-api/httpbin.tarn.yaml" target="_blank" rel="noopener">public-api/httpbin.tarn.yaml</a></li>
+              <li><a href="https://github.com/NazarKalytiuk/hive/blob/main/examples/public-api/jsonplaceholder.tarn.yaml" target="_blank" rel="noopener">public-api/jsonplaceholder.tarn.yaml</a></li>
+            </ul>
 
-              <h2>Run them locally</h2>
-              <pre class="code-block"><code>PORT=3000 cargo run -p demo-server &
-cargo run -p tarn -- run examples/demo-server/
-</code></pre>
-            </article>
-
-            <aside class="page__aside">
-              <h3>Why examples matter</h3>
-              <div class="aside-list">
-                <a href="../../tarn/src/parser.rs">
-                  <strong>Parser Regression</strong>
-                  <span>Examples are schema- and parser-validated in tests</span>
-                </a>
-                <a href="../../README.md">
-                  <strong>Hello World</strong>
-                  <span>Shortest local path</span>
-                </a>
+            <h2>Run them locally</h2>
+            <div class="code-block">
+              <div class="code-block__header">
+                <span class="code-block__dot code-block__dot--red"></span>
+                <span class="code-block__dot code-block__dot--yellow"></span>
+                <span class="code-block__dot code-block__dot--green"></span>
               </div>
-            </aside>
-          </div>
-        </div>
-      </main>
+              <pre><span class="prompt">$</span> PORT=3000 cargo run -p demo-server &amp;
+<span class="prompt">$</span> cargo run -p tarn -- run examples/demo-server/</pre>
+            </div>
+          </article>
 
-      <footer class="site-footer">
-        <div class="site-footer__inner">
-          Start with <a href="./getting-started.html">Getting Started</a> if you are opening Tarn for the first time.
+          <aside class="page__sidebar">
+            <div class="sidebar-card">
+              <h3>Why examples matter</h3>
+              <a class="sidebar-link" href="https://github.com/NazarKalytiuk/hive/blob/main/tarn/src/parser.rs" target="_blank" rel="noopener">
+                <strong>Parser Regression</strong>
+                <span>Examples are schema- and parser-validated in tests</span>
+              </a>
+              <a class="sidebar-link" href="https://github.com/NazarKalytiuk/hive/blob/main/README.md" target="_blank" rel="noopener">
+                <strong>Hello World</strong>
+                <span>Shortest local path</span>
+              </a>
+            </div>
+          </aside>
         </div>
-      </footer>
-    </div>
+      </div>
+    </main>
+
+    <footer class="site-footer">
+      <div class="site-footer__inner">
+        <span class="footer__brand"><a href="./index.html">Tarn</a> &mdash; AI-first API testing CLI</span>
+        <div class="footer__links">
+          <a href="./getting-started.html">Back to Getting Started</a>
+          <a href="https://github.com/NazarKalytiuk/hive" target="_blank" rel="noopener">GitHub</a>
+        </div>
+      </div>
+    </footer>
   </body>
-  </html>
+</html>
