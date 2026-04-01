@@ -195,32 +195,35 @@ pub fn run_bench(
         })
     });
 
+    let bench_req = BenchRequest {
+        step_name: &step_name,
+        method: &method,
+        url: &url,
+        headers: &headers,
+        payload: payload.as_ref(),
+        expected_status,
+    };
+
     // Run the benchmark using tokio runtime
     let rt = tokio::runtime::Runtime::new()
         .map_err(|e| TarnError::Http(format!("Failed to create async runtime: {}", e)))?;
 
-    let result = rt.block_on(run_bench_async(
-        &step_name,
-        &method,
-        &url,
-        &headers,
-        payload.as_ref(),
-        expected_status,
-        opts,
-        http_config,
-    ))?;
+    let result = rt.block_on(run_bench_async(&bench_req, opts, http_config))?;
 
     Ok(result)
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn run_bench_async(
-    step_name: &str,
-    method: &str,
-    url: &str,
-    headers: &HashMap<String, String>,
-    payload: Option<&BenchPayload>,
+struct BenchRequest<'a> {
+    step_name: &'a str,
+    method: &'a str,
+    url: &'a str,
+    headers: &'a HashMap<String, String>,
+    payload: Option<&'a BenchPayload>,
     expected_status: Option<u16>,
+}
+
+async fn run_bench_async(
+    req: &BenchRequest<'_>,
     opts: &BenchOptions,
     http_config: &HttpTransportConfig,
 ) -> Result<BenchResult, TarnError> {
@@ -246,11 +249,12 @@ async fn run_bench_async(
 
         let permit = semaphore.clone().acquire_owned().await.unwrap();
         let client = client.clone();
-        let method = method.to_string();
-        let url = url.to_string();
-        let headers = headers.clone();
-        let payload = payload.cloned();
+        let method = req.method.to_string();
+        let url = req.url.to_string();
+        let headers = req.headers.clone();
+        let payload = req.payload.cloned();
         let completed = completed.clone();
+        let expected_status = req.expected_status;
 
         let handle = tokio::spawn(async move {
             let result = execute_single(
@@ -292,9 +296,9 @@ async fn run_bench_async(
     let total_duration_ms = overall_start.elapsed().as_millis() as u64;
 
     let mut result = aggregate_results(
-        step_name,
-        method,
-        url,
+        req.step_name,
+        req.method,
+        req.url,
         opts.concurrency,
         opts.ramp_up,
         results,

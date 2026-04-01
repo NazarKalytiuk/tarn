@@ -305,12 +305,47 @@ body {
 }
 .failure-block .fail-expected { color: var(--green); }
 .failure-block .fail-actual { color: var(--red); }
+.failure-block .fail-message {
+  color: var(--text-dim);
+  margin-top: 8px;
+}
+.diff-block {
+  margin-top: 10px;
+  background: #0b1220;
+  border: 1px solid rgba(88,166,255,0.2);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.diff-title {
+  padding: 8px 12px;
+  font-size: 11px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  border-bottom: 1px solid rgba(88,166,255,0.15);
+}
+.diff-pre {
+  margin: 0;
+  padding: 12px;
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-x: auto;
+}
+.diff-line.add { color: var(--green); }
+.diff-line.del { color: var(--red); }
+.diff-line.meta { color: var(--blue); }
 
 /* Request/Response for failures */
 .req-resp-block {
   margin: 8px 0 8px 24px;
   font-size: 12px;
   font-family: var(--mono);
+}
+.req-resp-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
 }
 .req-resp-toggle {
   color: var(--blue);
@@ -320,6 +355,16 @@ body {
   user-select: none;
 }
 .req-resp-toggle:hover { text-decoration: underline; }
+.copy-btn {
+  border: 1px solid rgba(88,166,255,0.3);
+  background: rgba(88,166,255,0.08);
+  color: var(--blue);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.copy-btn:hover { background: rgba(88,166,255,0.16); }
 .req-resp-content {
   display: none;
   background: var(--bg);
@@ -327,15 +372,37 @@ body {
   border-radius: var(--radius-sm);
   padding: 12px;
   margin-top: 6px;
-  white-space: pre-wrap;
-  word-break: break-all;
-  max-height: 300px;
-  overflow-y: auto;
   color: var(--text-dim);
   line-height: 1.5;
 }
 .req-resp-content.open { display: block; }
 .req-label { color: var(--orange); font-weight: 600; margin-bottom: 4px; display: block; }
+.payload-panel {
+  margin-top: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.payload-panel summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 8px 10px;
+  background: rgba(255,255,255,0.02);
+  color: var(--text);
+  font-size: 11px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+.payload-panel summary::-webkit-details-marker { display: none; }
+.payload-pre {
+  margin: 0;
+  padding: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+  max-height: 260px;
+  overflow-y: auto;
+}
 
 /* Assertion details list */
 .assert-details-toggle {
@@ -526,8 +593,13 @@ const DATA = {
                 "total": 2
               },
               "duration_ms": 56,
+              "error_code": "assertion_mismatch",
               "failure_category": "assertion_failed",
               "name": "Fetch item",
+              "remediation_hints": [
+                "Inspect `assertions.failures` expected vs actual values and update the DSL or the service response.",
+                "Use the recorded `response` payload to realign assertions and captures with the actual API output."
+              ],
               "request": {
                 "body": {
                   "trace": "[hidden]"
@@ -579,6 +651,7 @@ const DATA = {
 (function() {
   const d = DATA;
   const app = document.getElementById('app');
+  window.__tarnRequests = window.__tarnRequests || {};
 
   // Helpers
   const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -746,35 +819,40 @@ const DATA = {
           <div class="fail-assertion">${esc(f.assertion)}</div>
           <div class="fail-row"><span class="fail-label">expected:</span><span class="fail-expected">${esc(f.expected)}</span></div>
           <div class="fail-row"><span class="fail-label">actual:</span><span class="fail-actual">${esc(f.actual)}</span></div>
+          ${f.message ? `<div class="fail-message">${esc(f.message)}</div>` : ''}
+          ${f.diff ? renderDiff(f.diff) : ''}
         </div>`;
       });
 
       // Request/Response
       if (step.request || step.response) {
         const id = 'rr-' + Math.random().toString(36).substr(2,8);
+        const curlId = 'curl-' + Math.random().toString(36).substr(2,8);
+        if (step.request) {
+          window.__tarnRequests[curlId] = step.request;
+        }
         h += `<div class="req-resp-block">
-          <div class="req-resp-toggle" onclick="toggleRR('${id}')">&#9654; Show request/response</div>
+          <div class="req-resp-actions">
+            <div class="req-resp-toggle" onclick="toggleRR('${id}')">&#9654; Show request/response</div>
+            ${step.request ? `<button class="copy-btn" onclick="copyCurl('${curlId}')">Copy cURL</button>` : ''}
+          </div>
           <div class="req-resp-content" id="${id}">`;
         if (step.request) {
-          h += `<span class="req-label">REQUEST</span>${esc(step.request.method)} ${esc(step.request.url)}\n`;
+          h += `<span class="req-label">REQUEST</span>${esc(step.request.method)} ${esc(step.request.url)}`;
           if (step.request.headers) {
-            Object.entries(step.request.headers).forEach(([k,v]) => {
-              h += `${esc(k)}: ${esc(v)}\n`;
-            });
+            h += renderPayloadPanel('Request headers', renderHeaders(step.request.headers));
           }
           if (step.request.body) {
-            h += `\n${esc(JSON.stringify(step.request.body, null, 2))}\n`;
+            h += renderPayloadPanel('Request body', toPretty(step.request.body));
           }
         }
         if (step.response) {
           h += `\n<span class="req-label">RESPONSE ${step.response.status}</span>`;
           if (step.response.headers) {
-            Object.entries(step.response.headers).forEach(([k,v]) => {
-              h += `${esc(k)}: ${esc(v)}\n`;
-            });
+            h += renderPayloadPanel('Response headers', renderHeaders(step.response.headers));
           }
           if (step.response.body) {
-            h += `\n${esc(JSON.stringify(step.response.body, null, 2))}\n`;
+            h += renderPayloadPanel('Response body', toPretty(step.response.body));
           }
         }
         h += '</div></div>';
@@ -806,6 +884,48 @@ const DATA = {
     if (el) el.classList.toggle('open');
     if (btn) btn.classList.toggle('open');
   };
+  window.copyCurl = function(id) {
+    const request = window.__tarnRequests[id];
+    if (!request) return;
+    const lines = [`curl -X ${shellEscape(request.method)} ${shellEscape(request.url)}`];
+    Object.entries(request.headers || {}).forEach(([key, value]) => {
+      lines.push(`  -H ${shellEscape(`${key}: ${value}`)}`);
+    });
+    if (request.body !== null && request.body !== undefined) {
+      lines.push(`  --data-raw ${shellEscape(toPretty(request.body))}`);
+    }
+    copyText(lines.join(' \\\n'));
+  };
+  function renderHeaders(headers) {
+    return Object.entries(headers || {}).map(([key, value]) => `${key}: ${value}`).join('\n');
+  }
+  function renderPayloadPanel(label, content) {
+    return `<details class="payload-panel">
+      <summary>${esc(label)}</summary>
+      <pre class="payload-pre">${esc(content)}</pre>
+    </details>`;
+  }
+  function renderDiff(diff) {
+    const lines = diff.split('\n').map(line => {
+      let cls = '';
+      if (line.startsWith('+')) cls = 'add';
+      else if (line.startsWith('-')) cls = 'del';
+      else if (line.startsWith('@@')) cls = 'meta';
+      return `<div class="diff-line ${cls}">${esc(line)}</div>`;
+    }).join('');
+    return `<div class="diff-block"><div class="diff-title">Unified diff</div><pre class="diff-pre">${lines}</pre></div>`;
+  }
+  function toPretty(value) {
+    return typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+  }
+  function shellEscape(value) {
+    return `'${String(value).replace(/'/g, `'\"'\"'`)}'`;
+  }
+  function copyText(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text);
+    }
+  }
 })();
 
 </script>

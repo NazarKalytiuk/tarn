@@ -359,14 +359,9 @@ fn collect_redacted_env_values(
     values
 }
 
-#[allow(clippy::too_many_arguments)]
 fn record_redacted_capture_candidates(
-    status: u16,
-    url: &str,
+    response: &http::HttpResponse,
     capture_map: &HashMap<String, crate::model::CaptureSpec>,
-    body: &serde_json::Value,
-    headers: &HashMap<String, String>,
-    raw_headers: &[(String, String)],
     redaction: &RedactionConfig,
     redacted_values: &mut BTreeSet<String>,
 ) {
@@ -374,9 +369,15 @@ fn record_redacted_capture_candidates(
         let Some(spec) = capture_map.get(name) else {
             continue;
         };
-        if let Ok(value) =
-            capture::extract_capture(status, url, body, headers, raw_headers, name, spec)
-        {
+        if let Ok(value) = capture::extract_capture(
+            response.status,
+            &response.url,
+            &response.body,
+            &response.headers,
+            &response.raw_headers,
+            name,
+            spec,
+        ) {
             insert_redacted_value(&capture::value_to_string(&value), redacted_values);
         }
     }
@@ -544,10 +545,15 @@ fn prepare_request(
         }
         (Some(gql_body), None)
     } else if let Some(ref form) = step.request.form {
-        if !merged_headers
-            .keys()
-            .any(|k| k.eq_ignore_ascii_case("content-type"))
-        {
+        // Ensure the content type is form-urlencoded. Override any non-form
+        // content type (e.g. application/json from defaults), but preserve
+        // form-urlencoded variants (e.g. with charset param).
+        let has_form_ct = merged_headers.iter().any(|(k, v)| {
+            k.eq_ignore_ascii_case("content-type")
+                && v.starts_with("application/x-www-form-urlencoded")
+        });
+        if !has_form_ct {
+            merged_headers.retain(|k, _| !k.eq_ignore_ascii_case("content-type"));
             merged_headers.insert(
                 "Content-Type".to_string(),
                 "application/x-www-form-urlencoded".to_string(),
@@ -753,12 +759,8 @@ fn run_step(
         }
 
         record_redacted_capture_candidates(
-            response.status,
-            &response.url,
+            &response,
             &step.capture,
-            &response.body,
-            &response.headers,
-            &response.raw_headers,
             redaction,
             redacted_values,
         );
@@ -772,16 +774,7 @@ fn run_step(
 
         let assertion_results = if let Some(ref assertion) = step.assertions {
             let interpolated = interpolate_assertion(assertion, &request.ctx);
-            assert::run_assertions(
-                &interpolated,
-                response.status,
-                &response.headers,
-                &response.body,
-                &response.body_bytes,
-                &response.url,
-                response.redirect_count,
-                response.duration_ms,
-            )
+            assert::run_assertions(&interpolated, &response)
         } else {
             vec![]
         };
@@ -943,44 +936,22 @@ fn run_step_poll(
         }
 
         record_redacted_capture_candidates(
-            response.status,
-            &response.url,
+            &response,
             &step.capture,
-            &response.body,
-            &response.headers,
-            &response.raw_headers,
             redaction,
             redacted_values,
         );
 
         // Check poll.until condition
         let until_interpolated = interpolate_assertion(&poll.until, &request.ctx);
-        let until_results = assert::run_assertions(
-            &until_interpolated,
-            response.status,
-            &response.headers,
-            &response.body,
-            &response.body_bytes,
-            &response.url,
-            response.redirect_count,
-            response.duration_ms,
-        );
+        let until_results = assert::run_assertions(&until_interpolated, &response);
         let until_passed = until_results.iter().all(|a| a.passed);
 
         if until_passed {
             // Condition met — run the step's own assertions
             let assertion_results = if let Some(ref assertion) = step.assertions {
                 let interpolated = interpolate_assertion(assertion, &request.ctx);
-                assert::run_assertions(
-                    &interpolated,
-                    response.status,
-                    &response.headers,
-                    &response.body,
-                    &response.body_bytes,
-                    &response.url,
-                    response.redirect_count,
-                    response.duration_ms,
-                )
+                assert::run_assertions(&interpolated, &response)
             } else {
                 vec![]
             };
@@ -1359,8 +1330,23 @@ steps:
 
     #[test]
     fn record_redacted_capture_candidates_harvests_named_capture_values() {
-        let body = serde_json::json!({"token": "captured-secret"});
-        let headers = HashMap::new();
+        let response = http::HttpResponse {
+            status: 200,
+            url: "http://example.com/final".to_string(),
+            redirect_count: 0,
+            headers: HashMap::new(),
+            raw_headers: vec![],
+            body_bytes: vec![],
+            body: serde_json::json!({"token": "captured-secret"}),
+            duration_ms: 0,
+            timings: http::ResponseTimings {
+                total_ms: 0,
+                ttfb_ms: 0,
+                body_read_ms: 0,
+                connect_ms: None,
+                tls_ms: None,
+            },
+        };
         let capture_map = HashMap::from([(
             "session".to_string(),
             crate::model::CaptureSpec::JsonPath("$.token".into()),
@@ -1372,12 +1358,8 @@ steps:
         let mut values = BTreeSet::new();
 
         record_redacted_capture_candidates(
-            200,
-            "http://example.com/final",
+            &response,
             &capture_map,
-            &body,
-            &headers,
-            &[],
             &redaction,
             &mut values,
         );
@@ -1526,6 +1508,35 @@ steps:
                 ("email".to_string(), "user@example.com".to_string()),
                 ("password".to_string(), "secret".to_string()),
             ]))
+        );
+    }
+
+    #[test]
+    fn prepare_request_preserves_explicit_form_content_type_override() {
+        let yaml = r#"
+name: test
+steps:
+  - name: submit form
+    request:
+      method: POST
+      url: "https://api.example.com/login"
+      headers:
+        Content-Type: "application/x-www-form-urlencoded; charset=utf-8"
+      form:
+        email: "user@example.com"
+"#;
+        let tf: crate::model::TestFile = serde_yaml::from_str(yaml).unwrap();
+        let request = prepare_request(
+            &tf.steps[0],
+            &HashMap::new(),
+            &HashMap::new(),
+            &tf,
+            None,
+        );
+
+        assert_eq!(
+            request.headers.get("Content-Type"),
+            Some(&"application/x-www-form-urlencoded; charset=utf-8".to_string())
         );
     }
 

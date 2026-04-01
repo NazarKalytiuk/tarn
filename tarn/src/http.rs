@@ -102,7 +102,10 @@ impl HttpClient {
     ) -> Result<RequestClient, TarnError> {
         let redirect_count = Arc::new(AtomicU32::new(0));
 
-        if matches!(options.follow_redirects, Some(false)) && options.connect_timeout_ms.is_none() {
+        // Reuse the existing client only when redirects are disabled at the request
+        // level and no client-level transport rebuild is required. Otherwise we
+        // need a per-request client so redirect_count stays accurate.
+        if can_reuse_client_for_request_options(options) {
             return Ok(RequestClient {
                 client: self.inner.clone(),
                 redirect_count,
@@ -119,6 +122,13 @@ impl HttpClient {
 struct RequestClient {
     client: reqwest::blocking::Client,
     redirect_count: Arc<AtomicU32>,
+}
+
+fn can_reuse_client_for_request_options(options: RequestTransportOptions) -> bool {
+    options.follow_redirects.is_none()
+        && options.connect_timeout_ms.is_none()
+        && options.max_redirs.is_none()
+        && options.timeout_ms.is_none()
 }
 
 fn shared_client() -> Result<&'static reqwest::blocking::Client, TarnError> {
@@ -682,6 +692,45 @@ mod tests {
     fn invalid_method_returns_error() {
         let err = parse_http_method("BAD METHOD").unwrap_err().to_string();
         assert!(err.contains("Invalid HTTP method"));
+    }
+
+    #[test]
+    fn reuse_decision_only_applies_when_no_overrides_exist() {
+        // Default options → reuse shared client
+        assert!(can_reuse_client_for_request_options(
+            RequestTransportOptions::default()
+        ));
+        // Any transport override → build new client
+        assert!(!can_reuse_client_for_request_options(
+            RequestTransportOptions {
+                follow_redirects: Some(false),
+                ..RequestTransportOptions::default()
+            }
+        ));
+        assert!(!can_reuse_client_for_request_options(
+            RequestTransportOptions {
+                follow_redirects: Some(true),
+                ..RequestTransportOptions::default()
+            }
+        ));
+        assert!(!can_reuse_client_for_request_options(
+            RequestTransportOptions {
+                connect_timeout_ms: Some(250),
+                ..RequestTransportOptions::default()
+            }
+        ));
+        assert!(!can_reuse_client_for_request_options(
+            RequestTransportOptions {
+                timeout_ms: Some(1000),
+                ..RequestTransportOptions::default()
+            }
+        ));
+        assert!(!can_reuse_client_for_request_options(
+            RequestTransportOptions {
+                max_redirs: Some(5),
+                ..RequestTransportOptions::default()
+            }
+        ));
     }
 
     #[test]
