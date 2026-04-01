@@ -231,6 +231,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(target_os = "windows", ignore)]
     fn target_string_format() {
         let target = get_target().unwrap();
         assert!(

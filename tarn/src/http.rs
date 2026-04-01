@@ -751,8 +751,12 @@ mod tests {
         let err = result.unwrap_err();
         assert!(matches!(err, TarnError::Http(_)));
         let msg = err.to_string();
+        // On Windows, connecting to a closed port may timeout instead of
+        // returning connection refused due to OS-level TCP differences.
         assert!(
-            msg.contains("Connection refused") || msg.contains("is the server running"),
+            msg.contains("Connection refused")
+                || msg.contains("is the server running")
+                || msg.contains("timed out"),
             "Expected actionable error, got: {}",
             msg
         );

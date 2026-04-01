@@ -1187,7 +1187,12 @@ steps:
 
         let step = &result.test_results[0].step_results[0];
         assert!(!step.passed);
-        assert_eq!(step.error_category, Some(FailureCategory::ConnectionError));
+        // On Windows, connecting to a closed port may timeout instead of
+        // returning connection refused due to OS-level TCP differences.
+        assert!(
+            step.error_category == Some(FailureCategory::ConnectionError)
+                || step.error_category == Some(FailureCategory::Timeout)
+        );
         assert_eq!(
             step.request_info.as_ref().unwrap().url,
             "http://127.0.0.1:1/health"

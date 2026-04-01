@@ -46,7 +46,7 @@ fn start_demo_server(port: u16) -> Child {
         .join("debug")
         .join(format!("demo-server{}", std::env::consts::EXE_SUFFIX));
 
-    let child = StdCommand::new(&demo_bin)
+    let mut child = StdCommand::new(&demo_bin)
         .env("PORT", port.to_string())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -67,6 +67,8 @@ fn start_demo_server(port: u16) -> Child {
         }
         std::thread::sleep(Duration::from_millis(100));
     }
+    let _ = child.kill();
+    let _ = child.wait();
     panic!("Demo server failed to start on port {}", port);
 }
 
