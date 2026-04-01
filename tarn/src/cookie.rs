@@ -123,9 +123,7 @@ impl CookieJar {
         let Ok(url) = Url::parse(request_url) else {
             return None;
         };
-        let Some(host) = normalized_host(&url) else {
-            return None;
-        };
+        let host = normalized_host(&url)?;
         let request_path = normalized_request_path(&url);
         let is_secure = url.scheme().eq_ignore_ascii_case("https");
         let now = Utc::now();

@@ -11,6 +11,7 @@ use types::AssertionResult;
 use crate::model::Assertion;
 
 /// Run all assertions for a step and return results.
+#[allow(clippy::too_many_arguments)]
 pub fn run_assertions(
     assertion: &Assertion,
     response_status: u16,

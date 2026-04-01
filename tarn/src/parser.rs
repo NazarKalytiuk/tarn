@@ -210,8 +210,6 @@ fn extract_schema_directive(content: &str) -> Option<&str> {
         let trimmed = line.trim();
         if trimmed.starts_with("# yaml-language-server: $schema=") {
             Some(trimmed)
-        } else if trimmed.is_empty() {
-            None
         } else {
             None
         }

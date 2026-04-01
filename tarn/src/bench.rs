@@ -213,6 +213,7 @@ pub fn run_bench(
     Ok(result)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_bench_async(
     step_name: &str,
     method: &str,

@@ -359,6 +359,7 @@ fn collect_redacted_env_values(
     values
 }
 
+#[allow(clippy::too_many_arguments)]
 fn record_redacted_capture_candidates(
     status: u16,
     url: &str,
