@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
   - name: Pre-release checklist
-    url: https://github.com/NazarKalytiuk/tarn/blob/main/PRE_RELEASE_TASKS_FROM_REVIEW_2026-03-29.md
+    url: https://github.com/NazarKalytiuk/hive/blob/main/PRE_RELEASE_TASKS_FROM_REVIEW_2026-03-29.md
     about: Check the current release-readiness tracker before opening launch-blocker issues.

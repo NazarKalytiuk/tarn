@@ -1,4 +1,4 @@
-# yaml-language-server: $schema=https://raw.githubusercontent.com/NazarKalytiuk/tarn/main/schemas/v1/testfile.json
+# yaml-language-server: $schema=https://raw.githubusercontent.com/NazarKalytiuk/hive/main/schemas/v1/testfile.json
 name: Async job polling
 description: Kick off a background job, then poll until it becomes ready.
 tags: [polling, async]

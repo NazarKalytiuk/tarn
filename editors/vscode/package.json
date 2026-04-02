@@ -7,9 +7,9 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/NazarKalytiuk/tarn.git"
+    "url": "https://github.com/NazarKalytiuk/hive.git"
   },
-  "homepage": "https://github.com/NazarKalytiuk/tarn",
+  "homepage": "https://github.com/NazarKalytiuk/hive",
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -70,7 +70,7 @@
         "editor.tabSize": 2
       },
       "yaml.schemas": {
-        "https://raw.githubusercontent.com/NazarKalytiuk/tarn/main/schemas/v1/testfile.json": [
+        "https://raw.githubusercontent.com/NazarKalytiuk/hive/main/schemas/v1/testfile.json": [
           "*.tarn.yaml",
           "*.tarn.yml"
         ]
@@ -81,7 +81,7 @@
             "tarn-report.json",
             "*.tarn-report.json"
           ],
-          "url": "https://raw.githubusercontent.com/NazarKalytiuk/tarn/main/schemas/v1/report.json"
+          "url": "https://raw.githubusercontent.com/NazarKalytiuk/hive/main/schemas/v1/report.json"
         }
       ]
     }

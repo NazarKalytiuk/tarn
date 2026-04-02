@@ -22,27 +22,27 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            artifact: tarn-linux-amd64
+            artifact: hive-linux-amd64
             binary: tarn
             archive: tar.gz
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
-            artifact: tarn-linux-arm64
+            artifact: hive-linux-arm64
             binary: tarn
             archive: tar.gz
           - target: x86_64-apple-darwin
             os: macos-latest
-            artifact: tarn-darwin-amd64
+            artifact: hive-darwin-amd64
             binary: tarn
             archive: tar.gz
           - target: aarch64-apple-darwin
             os: macos-latest
-            artifact: tarn-darwin-arm64
+            artifact: hive-darwin-arm64
             binary: tarn
             archive: tar.gz
           - target: x86_64-pc-windows-msvc
             os: windows-latest
-            artifact: tarn-windows-amd64
+            artifact: hive-windows-amd64
             binary: tarn.exe
             archive: zip
 
@@ -106,15 +106,15 @@ jobs:
       - name: Generate checksums
         run: |
           cd artifacts
-          sha256sum *.tar.gz *.zip > tarn-checksums.txt
+          sha256sum *.tar.gz *.zip > hive-checksums.txt
 
       - name: Render Homebrew formula
         run: |
           TAG="${GITHUB_REF_NAME}" \
-          LINUX_AMD64_SHA="$(awk '/tarn-linux-amd64.tar.gz$/ {print $1}' artifacts/tarn-checksums.txt)" \
-          LINUX_ARM64_SHA="$(awk '/tarn-linux-arm64.tar.gz$/ {print $1}' artifacts/tarn-checksums.txt)" \
-          DARWIN_AMD64_SHA="$(awk '/tarn-darwin-amd64.tar.gz$/ {print $1}' artifacts/tarn-checksums.txt)" \
-          DARWIN_ARM64_SHA="$(awk '/tarn-darwin-arm64.tar.gz$/ {print $1}' artifacts/tarn-checksums.txt)" \
+          LINUX_AMD64_SHA="$(awk '/hive-linux-amd64.tar.gz$/ {print $1}' artifacts/hive-checksums.txt)" \
+          LINUX_ARM64_SHA="$(awk '/hive-linux-arm64.tar.gz$/ {print $1}' artifacts/hive-checksums.txt)" \
+          DARWIN_AMD64_SHA="$(awk '/hive-darwin-amd64.tar.gz$/ {print $1}' artifacts/hive-checksums.txt)" \
+          DARWIN_ARM64_SHA="$(awk '/hive-darwin-arm64.tar.gz$/ {print $1}' artifacts/hive-checksums.txt)" \
           bash scripts/release/render-homebrew-formula.sh artifacts/tarn.rb
 
       - name: Upload Homebrew formula artifact
@@ -133,7 +133,7 @@ jobs:
             artifacts/*.tar.gz \
             artifacts/*.zip \
             artifacts/tarn.rb \
-            artifacts/tarn-checksums.txt
+            artifacts/hive-checksums.txt
 
       - name: Publish Homebrew tap
         if: env.HOMEBREW_TAP_TOKEN != '' && env.HOMEBREW_TAP_REPO != ''

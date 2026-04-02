@@ -4,10 +4,10 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/NazarKalytiuk/tarn/actions/workflows/ci.yml"><img src="https://github.com/NazarKalytiuk/tarn/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/NazarKalytiuk/tarn/blob/main/docs/CONFORMANCE.md"><img src="https://img.shields.io/github/actions/workflow/status/NazarKalytiuk/tarn/ci.yml?branch=main&label=conformance" alt="Conformance"></a>
-  <a href="https://github.com/NazarKalytiuk/tarn/releases/latest"><img src="https://img.shields.io/github/v/release/NazarKalytiuk/tarn" alt="Release"></a>
-  <a href="https://github.com/NazarKalytiuk/tarn/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License"></a>
+  <a href="https://github.com/NazarKalytiuk/hive/actions/workflows/ci.yml"><img src="https://github.com/NazarKalytiuk/hive/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/NazarKalytiuk/hive/blob/main/docs/CONFORMANCE.md"><img src="https://img.shields.io/github/actions/workflow/status/NazarKalytiuk/hive/ci.yml?branch=main&label=conformance" alt="Conformance"></a>
+  <a href="https://github.com/NazarKalytiuk/hive/releases/latest"><img src="https://img.shields.io/github/v/release/NazarKalytiuk/hive" alt="Release"></a>
+  <a href="https://github.com/NazarKalytiuk/hive/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License"></a>
 </p>
 
 ---
@@ -48,26 +48,26 @@ $ tarn run
 
 ```bash
 # One-liner (macOS / Linux)
-curl -fsSL https://raw.githubusercontent.com/NazarKalytiuk/tarn/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/NazarKalytiuk/hive/main/install.sh | sh
 
 # Install to a custom directory
-TARN_INSTALL_DIR="$HOME/.local/bin" curl -fsSL https://raw.githubusercontent.com/NazarKalytiuk/tarn/main/install.sh | sh
+TARN_INSTALL_DIR="$HOME/.local/bin" curl -fsSL https://raw.githubusercontent.com/NazarKalytiuk/hive/main/install.sh | sh
 
 # Or build/install from source
-cargo install --git https://github.com/NazarKalytiuk/tarn.git --bin tarn
+cargo install --git https://github.com/NazarKalytiuk/hive.git --bin tarn
 ```
 
-Binaries for **macOS** (Intel & Apple Silicon), **Linux** (amd64 & arm64), and **Windows** (amd64 zip) are published on the [releases page](https://github.com/NazarKalytiuk/tarn/releases).
-Each release also includes `tarn-checksums.txt` for SHA256 verification and a generated `tarn.rb` Homebrew formula artifact.
+Binaries for **macOS** (Intel & Apple Silicon), **Linux** (amd64 & arm64), and **Windows** (amd64 zip) are published on the [releases page](https://github.com/NazarKalytiuk/hive/releases).
+Each release also includes `hive-checksums.txt` for SHA256 verification and a generated `tarn.rb` Homebrew formula artifact.
 
 Container path:
 - `ghcr.io/<owner>/tarn:<tag>` from the release workflow
 
 Installer notes:
-- `install.sh` verifies the downloaded archive against `tarn-checksums.txt`
+- `install.sh` verifies the downloaded archive against `hive-checksums.txt`
 - `TARN_INSTALL_DIR` controls the install destination
 - `HIVE_INSTALL_DIR` is still accepted as a backward-compatible alias during the rename transition
-- Manual verification also works with `shasum -a 256 -c tarn-checksums.txt`
+- Manual verification also works with `shasum -a 256 -c hive-checksums.txt`
 
 ## Quick Start
 
@@ -1070,7 +1070,7 @@ Tarn does not aim for full Hurl parity. The main intentionally unclosed gaps are
 ## GitHub Action
 
 ```yaml
-- uses: NazarKalytiuk/tarn@v1
+- uses: NazarKalytiuk/hive@v1
   with:
     path: tests/
     format: junit
@@ -1154,7 +1154,7 @@ delay: "2s"    # wait before executing
 Add to the top of your `.tarn.yaml` files for IDE autocompletion:
 
 ```yaml
-# yaml-language-server: $schema=https://raw.githubusercontent.com/NazarKalytiuk/tarn/main/schemas/v1/testfile.json
+# yaml-language-server: $schema=https://raw.githubusercontent.com/NazarKalytiuk/hive/main/schemas/v1/testfile.json
 name: My test
 steps: ...
 ```
@@ -1183,7 +1183,7 @@ tarn completions fish > ~/.config/fish/completions/tarn.fish
 ## Development
 
 ```bash
-git clone https://github.com/NazarKalytiuk/tarn.git
+git clone https://github.com/NazarKalytiuk/hive.git
 cd tarn
 
 cargo build                    # build

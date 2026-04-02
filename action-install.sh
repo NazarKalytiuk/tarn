@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="NazarKalytiuk/tarn"
+REPO="NazarKalytiuk/hive"
 VERSION="${TARN_VERSION:-latest}"
 
 # Detect OS
@@ -39,18 +39,18 @@ if [ "${VERSION}" = "latest" ]; then
 fi
 
 # Build download URL
-ARCHIVE="tarn-${OS}-${ARCH}.tar.gz"
+ARCHIVE="hive-${OS}-${ARCH}.tar.gz"
 DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${VERSION}/${ARCHIVE}"
-CHECKSUM_URL="https://github.com/${REPO}/releases/download/${VERSION}/tarn-checksums.txt"
+CHECKSUM_URL="https://github.com/${REPO}/releases/download/${VERSION}/hive-checksums.txt"
 
 echo "Downloading ${DOWNLOAD_URL}..."
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "${TMPDIR}"' EXIT
 
 curl -fsSL "${DOWNLOAD_URL}" -o "${TMPDIR}/${ARCHIVE}"
-curl -fsSL "${CHECKSUM_URL}" -o "${TMPDIR}/tarn-checksums.txt"
+curl -fsSL "${CHECKSUM_URL}" -o "${TMPDIR}/hive-checksums.txt"
 
-EXPECTED_SHA="$(grep " ${ARCHIVE}$" "${TMPDIR}/tarn-checksums.txt" | awk '{print $1}')"
+EXPECTED_SHA="$(grep " ${ARCHIVE}$" "${TMPDIR}/hive-checksums.txt" | awk '{print $1}')"
 if [ -z "${EXPECTED_SHA}" ]; then
   echo "Error: Checksum not found for ${ARCHIVE}"
   exit 1

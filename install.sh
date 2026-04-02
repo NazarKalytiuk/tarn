@@ -1,8 +1,8 @@
 #!/bin/sh
-# Tarn installer — curl -fsSL https://raw.githubusercontent.com/NazarKalytiuk/tarn/main/install.sh | sh
+# Tarn installer — curl -fsSL https://raw.githubusercontent.com/NazarKalytiuk/hive/main/install.sh | sh
 set -e
 
-REPO="NazarKalytiuk/tarn"
+REPO="NazarKalytiuk/hive"
 INSTALL_DIR="${TARN_INSTALL_DIR:-${HIVE_INSTALL_DIR:-/usr/local/bin}}"
 
 # Detect OS and architecture
@@ -21,7 +21,7 @@ case "$ARCH" in
   *)             echo "Unsupported architecture: $ARCH"; exit 1 ;;
 esac
 
-ARTIFACT="tarn-${OS_TAG}-${ARCH_TAG}"
+ARTIFACT="hive-${OS_TAG}-${ARCH_TAG}"
 
 # Get latest release tag
 echo "Fetching latest release..."
@@ -35,16 +35,16 @@ fi
 echo "Installing tarn ${TAG} (${OS_TAG}/${ARCH_TAG})..."
 
 URL="https://github.com/${REPO}/releases/download/${TAG}/${ARTIFACT}.tar.gz"
-CHECKSUM_URL="https://github.com/${REPO}/releases/download/${TAG}/tarn-checksums.txt"
+CHECKSUM_URL="https://github.com/${REPO}/releases/download/${TAG}/hive-checksums.txt"
 
 # Download and extract
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 
 curl -fsSL "$URL" -o "$TMPDIR/${ARTIFACT}.tar.gz"
-curl -fsSL "$CHECKSUM_URL" -o "$TMPDIR/tarn-checksums.txt"
+curl -fsSL "$CHECKSUM_URL" -o "$TMPDIR/hive-checksums.txt"
 
-EXPECTED_SHA="$(grep " ${ARTIFACT}.tar.gz$" "$TMPDIR/tarn-checksums.txt" | awk '{print $1}')"
+EXPECTED_SHA="$(grep " ${ARTIFACT}.tar.gz$" "$TMPDIR/hive-checksums.txt" | awk '{print $1}')"
 if [ -z "$EXPECTED_SHA" ]; then
   echo "Error: Checksum not found for ${ARTIFACT}.tar.gz"
   exit 1
@@ -68,10 +68,10 @@ tar xzf "$TMPDIR/${ARTIFACT}.tar.gz" -C "$TMPDIR"
 
 # Install
 if [ -w "$INSTALL_DIR" ]; then
-  mv "$TMPDIR/$ARTIFACT" "$INSTALL_DIR/tarn"
+  mv "$TMPDIR/tarn" "$INSTALL_DIR/tarn" 2>/dev/null || mv "$TMPDIR/$ARTIFACT" "$INSTALL_DIR/tarn"
 else
   echo "Need sudo to install to $INSTALL_DIR"
-  sudo mv "$TMPDIR/$ARTIFACT" "$INSTALL_DIR/tarn"
+  sudo mv "$TMPDIR/tarn" "$INSTALL_DIR/tarn" 2>/dev/null || sudo mv "$TMPDIR/$ARTIFACT" "$INSTALL_DIR/tarn"
 fi
 
 chmod +x "$INSTALL_DIR/tarn"
