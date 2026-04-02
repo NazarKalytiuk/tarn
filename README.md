@@ -1059,12 +1059,17 @@ See [docs/MCP_WORKFLOW.md](./docs/MCP_WORKFLOW.md), [docs/AI_WORKFLOW_DEMO.md](.
 
 Tarn is available as a Claude Code plugin. The plugin bundles the MCP server and the Tarn skill, so installing it gives your agent structured API testing capabilities out of the box.
 
-The plugin metadata lives in `.claude-plugin/`:
+### Install the plugin
 
-- **`plugin.json`** &mdash; name, version, description, author, and repository URL
-- **`marketplace.json`** &mdash; marketplace listing with owner info and plugin registry
+```bash
+claude plugin add NazarKalytiuk/hive
+```
 
-To use the plugin in a project, add the MCP server to your project-level `.mcp.json`:
+This registers the Tarn MCP server and skill in your project. After installing, Claude Code can write, run, and debug `.tarn.yaml` tests directly.
+
+### Manual setup
+
+If you prefer manual configuration, add the MCP server to a project-level `.mcp.json` in the repo root:
 
 ```json
 {
@@ -1078,6 +1083,13 @@ To use the plugin in a project, add the MCP server to your project-level `.mcp.j
 ```
 
 This is equivalent to configuring the MCP server in `.claude/settings.json` but is portable across editors and tools that support MCP.
+
+### Plugin metadata
+
+The plugin configuration lives in `.claude-plugin/`:
+
+- **`plugin.json`** &mdash; name, version, description, author, and repository URL
+- **`marketplace.json`** &mdash; marketplace listing with owner info and plugin registry
 
 ## Claude Code Skill
 
