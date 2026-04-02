@@ -19,11 +19,12 @@ trap cleanup EXIT
 cd "${ROOT_DIR}"
 cargo build --release -p tarn -p demo-server
 
-PORT="${SERVER_PORT}" cargo run --quiet --release -p demo-server >"${SERVER_LOG}" 2>&1 &
+DEMO_BIN="${ROOT_DIR}/target/release/demo-server"
+PORT="${SERVER_PORT}" "${DEMO_BIN}" >"${SERVER_LOG}" 2>&1 &
 SERVER_PID=$!
 
 for _ in $(seq 1 50); do
-  if curl -fsS "http://127.0.0.1:${SERVER_PORT}/health" >/dev/null; then
+  if curl -fsS "http://127.0.0.1:${SERVER_PORT}/health" >/dev/null 2>&1; then
     break
   fi
   sleep 0.2
