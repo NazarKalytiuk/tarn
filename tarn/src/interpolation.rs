@@ -73,6 +73,25 @@ pub fn interpolate_headers(
         .collect()
 }
 
+/// Find unresolved template expressions remaining in a string after interpolation.
+/// Returns the expression names (e.g., "capture.package_id", "env.base_url").
+pub fn find_unresolved(s: &str) -> Vec<String> {
+    interpolation_regex()
+        .captures_iter(s)
+        .map(|caps| caps[1].trim().to_string())
+        .collect()
+}
+
+/// Find unresolved template expressions in all string values of a JSON value (recursive).
+pub fn find_unresolved_in_json(value: &serde_json::Value) -> Vec<String> {
+    match value {
+        serde_json::Value::String(s) => find_unresolved(s),
+        serde_json::Value::Array(arr) => arr.iter().flat_map(find_unresolved_in_json).collect(),
+        serde_json::Value::Object(obj) => obj.values().flat_map(find_unresolved_in_json).collect(),
+        _ => vec![],
+    }
+}
+
 /// Interpolate all strings in an ordered string map.
 pub fn interpolate_string_map(
     values: &IndexMap<String, String>,
@@ -516,5 +535,56 @@ mod tests {
         let ctx = Context::new();
         assert!(ctx.env.is_empty());
         assert!(ctx.captures.is_empty());
+    }
+
+    // --- Unresolved template detection ---
+
+    #[test]
+    fn find_unresolved_no_templates() {
+        assert!(find_unresolved("plain text").is_empty());
+        assert!(find_unresolved("http://localhost:3000/health").is_empty());
+    }
+
+    #[test]
+    fn find_unresolved_capture() {
+        let result = find_unresolved("/api/{{ capture.package_id }}/items");
+        assert_eq!(result, vec!["capture.package_id"]);
+    }
+
+    #[test]
+    fn find_unresolved_env() {
+        let result = find_unresolved("{{ env.base_url }}/health");
+        assert_eq!(result, vec!["env.base_url"]);
+    }
+
+    #[test]
+    fn find_unresolved_multiple() {
+        let result =
+            find_unresolved("{{ env.base_url }}/{{ capture.id }}?token={{ capture.token }}");
+        assert_eq!(result, vec!["env.base_url", "capture.id", "capture.token"]);
+    }
+
+    #[test]
+    fn find_unresolved_in_json_nested() {
+        let val = json!({
+            "url": "{{ env.base_url }}/api",
+            "data": {
+                "id": "{{ capture.item_id }}",
+                "count": 5
+            },
+            "tags": ["{{ capture.tag }}", "static"]
+        });
+        let mut result = find_unresolved_in_json(&val);
+        result.sort();
+        assert_eq!(
+            result,
+            vec!["capture.item_id", "capture.tag", "env.base_url"]
+        );
+    }
+
+    #[test]
+    fn find_unresolved_in_json_no_templates() {
+        let val = json!({"name": "Alice", "count": 42, "active": true});
+        assert!(find_unresolved_in_json(&val).is_empty());
     }
 }

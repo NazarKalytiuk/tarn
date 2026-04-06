@@ -73,6 +73,7 @@ fn render_step(
 mod tests {
     use super::*;
     use crate::assert::types::*;
+    use std::collections::HashMap;
 
     fn make_result(passed: bool) -> RunResult {
         RunResult {
@@ -107,7 +108,11 @@ mod tests {
                         request_info: None,
                         response_info: None,
                         error_category: None,
+                        response_status: None,
+                        response_summary: None,
+                        captures_set: vec![],
                     }],
+                    captures: HashMap::new(),
                 }],
                 teardown_results: vec![],
             }],
@@ -179,6 +184,9 @@ mod tests {
                             request_info: None,
                             response_info: None,
                             error_category: None,
+                            response_status: None,
+                            response_summary: None,
+                            captures_set: vec![],
                         },
                         StepResult {
                             name: "step2".into(),
@@ -188,8 +196,12 @@ mod tests {
                             request_info: None,
                             response_info: None,
                             error_category: None,
+                            response_status: None,
+                            response_summary: None,
+                            captures_set: vec![],
                         },
                     ],
+                    captures: HashMap::new(),
                 }],
                 teardown_results: vec![],
             }],
@@ -240,7 +252,11 @@ mod tests {
                         request_info: None,
                         response_info: None,
                         error_category: None,
+                        response_status: None,
+                        response_summary: None,
+                        captures_set: vec![],
                     }],
+                    captures: HashMap::new(),
                 }],
                 teardown_results: vec![],
             }],

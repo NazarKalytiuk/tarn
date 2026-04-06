@@ -103,6 +103,9 @@ pub fn run_script(
         .set("assert", assert_fn)
         .map_err(|e| TarnError::Script(e.to_string()))?;
 
+    // Register json global (json.encode / json.decode)
+    register_json_module(&lua)?;
+
     // Execute script
     lua.load(script)
         .exec()
@@ -129,6 +132,46 @@ pub fn run_script(
         captures: final_captures,
         assertion_results,
     })
+}
+
+/// Register the `json` global table with `encode` and `decode` functions.
+fn register_json_module(lua: &Lua) -> Result<(), TarnError> {
+    let json_table = lua
+        .create_table()
+        .map_err(|e| TarnError::Script(e.to_string()))?;
+
+    // json.decode(string) -> Lua value
+    let decode_fn = lua
+        .create_function(|lua, s: String| {
+            let value: serde_json::Value =
+                serde_json::from_str(&s).map_err(|e| LuaError::runtime(e.to_string()))?;
+            lua.to_value(&value)
+                .map_err(|e| LuaError::runtime(e.to_string()))
+        })
+        .map_err(|e| TarnError::Script(e.to_string()))?;
+
+    // json.encode(value) -> string
+    let encode_fn = lua
+        .create_function(|lua, value: LuaValue| {
+            let json_value: serde_json::Value = lua
+                .from_value(value)
+                .map_err(|e| LuaError::runtime(e.to_string()))?;
+            serde_json::to_string(&json_value).map_err(|e| LuaError::runtime(e.to_string()))
+        })
+        .map_err(|e| TarnError::Script(e.to_string()))?;
+
+    json_table
+        .set("decode", decode_fn)
+        .map_err(|e| TarnError::Script(e.to_string()))?;
+    json_table
+        .set("encode", encode_fn)
+        .map_err(|e| TarnError::Script(e.to_string()))?;
+
+    lua.globals()
+        .set("json", json_table)
+        .map_err(|e| TarnError::Script(e.to_string()))?;
+
+    Ok(())
 }
 
 fn create_sandboxed_lua() -> Result<Lua, TarnError> {
@@ -353,5 +396,66 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("instruction limit"));
+    }
+
+    #[test]
+    fn script_json_decode() {
+        let resp = make_response(200, json!({}));
+        let result = run_script(
+            r#"
+            local data = json.decode('{"name":"Alice","age":30}')
+            assert(data.name == 'Alice', 'name decoded')
+            assert(data.age == 30, 'age decoded')
+            "#,
+            &resp,
+            &HashMap::new(),
+            "test",
+        )
+        .unwrap();
+        assert_eq!(result.assertion_results.len(), 2);
+        assert!(result.assertion_results.iter().all(|a| a.passed));
+    }
+
+    #[test]
+    fn script_json_encode() {
+        let resp = make_response(200, json!({}));
+        let result = run_script(
+            r#"
+            local encoded = json.encode({name = 'Bob'})
+            assert(type(encoded) == 'string', 'encode returns string')
+            local decoded = json.decode(encoded)
+            assert(decoded.name == 'Bob', 'roundtrip works')
+            "#,
+            &resp,
+            &HashMap::new(),
+            "test",
+        )
+        .unwrap();
+        assert!(result.assertion_results.iter().all(|a| a.passed));
+    }
+
+    #[test]
+    fn script_json_decode_invalid() {
+        let resp = make_response(200, json!({}));
+        let result = run_script(
+            "json.decode('not valid json')",
+            &resp,
+            &HashMap::new(),
+            "test",
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn script_json_global_exists() {
+        let resp = make_response(200, json!({}));
+        let result = run_script(
+            "assert(json ~= nil, 'json exists')\nassert(type(json.decode) == 'function', 'decode is function')\nassert(type(json.encode) == 'function', 'encode is function')",
+            &resp,
+            &HashMap::new(),
+            "test",
+        )
+        .unwrap();
+        assert!(result.assertion_results.iter().all(|a| a.passed));
     }
 }

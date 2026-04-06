@@ -1,6 +1,7 @@
 use serde_json::Value;
 use std::path::Path;
 use tarn::assert::types::RunResult;
+use tarn::config;
 use tarn::env;
 use tarn::model::HttpTransportConfig;
 use tarn::parser;
@@ -60,9 +61,23 @@ pub fn tarn_run(params: &Value) -> Result<Value, String> {
         let fp = Path::new(file_path);
         let test_file = parser::parse_file(fp).map_err(|e| e.to_string())?;
 
-        let base_dir = fp.parent().unwrap_or(Path::new("."));
-        let resolved_env = env::resolve_env(&test_file.env, env_name, &cli_vars, base_dir)
-            .map_err(|e| e.to_string())?;
+        let start_dir = fp.parent().unwrap_or(Path::new("."));
+        let abs_start = if start_dir.is_absolute() {
+            start_dir.to_path_buf()
+        } else {
+            std::env::current_dir().unwrap_or_default().join(start_dir)
+        };
+        let root_dir = config::find_project_root(&abs_start).unwrap_or(abs_start);
+        let project_config = config::load_config(&root_dir).map_err(|e| e.to_string())?;
+        let resolved_env = env::resolve_env_with_profiles(
+            &test_file.env,
+            env_name,
+            &cli_vars,
+            &root_dir,
+            &project_config.env_file,
+            &project_config.environments,
+        )
+        .map_err(|e| e.to_string())?;
 
         let result = runner::run_file(&test_file, file_path, &resolved_env, &tag_filter, &opts)
             .map_err(|e| e.to_string())?;

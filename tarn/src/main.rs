@@ -1294,7 +1294,9 @@ fn run_result_exit_code(run_result: &RunResult) -> i32 {
             Some(FailureCategory::ConnectionError)
             | Some(FailureCategory::Timeout)
             | Some(FailureCategory::CaptureError) => return 3,
-            Some(FailureCategory::ParseError) => exit_code = exit_code.max(2),
+            Some(FailureCategory::ParseError) | Some(FailureCategory::UnresolvedTemplate) => {
+                exit_code = exit_code.max(2)
+            }
             Some(FailureCategory::AssertionFailed) | None => {}
         }
     }
@@ -1598,6 +1600,9 @@ steps:
             request_info: None,
             response_info: None,
             error_category: category,
+            response_status: None,
+            response_summary: None,
+            captures_set: vec![],
         };
 
         let make_file = |step| FileResult {
@@ -1614,6 +1619,7 @@ steps:
                 passed: false,
                 duration_ms: 0,
                 step_results: vec![step],
+                captures: std::collections::HashMap::new(),
             }],
             teardown_results: vec![],
         };

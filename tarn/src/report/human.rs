@@ -130,6 +130,7 @@ fn render_step(output: &mut String, step: &StepResult, file_result: &FileResult)
 mod tests {
     use super::*;
     use crate::assert::types::*;
+    use std::collections::HashMap;
 
     fn make_run_result(passed: bool) -> RunResult {
         RunResult {
@@ -164,7 +165,11 @@ mod tests {
                         request_info: None,
                         response_info: None,
                         error_category: None,
+                        response_status: None,
+                        response_summary: None,
+                        captures_set: vec![],
                     }],
+                    captures: HashMap::new(),
                 }],
                 teardown_results: vec![],
             }],
@@ -207,6 +212,9 @@ mod tests {
                     request_info: None,
                     response_info: None,
                     error_category: None,
+                    response_status: None,
+                    response_summary: None,
+                    captures_set: vec![],
                 }],
                 test_results: vec![],
                 teardown_results: vec![StepResult {
@@ -217,6 +225,9 @@ mod tests {
                     request_info: None,
                     response_info: None,
                     error_category: None,
+                    response_status: None,
+                    response_summary: None,
+                    captures_set: vec![],
                 }],
             }],
         };
@@ -260,7 +271,11 @@ mod tests {
                         request_info: None,
                         response_info: None,
                         error_category: None,
+                        response_status: None,
+                        response_summary: None,
+                        captures_set: vec![],
                     }],
+                    captures: HashMap::new(),
                 }],
                 teardown_results: vec![],
             }],
@@ -301,7 +316,11 @@ mod tests {
                         request_info: None,
                         response_info: None,
                         error_category: None,
+                        response_status: None,
+                        response_summary: None,
+                        captures_set: vec![],
                     }],
+                    captures: HashMap::new(),
                 }],
                 teardown_results: vec![],
             }],
@@ -345,7 +364,11 @@ mod tests {
                         request_info: None,
                         response_info: None,
                         error_category: None,
+                        response_status: None,
+                        response_summary: None,
+                        captures_set: vec![],
                     }],
+                    captures: HashMap::new(),
                 }],
                 teardown_results: vec![],
             }],

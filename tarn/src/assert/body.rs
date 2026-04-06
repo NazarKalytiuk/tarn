@@ -1176,6 +1176,58 @@ mod tests {
         assert!(!results[0].passed);
     }
 
+    #[test]
+    fn wildcard_contains_object_array() {
+        // $[*].field extracts field values from all array elements, then contains checks the result
+        let body = r#"[
+            {"materialData": {"partDescription": "Bolt"}},
+            {"materialData": {"partDescription": "Sync Test Bearing"}},
+            {"materialData": {"partDescription": "Nut"}}
+        ]"#;
+        let results = run(
+            body,
+            r#""$[*].materialData.partDescription": { contains: "Sync Test Bearing" }"#,
+        );
+        assert!(results[0].passed);
+    }
+
+    #[test]
+    fn wildcard_contains_object_array_miss() {
+        let body = r#"[
+            {"materialData": {"partDescription": "Bolt"}},
+            {"materialData": {"partDescription": "Nut"}}
+        ]"#;
+        let results = run(
+            body,
+            r#""$[*].materialData.partDescription": { contains: "Sync Test Bearing" }"#,
+        );
+        assert!(!results[0].passed);
+    }
+
+    #[test]
+    fn filter_expression_matches_object() {
+        let body = r#"[
+            {"name": "Alice", "role": "admin"},
+            {"name": "Bob", "role": "user"}
+        ]"#;
+        let results = run(body, r#""$[?@.name == 'Alice']": { exists: true }"#);
+        assert!(results[0].passed);
+    }
+
+    #[test]
+    fn filter_expression_no_match() {
+        let body = r#"[{"name": "Alice"}, {"name": "Bob"}]"#;
+        let results = run(body, r#""$[?@.name == 'Charlie']": { exists: true }"#);
+        assert!(!results[0].passed);
+    }
+
+    #[test]
+    fn filter_expression_old_syntax_with_parens() {
+        let body = r#"[{"name": "Alice"}, {"name": "Bob"}]"#;
+        let results = run(body, r#""$[?(@.name == 'Alice')]": { exists: true }"#);
+        assert!(results[0].passed);
+    }
+
     // --- not_contains ---
 
     #[test]

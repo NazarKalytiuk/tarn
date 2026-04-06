@@ -157,6 +157,7 @@ pub fn run_file_with_cookie_jars(
                 passed,
                 duration_ms,
                 step_results,
+                captures: step_captures.clone(),
             });
         }
 
@@ -198,6 +199,7 @@ pub fn run_file_with_cookie_jars(
                 passed,
                 duration_ms,
                 step_results,
+                captures: test_captures.clone(),
             });
         }
     }
@@ -301,6 +303,9 @@ fn runtime_failure_step(
         request_info: Some(request_info),
         response_info: None,
         error_category,
+        response_status: None,
+        response_summary: None,
+        captures_set: vec![],
     }
 }
 
@@ -698,6 +703,40 @@ fn run_step(
     );
     let request_info = build_request_info(step, &request, base_dir);
 
+    // Check for unresolved template expressions (e.g. failed captures, missing env vars)
+    let mut unresolved = interpolation::find_unresolved(&request.url);
+    for v in request.headers.values() {
+        unresolved.extend(interpolation::find_unresolved(v));
+    }
+    if let Some(ref body) = request.body {
+        unresolved.extend(interpolation::find_unresolved_in_json(body));
+    }
+    if !unresolved.is_empty() {
+        unresolved.sort();
+        unresolved.dedup();
+        let names = unresolved.join(", ");
+        return Ok(StepResult {
+            name: step.name.clone(),
+            passed: false,
+            duration_ms: 0,
+            assertion_results: vec![AssertionResult::fail(
+                "interpolation",
+                "all templates resolved",
+                format!("unresolved: {}", names),
+                format!(
+                    "Unresolved template variables: {}. Check that prior captures succeeded and env vars are set.",
+                    names
+                ),
+            )],
+            request_info: Some(request_info),
+            response_info: None,
+            error_category: Some(FailureCategory::UnresolvedTemplate),
+            response_status: None,
+            response_summary: None,
+            captures_set: vec![],
+        });
+    }
+
     // Verbose: print request details
     if opts.verbose {
         eprintln!(
@@ -722,6 +761,9 @@ fn run_step(
             request_info: Some(request_info.clone()),
             response_info: None,
             error_category: None,
+            response_status: None,
+            response_summary: None,
+            captures_set: vec![],
         });
     }
 
@@ -777,7 +819,11 @@ fn run_step(
         let passed = assertion_results.iter().all(|a| a.passed);
 
         if passed {
+            let resp_status = response.status;
+            let resp_summary = summarize_response(&response);
+
             // Extract captures on success — graceful failure (P0 fix)
+            let mut captured_keys = Vec::new();
             let capture_result = if !step.capture.is_empty() {
                 match capture::extract_captures(
                     response.status,
@@ -788,6 +834,7 @@ fn run_step(
                     &step.capture,
                 ) {
                     Ok(new_captures) => {
+                        captured_keys = new_captures.keys().cloned().collect();
                         record_redacted_named_values(&new_captures, redaction, redacted_values);
                         captures.extend(new_captures);
                         None
@@ -819,6 +866,9 @@ fn run_step(
                         body: Some(response.body),
                     }),
                     error_category: Some(FailureCategory::CaptureError),
+                    response_status: Some(resp_status),
+                    response_summary: Some(resp_summary),
+                    captures_set: vec![],
                 });
             }
 
@@ -840,6 +890,9 @@ fn run_step(
                 request_info: Some(request_info.clone()),
                 response_info: None,
                 error_category: None,
+                response_status: Some(resp_status),
+                response_summary: Some(resp_summary),
+                captures_set: captured_keys,
             });
         }
 
@@ -852,6 +905,8 @@ fn run_step(
 
     // All attempts failed
     let (response, assertion_results) = last_result.unwrap();
+    let resp_status = response.status;
+    let resp_summary = summarize_response(&response);
 
     Ok(StepResult {
         name: step.name.clone(),
@@ -865,6 +920,9 @@ fn run_step(
             body: Some(response.body),
         }),
         error_category: Some(FailureCategory::AssertionFailed),
+        response_status: Some(resp_status),
+        response_summary: Some(resp_summary),
+        captures_set: vec![],
     })
 }
 
@@ -907,6 +965,40 @@ fn run_step_poll(
         );
         let request_info = build_request_info(step, &request, base_dir);
 
+        // Check for unresolved template expressions before sending
+        let mut unresolved = interpolation::find_unresolved(&request.url);
+        for v in request.headers.values() {
+            unresolved.extend(interpolation::find_unresolved(v));
+        }
+        if let Some(ref body) = request.body {
+            unresolved.extend(interpolation::find_unresolved_in_json(body));
+        }
+        if !unresolved.is_empty() {
+            unresolved.sort();
+            unresolved.dedup();
+            let names = unresolved.join(", ");
+            return Ok(StepResult {
+                name: step.name.clone(),
+                passed: false,
+                duration_ms: 0,
+                assertion_results: vec![AssertionResult::fail(
+                    "interpolation",
+                    "all templates resolved",
+                    format!("unresolved: {}", names),
+                    format!(
+                        "Unresolved template variables: {}. Check that prior captures succeeded and env vars are set.",
+                        names
+                    ),
+                )],
+                request_info: Some(request_info),
+                response_info: None,
+                error_category: Some(FailureCategory::UnresolvedTemplate),
+                response_status: None,
+                response_summary: None,
+                captures_set: vec![],
+            });
+        }
+
         if opts.verbose {
             eprintln!(
                 "  [poll {}/{}] {} {}",
@@ -948,7 +1040,11 @@ fn run_step_poll(
 
             let passed = assertion_results.iter().all(|a| a.passed);
 
+            let resp_status = response.status;
+            let resp_summary = summarize_response(&response);
+
             // Extract captures — graceful failure
+            let mut captured_keys = Vec::new();
             if passed && !step.capture.is_empty() {
                 match capture::extract_captures(
                     response.status,
@@ -959,6 +1055,7 @@ fn run_step_poll(
                     &step.capture,
                 ) {
                     Ok(new_captures) => {
+                        captured_keys = new_captures.keys().cloned().collect();
                         record_redacted_named_values(&new_captures, redaction, redacted_values);
                         captures.extend(new_captures);
                     }
@@ -982,6 +1079,9 @@ fn run_step_poll(
                                 body: Some(response.body),
                             }),
                             error_category: Some(FailureCategory::CaptureError),
+                            response_status: Some(resp_status),
+                            response_summary: Some(resp_summary),
+                            captures_set: vec![],
                         });
                     }
                 }
@@ -1005,6 +1105,9 @@ fn run_step_poll(
                 request_info: Some(request_info.clone()),
                 response_info: None,
                 error_category: None,
+                response_status: Some(resp_status),
+                response_summary: Some(resp_summary),
+                captures_set: captured_keys,
             });
         }
     }
@@ -1026,6 +1129,9 @@ fn run_step_poll(
         request_info: None,
         response_info: None,
         error_category: Some(FailureCategory::Timeout),
+        response_status: None,
+        response_summary: None,
+        captures_set: vec![],
     })
 }
 
@@ -1047,6 +1153,73 @@ fn run_script_if_present(
     }
     let passed = assertion_results.iter().all(|a| a.passed);
     Ok((assertion_results, passed))
+}
+
+/// Generate a brief summary of an HTTP response for AI-friendly output.
+fn summarize_response(response: &http::HttpResponse) -> String {
+    let status_text = match response.status {
+        200 => "200 OK",
+        201 => "201 Created",
+        204 => "204 No Content",
+        301 => "301 Moved",
+        302 => "302 Found",
+        304 => "304 Not Modified",
+        400 => "400 Bad Request",
+        401 => "401 Unauthorized",
+        403 => "403 Forbidden",
+        404 => "404 Not Found",
+        409 => "409 Conflict",
+        422 => "422 Unprocessable Entity",
+        429 => "429 Too Many Requests",
+        500 => "500 Internal Server Error",
+        502 => "502 Bad Gateway",
+        503 => "503 Service Unavailable",
+        code => return format_response_summary(code, &response.body),
+    };
+
+    let body_hint = body_shape_hint(&response.body);
+    if body_hint.is_empty() {
+        status_text.to_string()
+    } else {
+        format!("{}: {}", status_text, body_hint)
+    }
+}
+
+fn format_response_summary(status: u16, body: &serde_json::Value) -> String {
+    let body_hint = body_shape_hint(body);
+    if body_hint.is_empty() {
+        format!("{}", status)
+    } else {
+        format!("{}: {}", status, body_hint)
+    }
+}
+
+fn body_shape_hint(body: &serde_json::Value) -> String {
+    match body {
+        serde_json::Value::Array(arr) => format!("Array[{}]", arr.len()),
+        serde_json::Value::Object(obj) => {
+            if let Some(serde_json::Value::String(msg)) = obj.get("message") {
+                truncate_str(msg, 80).to_string()
+            } else if let Some(serde_json::Value::String(err)) = obj.get("error") {
+                truncate_str(err, 80).to_string()
+            } else {
+                format!("Object{{{} keys}}", obj.len())
+            }
+        }
+        serde_json::Value::String(s) => truncate_str(s, 80).to_string(),
+        serde_json::Value::Null => String::new(),
+        other => truncate_str(&other.to_string(), 80).to_string(),
+    }
+}
+
+fn truncate_str(s: &str, max_len: usize) -> &str {
+    if s.len() <= max_len {
+        s
+    } else {
+        let end = s.floor_char_boundary(max_len.saturating_sub(3));
+        // We return the truncated portion; caller may append "..."
+        &s[..end]
+    }
 }
 
 /// Interpolate template expressions within assertion values.

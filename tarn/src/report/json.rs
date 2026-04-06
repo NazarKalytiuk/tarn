@@ -63,13 +63,17 @@ fn render_file(file: &FileResult, mode: JsonOutputMode) -> Value {
         },
         "setup": file.setup_results.iter().map(|step| render_step(step, &file.redaction, &file.redacted_values, mode)).collect::<Vec<_>>(),
         "tests": file.test_results.iter().map(|t| {
-            json!({
+            let mut test_obj = json!({
                 "name": t.name,
                 "description": t.description,
                 "status": if t.passed { "PASSED" } else { "FAILED" },
                 "duration_ms": t.duration_ms,
                 "steps": t.step_results.iter().map(|step| render_step(step, &file.redaction, &file.redacted_values, mode)).collect::<Vec<_>>(),
-            })
+            });
+            if !t.captures.is_empty() {
+                test_obj["captures"] = json!(t.captures);
+            }
+            test_obj
         }).collect::<Vec<_>>(),
         "teardown": file.teardown_results.iter().map(|step| render_step(step, &file.redaction, &file.redacted_values, mode)).collect::<Vec<_>>(),
     })
@@ -119,6 +123,17 @@ fn render_step(
         },
     });
 
+    // Always include response_status and response_summary when available
+    if let Some(status) = step.response_status {
+        obj["response_status"] = json!(status);
+    }
+    if let Some(ref summary) = step.response_summary {
+        obj["response_summary"] = json!(summary);
+    }
+    if !step.captures_set.is_empty() {
+        obj["captures_set"] = json!(step.captures_set);
+    }
+
     // Include failures shortcut list
     if !step.passed {
         let failures: Vec<Value> = step
@@ -160,10 +175,18 @@ fn render_step(
             });
         }
         if let Some(ref resp) = step.response_info {
+            let body = resp.body.as_ref().map(|body| {
+                let sanitized = sanitize_json(body, &redaction.replacement, secret_values);
+                if mode == JsonOutputMode::Compact {
+                    truncate_json_body(&sanitized, 200)
+                } else {
+                    sanitized
+                }
+            });
             obj["response"] = json!({
                 "status": resp.status,
                 "headers": redact_headers(&resp.headers, redaction, secret_values),
-                "body": resp.body.as_ref().map(|body| sanitize_json(body, &redaction.replacement, secret_values)),
+                "body": body,
             });
         }
     }
@@ -272,6 +295,22 @@ fn remediation_hints(step: &StepResult) -> Vec<String> {
     hints
 }
 
+/// Truncate a JSON body to approximately `max_chars` for compact output.
+fn truncate_json_body(value: &Value, max_chars: usize) -> Value {
+    let serialized = serde_json::to_string(value).unwrap_or_default();
+    if serialized.len() <= max_chars {
+        return value.clone();
+    }
+    // Return a truncated string representation
+    let end = serialized
+        .char_indices()
+        .take(max_chars)
+        .last()
+        .map(|(i, c)| i + c.len_utf8())
+        .unwrap_or(max_chars);
+    Value::String(format!("{}...(truncated)", &serialized[..end]))
+}
+
 fn request_contains_templates(request: Option<&crate::assert::types::RequestInfo>) -> bool {
     let Some(request) = request else {
         return false;
@@ -345,7 +384,11 @@ mod tests {
                         request_info: None,
                         response_info: None,
                         error_category: None,
+                        response_status: None,
+                        response_summary: None,
+                        captures_set: vec![],
                     }],
+                    captures: HashMap::new(),
                 }],
                 teardown_results: vec![],
             }],
@@ -395,7 +438,11 @@ mod tests {
                             body: Some(json!({"error": "not_found"})),
                         }),
                         error_category: Some(FailureCategory::AssertionFailed),
+                        response_status: None,
+                        response_summary: None,
+                        captures_set: vec![],
                     }],
+                    captures: HashMap::new(),
                 }],
                 teardown_results: vec![],
             }],
@@ -497,7 +544,11 @@ mod tests {
                         request_info: None,
                         response_info: None,
                         error_category: Some(FailureCategory::AssertionFailed),
+                        response_status: None,
+                        response_summary: None,
+                        captures_set: vec![],
                     }],
+                    captures: HashMap::new(),
                 }],
                 teardown_results: vec![],
             }],
@@ -619,7 +670,11 @@ mod tests {
                             body: Some(json!({"error": "env-secret"})),
                         }),
                         error_category: Some(FailureCategory::AssertionFailed),
+                        response_status: None,
+                        response_summary: None,
+                        captures_set: vec![],
                     }],
+                    captures: HashMap::new(),
                 }],
                 teardown_results: vec![],
             }],

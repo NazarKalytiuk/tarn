@@ -22,7 +22,7 @@
     },
     "failureCategory": {
       "type": "string",
-      "enum": ["assertion_failed", "connection_error", "timeout", "parse_error", "capture_error"]
+      "enum": ["assertion_failed", "connection_error", "timeout", "parse_error", "capture_error", "unresolved_template"]
     },
     "errorCode": {
       "type": "string",
@@ -121,6 +121,12 @@
           "type": "array",
           "items": { "type": "string" }
         },
+        "response_status": { "type": "integer", "minimum": 100, "maximum": 599 },
+        "response_summary": { "type": "string" },
+        "captures_set": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
         "request": { "$ref": "#/$defs/requestInfo" },
         "response": { "$ref": "#/$defs/responseInfo" }
       }
@@ -136,6 +142,9 @@
         "steps": {
           "type": "array",
           "items": { "$ref": "#/$defs/stepResult" }
+        },
+        "captures": {
+          "type": "object"
         }
       }
     },

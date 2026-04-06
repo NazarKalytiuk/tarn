@@ -198,6 +198,7 @@ mod tests {
                 passed: step.passed,
                 duration_ms: 10,
                 step_results: vec![step],
+                captures: HashMap::new(),
             }],
             teardown_results: vec![],
         }
@@ -221,6 +222,9 @@ mod tests {
                 }),
                 response_info: None,
                 error_category: None,
+                response_status: None,
+                response_summary: None,
+                captures_set: vec![],
             })],
         };
 
@@ -247,6 +251,9 @@ mod tests {
                 }),
                 response_info: None,
                 error_category: None,
+                response_status: None,
+                response_summary: None,
+                captures_set: vec![],
             })],
         };
 

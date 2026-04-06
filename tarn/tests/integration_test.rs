@@ -350,6 +350,9 @@ fn golden_run_result() -> RunResult {
                 request_info: None,
                 response_info: None,
                 error_category: None,
+                response_status: None,
+                response_summary: None,
+                captures_set: vec![],
             }],
             test_results: vec![TestResult {
                 name: "smoke".into(),
@@ -368,6 +371,9 @@ fn golden_run_result() -> RunResult {
                         request_info: None,
                         response_info: None,
                         error_category: None,
+                        response_status: None,
+                        response_summary: None,
+                        captures_set: vec![],
                     },
                     StepResult {
                         name: "Fetch item".into(),
@@ -403,8 +409,12 @@ fn golden_run_result() -> RunResult {
                             })),
                         }),
                         error_category: Some(FailureCategory::AssertionFailed),
+                        response_status: None,
+                        response_summary: None,
+                        captures_set: vec![],
                     },
                 ],
+                captures: HashMap::new(),
             }],
             teardown_results: vec![StepResult {
                 name: "Cleanup".into(),
@@ -414,6 +424,9 @@ fn golden_run_result() -> RunResult {
                 request_info: None,
                 response_info: None,
                 error_category: None,
+                response_status: None,
+                response_summary: None,
+                captures_set: vec![],
             }],
         }],
     }

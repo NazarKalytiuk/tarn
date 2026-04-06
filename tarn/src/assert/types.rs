@@ -11,6 +11,7 @@ pub enum FailureCategory {
     Timeout,
     ParseError,
     CaptureError,
+    UnresolvedTemplate,
 }
 
 /// Stable machine-readable failure code for programmatic handling.
@@ -115,6 +116,12 @@ pub struct StepResult {
     pub response_info: Option<ResponseInfo>,
     /// Category of failure (for structured error taxonomy in JSON output)
     pub error_category: Option<FailureCategory>,
+    /// HTTP response status code (available for all executed steps)
+    pub response_status: Option<u16>,
+    /// Brief summary of the response (e.g., "200 OK", "Array[3] items")
+    pub response_summary: Option<String>,
+    /// Names of captures set by this step
+    pub captures_set: Vec<String>,
 }
 
 impl StepResult {
@@ -155,6 +162,7 @@ impl StepResult {
                     Some(ErrorCode::RequestTimedOut)
                 }
             }
+            Some(FailureCategory::UnresolvedTemplate) => Some(ErrorCode::InterpolationFailed),
             Some(FailureCategory::ParseError) => {
                 if lower.contains("interpolation") {
                     Some(ErrorCode::InterpolationFailed)
@@ -221,6 +229,8 @@ pub struct TestResult {
     pub passed: bool,
     pub duration_ms: u64,
     pub step_results: Vec<StepResult>,
+    /// All captured values at the end of this test group
+    pub captures: HashMap<String, serde_json::Value>,
 }
 
 impl TestResult {
@@ -349,6 +359,9 @@ mod tests {
             request_info: None,
             response_info: None,
             error_category: None,
+            response_status: None,
+            response_summary: None,
+            captures_set: vec![],
         };
         assert_eq!(sr.total_assertions(), 3);
         assert_eq!(sr.passed_assertions(), 2);
@@ -372,6 +385,9 @@ mod tests {
             request_info: None,
             response_info: None,
             error_category: Some(FailureCategory::Timeout),
+            response_status: None,
+            response_summary: None,
+            captures_set: vec![],
         };
         assert_eq!(
             poll_timeout.error_code(),
@@ -391,6 +407,9 @@ mod tests {
             request_info: None,
             response_info: None,
             error_category: Some(FailureCategory::Timeout),
+            response_status: None,
+            response_summary: None,
+            captures_set: vec![],
         };
         assert_eq!(
             request_timeout.error_code(),
@@ -413,6 +432,9 @@ mod tests {
             request_info: None,
             response_info: None,
             error_category: Some(FailureCategory::ConnectionError),
+            response_status: None,
+            response_summary: None,
+            captures_set: vec![],
         };
         assert_eq!(refused.error_code(), Some(ErrorCode::ConnectionRefused));
 
@@ -429,8 +451,33 @@ mod tests {
             request_info: None,
             response_info: None,
             error_category: Some(FailureCategory::ConnectionError),
+            response_status: None,
+            response_summary: None,
+            captures_set: vec![],
         };
         assert_eq!(tls.error_code(), Some(ErrorCode::TlsVerificationFailed));
+    }
+
+    #[test]
+    fn step_result_error_code_unresolved_template() {
+        let sr = StepResult {
+            name: "unresolved".into(),
+            passed: false,
+            duration_ms: 0,
+            assertion_results: vec![AssertionResult::fail(
+                "interpolation",
+                "all templates resolved",
+                "unresolved: capture.id",
+                "Unresolved template variables: capture.id",
+            )],
+            request_info: None,
+            response_info: None,
+            error_category: Some(FailureCategory::UnresolvedTemplate),
+            response_status: None,
+            response_summary: None,
+            captures_set: vec![],
+        };
+        assert_eq!(sr.error_code(), Some(ErrorCode::InterpolationFailed));
     }
 
     #[test]
@@ -449,6 +496,9 @@ mod tests {
                     request_info: None,
                     response_info: None,
                     error_category: None,
+                    response_status: None,
+                    response_summary: None,
+                    captures_set: vec![],
                 },
                 StepResult {
                     name: "verify".into(),
@@ -463,8 +513,12 @@ mod tests {
                     request_info: None,
                     response_info: None,
                     error_category: None,
+                    response_status: None,
+                    response_summary: None,
+                    captures_set: vec![],
                 },
             ],
+            captures: HashMap::new(),
         };
         assert_eq!(tr.total_steps(), 2);
         assert_eq!(tr.passed_steps(), 1);
@@ -488,6 +542,9 @@ mod tests {
                 request_info: None,
                 response_info: None,
                 error_category: None,
+                response_status: None,
+                response_summary: None,
+                captures_set: vec![],
             }],
             test_results: vec![TestResult {
                 name: "t1".into(),
@@ -503,6 +560,9 @@ mod tests {
                         request_info: None,
                         response_info: None,
                         error_category: None,
+                        response_status: None,
+                        response_summary: None,
+                        captures_set: vec![],
                     },
                     StepResult {
                         name: "s2".into(),
@@ -512,8 +572,12 @@ mod tests {
                         request_info: None,
                         response_info: None,
                         error_category: None,
+                        response_status: None,
+                        response_summary: None,
+                        captures_set: vec![],
                     },
                 ],
+                captures: HashMap::new(),
             }],
             teardown_results: vec![],
         };
@@ -547,7 +611,11 @@ mod tests {
                             request_info: None,
                             response_info: None,
                             error_category: None,
+                            response_status: None,
+                            response_summary: None,
+                            captures_set: vec![],
                         }],
+                        captures: HashMap::new(),
                     }],
                     teardown_results: vec![],
                 },
@@ -572,7 +640,11 @@ mod tests {
                             request_info: None,
                             response_info: None,
                             error_category: None,
+                            response_status: None,
+                            response_summary: None,
+                            captures_set: vec![],
                         }],
+                        captures: HashMap::new(),
                     }],
                     teardown_results: vec![],
                 },
