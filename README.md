@@ -819,9 +819,11 @@ steps:
 **Available in Lua:**
 - `response.status` &mdash; HTTP status code
 - `response.headers` &mdash; response headers table
-- `response.body` &mdash; response body as Lua table
+- `response.body` &mdash; response body as Lua table (auto-parsed from JSON)
 - `captures` &mdash; read/write captures table
 - `assert(condition, message)` &mdash; assertion (collected, not thrown)
+- `json.decode(string)` &mdash; parse a JSON string into a Lua table
+- `json.encode(value)` &mdash; serialize a Lua value to a JSON string
 
 ## CLI Reference
 
@@ -904,9 +906,11 @@ tarn run \
 Structured JSON with versioned schema. Key design:
 - `schema_version: 1` for forward compatibility
 - Full request/response included **only for failed steps**
-- `failure_category` on failures: `assertion_failed`, `connection_error`, `timeout`, `parse_error`, `capture_error`
+- `failure_category` on failures: `assertion_failed`, `connection_error`, `timeout`, `parse_error`, `capture_error`, `unresolved_template`
 - Stable `error_code` and `remediation_hints` are included on failed steps for automation-friendly diagnostics
-- `--json-mode compact` keeps the same top-level schema but drops passed assertion details to reduce payload size
+- `response_status` and `response_summary` on all executed steps (passed and failed) &mdash; AI agents can see what a passed step returned
+- `captures_set` on steps listing which capture variables were set; `captures` map on test groups showing all resolved values
+- `--json-mode compact` keeps the same top-level schema but drops passed assertion details and truncates response bodies to ~200 chars
 - Sensitive headers are redacted by default and can be customized per file with top-level `redaction:`
 - `request` is present for failed executed steps; `response` is omitted for connection/setup failures where no response exists
 
@@ -920,9 +924,18 @@ Schema files:
   "summary": { "status": "FAILED", "steps": { "total": 5, "passed": 4, "failed": 1 } },
   "files": [{
     "tests": [{
+      "captures": { "user_id": "usr_123", "token": "abc" },
       "steps": [{
         "name": "Create user",
+        "status": "PASSED",
+        "response_status": 201,
+        "response_summary": "201 Created: Object{3 keys}",
+        "captures_set": ["user_id"]
+      }, {
+        "name": "Update user",
         "status": "FAILED",
+        "response_status": 400,
+        "response_summary": "400 Bad Request: name required",
         "failure_category": "assertion_failed",
         "error_code": "assertion_mismatch",
         "remediation_hints": ["..."],

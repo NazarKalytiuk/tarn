@@ -1,6 +1,6 @@
 [package]
 name = "tarn-mcp"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 description = "MCP server for Tarn API testing tool"
 license = "MIT"
@@ -16,6 +16,6 @@ name = "tarn-mcp"
 path = "src/main.rs"
 
 [dependencies]
-tarn = { version = "0.3.0", path = "../tarn" }
+tarn = { version = "0.4.0", path = "../tarn" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

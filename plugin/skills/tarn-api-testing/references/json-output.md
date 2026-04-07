@@ -51,9 +51,15 @@ Structured output from `tarn run --format json`. Designed for programmatic consu
   "description": "Create a user then fetch it",
   "status": "FAILED",
   "duration_ms": 420,
+  "captures": {
+    "user_id": "usr_123",
+    "token": null
+  },
   "steps": [ ... ]
 }
 ```
+
+`captures` shows all captured values at the end of the test group. Missing or failed captures appear as `null`.
 
 ## Step Result
 
@@ -64,6 +70,9 @@ Structured output from `tarn run --format json`. Designed for programmatic consu
   "name": "Create user",
   "status": "PASSED",
   "duration_ms": 85,
+  "response_status": 201,
+  "response_summary": "201 Created: Object{3 keys}",
+  "captures_set": ["user_id"],
   "assertions": {
     "total": 3,
     "passed": 3,
@@ -83,7 +92,7 @@ Structured output from `tarn run --format json`. Designed for programmatic consu
 }
 ```
 
-**Note:** `request` and `response` are omitted for passed steps (keeps output compact).
+**Note:** `request` and `response` are omitted for passed steps (keeps output compact). `response_status`, `response_summary`, and `captures_set` provide enough context for AI agents to understand step outcomes.
 
 ### Failed Step
 
@@ -148,6 +157,7 @@ Structured output from `tarn run --format json`. Designed for programmatic consu
 | `timeout` | `request_timed_out` | Request exceeded timeout |
 | `parse_error` | `parse_error`, `validation_failed`, `configuration_error` | Invalid YAML, JSONPath, or config |
 | `capture_error` | `capture_extraction_failed` | JSONPath extraction failed |
+| `unresolved_template` | `interpolation_failed` | `{{ capture.x }}` or `{{ env.x }}` not resolved |
 
 ## Error Codes
 
@@ -200,6 +210,12 @@ FOR each file in report.files:
                 CHECK previous step passed
                 CHECK step.request and response shape
                 FIX JSONPath expression in capture
+
+              "unresolved_template":
+                READ step.assertions.failures[].message for variable names
+                CHECK that prior capture steps passed
+                CHECK that env vars are set in tarn.env.yaml
+                FIX missing captures or env configuration
 ```
 
 ## Notes

@@ -12,7 +12,7 @@
       "name": "tarn",
       "source": "./plugin",
       "description": "CLI-first API testing tool with .tarn.yaml files, structured JSON output, and MCP server. Write, run, debug, and iterate on API tests — optimized for AI-assisted workflows.",
-      "version": "0.3.0"
+      "version": "0.4.0"
     }
   ]
 }
