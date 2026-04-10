@@ -76,6 +76,20 @@ export interface TarnExtensionApi {
       dest: string,
       cwd: string,
     ) => Promise<{ success: boolean; exitCode: number | null; stderr: string }>;
+    readonly history: {
+      readonly add: (
+        entry: import("./views/RunHistoryView").RunHistoryEntry,
+      ) => Promise<void>;
+      readonly all: () => ReadonlyArray<
+        import("./views/RunHistoryView").RunHistoryEntry
+      >;
+      readonly clear: () => Promise<void>;
+      readonly setFilter: (
+        filter: import("./views/RunHistoryView").RunHistoryFilter,
+      ) => void;
+      readonly getFilter: () =>
+        import("./views/RunHistoryView").RunHistoryFilter;
+    };
   };
 }
 
@@ -218,6 +232,7 @@ export async function activate(
       reportWebview,
       benchRunnerPanel,
       workspaceState: context.workspaceState,
+      historyTree,
       refreshStatusBar: () => statusBar.refresh(),
       refreshHistoryView: () => historyTree.refresh(),
       refreshEnvironmentsView: () => environmentsView.refresh(),
@@ -264,6 +279,10 @@ export async function activate(
       "tarn.openHtmlReport",
       "tarn.benchStep",
       "tarn.importHurl",
+      "tarn.pinHistoryEntry",
+      "tarn.unpinHistoryEntry",
+      "tarn.filterHistory",
+      "tarn.rerunFromHistory",
     ],
     testing: {
       backend,
@@ -311,6 +330,13 @@ export async function activate(
       lastBenchContext: () => benchRunnerPanel.lastContext(),
       importHurl: (source, dest, cwd) =>
         runImportHurl(backend, source, dest, cwd),
+      history: {
+        add: (entry) => history.add(entry),
+        all: () => history.all(),
+        clear: () => history.clear(),
+        setFilter: (filter) => historyTree.setFilter(filter),
+        getFilter: () => historyTree.getFilter(),
+      },
     },
   };
 }

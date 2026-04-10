@@ -1,5 +1,87 @@
 # Changelog
 
+## 0.17.0 — Phase 4: Run History pinning, filtering, delta rerun
+
+Seventh Phase 4 feature: the existing Run History tree view now
+supports pinning entries so they survive eviction, filtering the
+listing by status / env / tag, and replaying a past run with its
+exact selectors and environment via "Rerun from History".
+
+### Added
+
+- **Pin / unpin** actions (NAZ-276). Inline `$(pin)` / `$(pinned)`
+  icons on every run entry in the tree. Pinned entries:
+  - Show a leading 📌 in the label and sort to the top of the view.
+  - Are never evicted by the 20-entry ring buffer — the cap now
+    applies only to *unpinned* entries.
+  - Survive `Tarn: Clear Run History`, which drops unpinned runs
+    but keeps pinned ones so users can't accidentally lose a
+    manually-marked-important run.
+- **Filter bar** in the view title (`$(filter)`). Opens a quick
+  pick with `All runs`, `Passed only`, `Failed or errored`, plus a
+  dynamic section of `env · <name>` and `tag · <name>` options
+  derived from the entries currently in the store. Selection
+  persists until changed again.
+- **`Tarn: Rerun from History`** replays a past run using its
+  exact selectors, files, environment, and tag filter. Per-step
+  and per-test selectors are resolved back to `TestItem` ids via
+  the discovery module's `ids.step` / `ids.test` helpers so the
+  underlying `tarn run --select …` invocation matches the original
+  exactly. Dry runs replay as dry runs. Missing entries (evicted,
+  cleared, etc.) surface a friendly info message instead of
+  throwing.
+- **`selectors` field** on `RunHistoryEntry`. Populated by
+  `runHandler` from the `planRun` output so the rerun command has
+  every `FILE::TEST[::STEP]` string the original run used.
+- **`files` field** now holds *workspace-relative* paths (matching
+  what the runner passes to tarn) rather than the full paths the
+  report emitted, so rerun resolution does not need any
+  workspace-root munging.
+- **`pinned` field** on `RunHistoryEntry` with backward-compat
+  normalization: entries persisted before NAZ-276 lack the field
+  and are loaded with `pinned: false` defaulted in.
+- **`RunHistoryStore.pin(id)` / `unpin(id)` / `findById(id)`**
+  methods that update the persisted memento and re-trim the
+  unpinned partition whenever a pinned entry becomes unpinned.
+- **`historyFilterPredicate` / `applyHistoryFilter` /
+  `trimWithPinned`** pure helpers exported from
+  `views/RunHistoryView.ts` for unit testing.
+- **Extension host API**: `testing.history.{add, all, clear,
+  setFilter, getFilter}` so integration tests can seed the store
+  and exercise the filter/rerun paths without clicking through UI.
+
+### Changed
+
+- **`RunHistoryStore.entryFromReport`** now takes an options object
+  (`{environment, tags, files, selectors, dryRun}`) instead of
+  positional args so new fields don't become positional traps.
+- **`runHandler`** passes `filesToRun` (relative paths) and the
+  computed `selectors` array into `entryFromReport`.
+- **`RunHistoryTreeProvider`** holds a current `RunHistoryFilter`,
+  applies it on each `getChildren` call, and exposes
+  `setFilter` / `getFilter`. Pin state drives a distinct
+  `tarnRunEntry` vs `tarnRunEntryPinned` `contextValue` so the
+  package.json menu definition can show only one of pin/unpin at
+  a time.
+
+### Tests
+
+- **Unit** (`tests/unit/runHistoryStore.test.ts`, 16 tests).
+  Covers `historyFilterPredicate` (all/passed/failed/env/tag with
+  empty variants), `applyHistoryFilter`, `trimWithPinned` (evicts
+  oldest unpinned first, never drops pinned), the live store
+  (LIFO order, 20-cap eviction, pin/unpin, unpin re-trims, clear
+  keeps pinned, legacy entry normalization), and
+  `entryFromReport` field propagation.
+- **Integration** (`tests/integration/suite/runHistory.test.ts`,
+  5 tests). Registers the new commands, exercises pin/unpin via
+  `vscode.commands.executeCommand`, confirms `clear()` preserves
+  pinned entries, round-trips the filter through the tree
+  provider, and verifies `rerunFromHistory` fails gracefully on a
+  missing id.
+
+Total: 212 unit tests, 71 integration tests passing.
+
 ## 0.16.0 — Phase 4: Hurl import wizard
 
 Sixth Phase 4 feature: `Tarn: Import Hurl File…` wraps

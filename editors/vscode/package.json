@@ -2,7 +2,7 @@
   "name": "tarn-vscode",
   "displayName": "Tarn",
   "description": "Test Explorer, CodeLens, and schema-aware authoring for Tarn API test files.",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "publisher": "nazarkalytiuk",
   "license": "MIT",
   "repository": {
@@ -221,6 +221,30 @@
         "title": "Tarn: Import Hurl File…",
         "category": "Tarn",
         "icon": "$(arrow-down)"
+      },
+      {
+        "command": "tarn.pinHistoryEntry",
+        "title": "Tarn: Pin Run",
+        "category": "Tarn",
+        "icon": "$(pin)"
+      },
+      {
+        "command": "tarn.unpinHistoryEntry",
+        "title": "Tarn: Unpin Run",
+        "category": "Tarn",
+        "icon": "$(pinned)"
+      },
+      {
+        "command": "tarn.rerunFromHistory",
+        "title": "Tarn: Rerun from History",
+        "category": "Tarn",
+        "icon": "$(debug-rerun)"
+      },
+      {
+        "command": "tarn.filterHistory",
+        "title": "Tarn: Filter Run History…",
+        "category": "Tarn",
+        "icon": "$(filter)"
       }
     ],
     "viewsContainers": {
@@ -344,6 +368,18 @@
           "when": "false"
         },
         {
+          "command": "tarn.pinHistoryEntry",
+          "when": "false"
+        },
+        {
+          "command": "tarn.unpinHistoryEntry",
+          "when": "false"
+        },
+        {
+          "command": "tarn.rerunFromHistory",
+          "when": "false"
+        },
+        {
           "command": "tarn.runFile",
           "when": "resourceLangId == tarn"
         },
@@ -382,9 +418,14 @@
       ],
       "view/title": [
         {
+          "command": "tarn.filterHistory",
+          "when": "view == tarn.runHistory",
+          "group": "navigation@1"
+        },
+        {
           "command": "tarn.clearHistory",
           "when": "view == tarn.runHistory",
-          "group": "navigation"
+          "group": "navigation@2"
         },
         {
           "command": "tarn.reloadEnvironments",
@@ -407,6 +448,21 @@
           "command": "tarn.copyEnvironmentAsFlag",
           "when": "view == tarn.environments && viewItem =~ /^tarnEnvEntry/",
           "group": "inline"
+        },
+        {
+          "command": "tarn.rerunFromHistory",
+          "when": "view == tarn.runHistory && viewItem =~ /^tarnRunEntry/",
+          "group": "inline@1"
+        },
+        {
+          "command": "tarn.pinHistoryEntry",
+          "when": "view == tarn.runHistory && viewItem == tarnRunEntry",
+          "group": "inline@2"
+        },
+        {
+          "command": "tarn.unpinHistoryEntry",
+          "when": "view == tarn.runHistory && viewItem == tarnRunEntryPinned",
+          "group": "inline@2"
         }
       ]
     },

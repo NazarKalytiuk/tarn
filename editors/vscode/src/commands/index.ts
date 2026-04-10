@@ -4,7 +4,12 @@ import type { WorkspaceIndex } from "../workspace/WorkspaceIndex";
 import type { TarnBackend } from "../backend/TarnBackend";
 import { getOutputChannel } from "../outputChannel";
 import { ids } from "../testing/discovery";
-import type { RunHistoryStore } from "../views/RunHistoryView";
+import type {
+  RunHistoryEntry,
+  RunHistoryFilter,
+  RunHistoryStore,
+  RunHistoryTreeProvider,
+} from "../views/RunHistoryView";
 import { EnvironmentsView, resolveEnvSourceUri } from "../views/EnvironmentsView";
 import type { LastRunCache, StepKey } from "../testing/LastRunCache";
 import type { RequestResponsePanel } from "../views/RequestResponsePanel";
@@ -32,6 +37,7 @@ export interface CommandDeps {
   reportWebview: ReportWebview;
   benchRunnerPanel: BenchRunnerPanel;
   workspaceState: vscode.Memento;
+  historyTree: RunHistoryTreeProvider;
   refreshStatusBar: () => void;
   refreshHistoryView: () => void;
   refreshEnvironmentsView: () => void;
@@ -448,6 +454,55 @@ export function registerCommands(deps: CommandDeps): vscode.Disposable {
   );
 
   registrations.push(
+    vscode.commands.registerCommand(
+      "tarn.pinHistoryEntry",
+      async (entry: RunHistoryEntry) => {
+        if (!entry?.id) return;
+        await deps.history.pin(entry.id);
+        deps.refreshHistoryView();
+      },
+    ),
+  );
+
+  registrations.push(
+    vscode.commands.registerCommand(
+      "tarn.unpinHistoryEntry",
+      async (entry: RunHistoryEntry) => {
+        if (!entry?.id) return;
+        await deps.history.unpin(entry.id);
+        deps.refreshHistoryView();
+      },
+    ),
+  );
+
+  registrations.push(
+    vscode.commands.registerCommand("tarn.filterHistory", async () => {
+      await showHistoryFilterPicker(deps);
+    }),
+  );
+
+  registrations.push(
+    vscode.commands.registerCommand(
+      "tarn.rerunFromHistory",
+      async (arg?: RunHistoryEntry | string) => {
+        const entry =
+          typeof arg === "string"
+            ? deps.history.findById(arg)
+            : arg && "id" in arg
+              ? deps.history.findById(arg.id)
+              : undefined;
+        if (!entry) {
+          vscode.window.showInformationMessage(
+            "Tarn: this history entry is no longer available.",
+          );
+          return;
+        }
+        await rerunHistoryEntry(deps, entry);
+      },
+    ),
+  );
+
+  registrations.push(
     vscode.commands.registerCommand("tarn.showWalkthrough", async () => {
       await vscode.commands.executeCommand(
         "workbench.action.openWalkthrough",
@@ -593,6 +648,116 @@ async function runViaProfile(
   } finally {
     cts.dispose();
   }
+}
+
+async function showHistoryFilterPicker(deps: CommandDeps): Promise<void> {
+  const history = deps.history.all();
+  const envs = Array.from(
+    new Set(history.map((e) => e.environment).filter((e): e is string => !!e)),
+  ).sort();
+  const tagSet = new Set<string>();
+  for (const entry of history) {
+    for (const tag of entry.tags) tagSet.add(tag);
+  }
+  const tags = Array.from(tagSet).sort();
+
+  type Item = vscode.QuickPickItem & { filter: RunHistoryFilter };
+  const items: Item[] = [
+    { label: "$(list-flat) All runs", filter: { kind: "all" } },
+    { label: "$(check) Passed only", filter: { kind: "passed" } },
+    { label: "$(x) Failed or errored", filter: { kind: "failed" } },
+  ];
+  for (const env of envs) {
+    items.push({
+      label: `$(symbol-variable) env · ${env}`,
+      filter: { kind: "env", value: env },
+    });
+  }
+  for (const tag of tags) {
+    items.push({
+      label: `$(tag) tag · ${tag}`,
+      filter: { kind: "tag", value: tag },
+    });
+  }
+  const picked = await vscode.window.showQuickPick(items, {
+    placeHolder: "Filter Run History",
+    matchOnDescription: true,
+  });
+  if (!picked) return;
+  deps.historyTree.setFilter(picked.filter);
+}
+
+async function rerunHistoryEntry(
+  deps: CommandDeps,
+  entry: RunHistoryEntry,
+): Promise<void> {
+  const folder = vscode.workspace.workspaceFolders?.[0];
+  if (!folder) {
+    vscode.window.showInformationMessage("Tarn: no workspace folder available.");
+    return;
+  }
+
+  // Restore the env + tags the original run used so the rerun
+  // executes in the exact same context. Users can tweak the env
+  // picker afterwards if they want something different.
+  deps.tarnController.state.activeEnvironment = entry.environment;
+  deps.tarnController.state.activeTags = [...entry.tags];
+  deps.refreshStatusBar();
+
+  const profile = entry.dryRun
+    ? deps.tarnController.dryRunProfile
+    : deps.tarnController.runProfile;
+  const includes = resolveHistoryItems(deps, entry, folder.uri.fsPath);
+  const request = new vscode.TestRunRequest(
+    includes.length > 0 ? includes : undefined,
+    undefined,
+    profile,
+  );
+  await runViaProfile(request, profile);
+}
+
+function resolveHistoryItems(
+  deps: CommandDeps,
+  entry: RunHistoryEntry,
+  workspaceRoot: string,
+): vscode.TestItem[] {
+  const controller = deps.tarnController.controller;
+  const items: vscode.TestItem[] = [];
+
+  // Per-selector runs: each selector points at a specific test or
+  // step. Look up the TestItem by its stable id.
+  if (entry.selectors.length > 0) {
+    for (const selector of entry.selectors) {
+      const parts = selector.split("::");
+      if (parts.length < 2) continue;
+      const relPath = parts[0];
+      const testName = parts[1];
+      const stepRaw = parts[2];
+      const uri = vscode.Uri.file(path.resolve(workspaceRoot, relPath));
+      const id =
+        stepRaw !== undefined
+          ? ids.step(uri, testName, Number(stepRaw))
+          : ids.test(uri, testName);
+      const item = findItemById(controller, id);
+      if (item) items.push(item);
+    }
+    return items;
+  }
+
+  // File-scoped runs: include the file TestItem so the run handler
+  // scopes to just that file without injecting selectors.
+  if (entry.files.length > 0) {
+    for (const relPath of entry.files) {
+      const uri = vscode.Uri.file(path.resolve(workspaceRoot, relPath));
+      const item = controller.items.get(ids.file(uri));
+      if (item) items.push(item);
+    }
+    return items;
+  }
+
+  // Whole-workspace run: empty includes → the profile runs all
+  // discovered files.
+  return items;
 }
 
 function findItemById(

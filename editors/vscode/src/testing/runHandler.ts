@@ -151,12 +151,13 @@ async function executeRun(
     `[tarn] Done. ${summary.steps.passed}/${summary.steps.total} steps passed across ${summary.files} file(s).\r\n`,
   );
 
-  const entry = RunHistoryStore.entryFromReport(
-    outcome.report,
-    deps.state.activeEnvironment ?? config.defaultEnvironment,
-    deps.state.activeTags.length > 0 ? deps.state.activeTags : config.defaultTags,
+  const entry = RunHistoryStore.entryFromReport(outcome.report, {
+    environment: deps.state.activeEnvironment ?? config.defaultEnvironment,
+    tags: deps.state.activeTags.length > 0 ? deps.state.activeTags : config.defaultTags,
+    files: filesToRun.map((f) => path.relative(cwd, f.uri.fsPath)),
+    selectors,
     dryRun,
-  );
+  });
   await deps.history.add(entry);
   deps.onHistoryChanged();
 }
