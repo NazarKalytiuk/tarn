@@ -60,6 +60,9 @@ This index lists the canonical repository markdown after the roadmap cleanup.
 - `docs/CONFORMANCE.md`
 - `docs/RELEASE_VERIFICATION.md`
 - `editors/vscode/README.md`
+- `docs/VSCODE_EXTENSION.md`
+  - canonical spec for the Tarn VS Code extension
+  - architecture, features, Tarn-side contract (§6.1–§6.7), phased roadmap
 - `README.md`
   - primary user-facing product and CLI guide
 - `docs/site/index.html`

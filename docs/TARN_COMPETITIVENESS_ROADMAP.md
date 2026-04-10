@@ -7,6 +7,8 @@ This document is now a historical roadmap record.
 
 All planned items `T01` through `T50` were implemented. Use this file for scope history and sequencing context, not as the live backlog. For current product direction, use [`docs/TARN_PRODUCT_STRATEGY.md`](./TARN_PRODUCT_STRATEGY.md).
 
+One post-roadmap addition has been appended: `T51`–`T57` capture the additive CLI contract needed by the new VS Code extension work. See [Post-Roadmap Additions](#post-roadmap-additions-vs-code-extension-contract) at the end of this file and [`docs/VSCODE_EXTENSION.md`](./VSCODE_EXTENSION.md) for the full extension spec.
+
 ## Completion Summary
 
 - `v0.2` goals completed: transport parity baseline, cookies, redaction, reporter hardening, CI matrix
@@ -155,3 +157,95 @@ The right strategy is:
 3. Add body diff and stronger captures/transforms.
 4. Double down on MCP, failure taxonomy, and setup/teardown workflows.
 5. Improve distribution, editor support, documentation, and test trust.
+
+## Post-Roadmap Additions: VS Code Extension Contract
+
+**Date added**: 2026-04-10
+**Status**: Planning
+**Tracking issue**: T51 (umbrella)
+**Spec**: [`docs/VSCODE_EXTENSION.md`](./VSCODE_EXTENSION.md)
+
+`T34` shipped the declarative VS Code extension (language id, grammar, snippets, schema wiring) that lives in `editors/vscode/`. The next phase promotes it into a full extension host integration: Testing API, CodeLens, live streaming, run-at-cursor, authoring features, and MCP backend support.
+
+`T51`–`T57` are the additive CLI and runtime changes needed to unlock that extension work. All are backwards compatible — existing output formats, existing flags, existing schemas stay untouched. Each item below corresponds to a numbered section in `docs/VSCODE_EXTENSION.md`.
+
+| ID | Task | Impact | Effort | Depends | Files |
+|---|---|---:|---:|---|---|
+| T51 | Add `--select FILE::TEST::STEP` flag, repeatable, ANDs with `--tag`; enables run-test-at-cursor, rerun-failed, per-step curl export | 9 | M | - | `tarn/src/main.rs`, `tarn/src/runner.rs`, `tarn/tests/integration_test.rs` |
+| T52 | Add `tarn validate --format json` emitting `{files:[{file, valid, errors:[{message,line,column,path}]}]}` | 8 | S | - | `tarn/src/main.rs`, `tarn/src/parser.rs`, `schemas/v1/` |
+| T53 | Add NDJSON progress reporter behind `--ndjson` / `--format ndjson`; emits `file_started`, `step_finished`, `test_finished`, `file_finished`, `done`; co-exists with final JSON | 9 | S | - | `tarn/src/report/progress.rs`, `tarn/src/report/mod.rs`, `tarn/src/main.rs` |
+| T54 | Add `cookies: per-test` model option and `--cookie-jar-per-test` flag; resets jar between named tests within a file | 6 | M | - | `tarn/src/cookie.rs`, `tarn/src/model.rs`, `tarn/src/runner.rs` |
+| T55 | Add `location: {file, line, column}` to `StepResult` and `AssertionFailure`; optional field in `schemas/v1/report.json` | 8 | M | T52 | `tarn/src/assert/types.rs`, `tarn/src/parser.rs`, `tarn/src/runner.rs`, `schemas/v1/report.json` |
+| T56 | Add `tarn env --json` returning named environments, source files, and resolved variables with redaction applied | 6 | S | - | `tarn/src/main.rs`, `tarn/src/env.rs`, `tarn/src/config.rs` |
+| T57 | Add `tarn list --file PATH --format json` for scoped discovery of a single file | 5 | S | - | `tarn/src/main.rs`, `tarn/src/parser.rs` |
+
+### Acceptance Criteria
+
+**T51** `--select`
+- `tarn run --select tests/users.tarn.yaml::create_and_verify_user` runs exactly that test, skips siblings in the same file, still runs setup and teardown.
+- Step form: `--select tests/users.tarn.yaml::create_and_verify_user::"Create user"` runs exactly that step.
+- Flag is repeatable; multiple selectors union within a file and across files.
+- Combined with `--tag`, the selectors AND with tag filters.
+- Exit codes unchanged.
+- Integration test coverage: select-test, select-step, select-across-files, select-plus-tag, unknown selector is a parse error with `error_code: validation_failed`.
+
+**T52** Structured validate
+- `tarn validate --format json` exits `0` iff all files are valid.
+- Output schema documented and added to `schemas/v1/` (new file or extension of an existing one).
+- Every error row has `line` and `column` derived from serde_yaml, pointing at the offending node.
+- Human output unchanged when `--format human` (or default) is used.
+- Golden test added to `tarn/tests/integration_test.rs` covering parse error, assertion-block error, unknown field.
+
+**T53** NDJSON reporter
+- `tarn run --ndjson` streams one JSON object per line to stdout as events occur, flushes after every line.
+- Events: `file_started`, `setup_finished`, `step_finished`, `test_finished`, `teardown_finished`, `file_finished`, `done`.
+- `step_finished` includes `{file, test, step, step_index, status, duration_ms}` plus `failure_category`, `error_code`, `remediation_hints` on failure.
+- `done` event carries the final summary identical to the final JSON report's `summary` block.
+- `--ndjson` composes with `--format json=path` (NDJSON to stdout, final report to file).
+- Parallel mode: events are emitted under the existing progress mutex so interleaved lines never tear.
+- Polling steps emit a `poll_attempt` event per retry.
+- Unit test covering reporter trait implementation; integration test covering one full run's event sequence.
+
+**T54** Per-test cookie jar
+- `cookies: per-test` in the test file clears the jar between named tests; setup and teardown share the file-level jar.
+- `--cookie-jar-per-test` CLI flag overrides the file setting.
+- Existing `cookies: "auto"` / `cookies: "off"` behavior unchanged.
+- Named jars (multi-user scenarios) take precedence over per-test reset.
+- Integration fixture uses a session cookie to prove isolation between tests.
+
+**T55** Result location metadata
+- Every `StepResult` in JSON output has `location: {file, line, column}` pointing at the step name node.
+- Every `AssertionFailure` has `location` pointing at the failing assertion node.
+- Field is optional for backwards compatibility; existing consumers keep working.
+- `schema_version` stays `1`; a new optional field does not break compat.
+- Setup and teardown steps also carry location.
+
+**T56** `tarn env --json`
+- `tarn env --json` prints `{environments: [{name, source_file, vars: {...}, is_active}]}`.
+- Respects the full env resolution chain documented in `tarn/src/env.rs`.
+- Redaction is applied: values matching the configured redaction patterns print as `***`.
+- Exit code `0` on success, `2` on configuration error.
+
+**T57** Scoped `tarn list`
+- `tarn list --file path/to/file.tarn.yaml --format json` prints only that file's tests and steps.
+- Output is a strict subset of the current `tarn list` output so existing consumers are unaffected.
+- Unknown file is exit code `2`.
+
+### Sequencing and Release Plan
+
+- `T51`, `T52`, `T53` land together in Tarn `v0.5.0` to unblock extension Phase 2.
+- `T54` and `T55` land in Tarn `v0.5.1` to unlock extension Phase 3 authoring features and Phase 5 subset-run correctness.
+- `T56` and `T57` land in Tarn `v0.5.2`, small and independent.
+- The VS Code extension ships Phase 1 against Tarn `v0.4.0` using the fallback polling path and does not block on any of these.
+
+### Mandatory Pre-Commit Checks
+
+Every `T5x` item is subject to the existing gate in `CLAUDE.md`:
+
+```
+cargo fmt
+cargo clippy -- -D warnings
+cargo test
+```
+
+Each item also adds its own golden or integration test so the new surface is covered from day one.
