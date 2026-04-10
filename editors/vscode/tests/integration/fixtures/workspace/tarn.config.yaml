@@ -1,0 +1,14 @@
+test_dir: tests
+env_file: tarn.env.yaml
+
+redaction:
+  env: [api_token]
+
+environments:
+  staging:
+    vars:
+      base_url: "https://staging.example.com"
+      api_token: "super-secret"
+  production:
+    vars:
+      base_url: "https://prod.example.com"

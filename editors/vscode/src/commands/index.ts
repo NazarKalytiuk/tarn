@@ -5,14 +5,17 @@ import type { TarnBackend } from "../backend/TarnBackend";
 import { getOutputChannel } from "../outputChannel";
 import { ids } from "../testing/discovery";
 import type { RunHistoryStore } from "../views/RunHistoryView";
+import { EnvironmentsView, resolveEnvSourceUri } from "../views/EnvironmentsView";
 
 export interface CommandDeps {
   tarnController: TarnTestController;
   index: WorkspaceIndex;
   backend: TarnBackend;
   history: RunHistoryStore;
+  environmentsView: EnvironmentsView;
   refreshStatusBar: () => void;
   refreshHistoryView: () => void;
+  refreshEnvironmentsView: () => void;
 }
 
 export function registerCommands(deps: CommandDeps): vscode.Disposable {
@@ -105,12 +108,23 @@ export function registerCommands(deps: CommandDeps): vscode.Disposable {
 
   registrations.push(
     vscode.commands.registerCommand("tarn.selectEnvironment", async () => {
-      const envs = await collectEnvironments();
+      const entries = await deps.environmentsView.getEntries();
       type Pick = vscode.QuickPickItem & { value: string | null };
       const items: Pick[] = [
         { label: "$(close) (none)", description: "clear active environment", value: null },
-        ...envs.map<Pick>((e) => ({ label: e, description: "", value: e })),
+        ...entries.map<Pick>((e) => ({
+          label: e.name,
+          description: e.source_file,
+          detail: `${Object.keys(e.vars).length} inline vars`,
+          value: e.name,
+        })),
       ];
+      if (items.length === 1) {
+        vscode.window.showInformationMessage(
+          "Tarn: no environments configured in tarn.config.yaml.",
+        );
+        return;
+      }
       const picked = await vscode.window.showQuickPick<Pick>(items, {
         placeHolder: "Select Tarn environment",
       });
@@ -119,6 +133,73 @@ export function registerCommands(deps: CommandDeps): vscode.Disposable {
       }
       deps.tarnController.state.activeEnvironment = picked.value;
       deps.refreshStatusBar();
+      deps.refreshEnvironmentsView();
+    }),
+  );
+
+  registrations.push(
+    vscode.commands.registerCommand(
+      "tarn.setEnvironmentFromTree",
+      async (envName: string | null) => {
+        if (envName === deps.tarnController.state.activeEnvironment) {
+          deps.tarnController.state.activeEnvironment = null;
+        } else {
+          deps.tarnController.state.activeEnvironment = envName;
+        }
+        deps.refreshStatusBar();
+        deps.refreshEnvironmentsView();
+      },
+    ),
+  );
+
+  registrations.push(
+    vscode.commands.registerCommand(
+      "tarn.openEnvironmentSource",
+      async (envName: string) => {
+        const entry = deps.environmentsView.findByName(envName);
+        if (!entry) {
+          vscode.window.showWarningMessage(`Tarn: no environment named '${envName}'.`);
+          return;
+        }
+        const folder = vscode.workspace.workspaceFolders?.[0];
+        if (!folder) {
+          return;
+        }
+        const uri = resolveEnvSourceUri(folder, entry);
+        try {
+          const doc = await vscode.workspace.openTextDocument(uri);
+          await vscode.window.showTextDocument(doc);
+        } catch (err) {
+          vscode.window.showWarningMessage(
+            `Tarn: source file for '${envName}' not found at ${uri.fsPath}.`,
+          );
+          getOutputChannel().appendLine(
+            `[tarn] openEnvironmentSource failed: ${String(err)}`,
+          );
+        }
+      },
+    ),
+  );
+
+  registrations.push(
+    vscode.commands.registerCommand(
+      "tarn.copyEnvironmentAsFlag",
+      async (envName: string) => {
+        const entry = deps.environmentsView.findByName(envName);
+        if (!entry) {
+          return;
+        }
+        await vscode.env.clipboard.writeText(`--env ${entry.name}`);
+        vscode.window.showInformationMessage(
+          `Tarn: copied '--env ${entry.name}' to clipboard.`,
+        );
+      },
+    ),
+  );
+
+  registrations.push(
+    vscode.commands.registerCommand("tarn.reloadEnvironments", async () => {
+      await deps.environmentsView.reload();
     }),
   );
 
@@ -418,18 +499,3 @@ async function detectExistingScaffold(folder: vscode.Uri): Promise<string | unde
   return undefined;
 }
 
-async function collectEnvironments(): Promise<string[]> {
-  const folder = vscode.workspace.workspaceFolders?.[0];
-  if (!folder) {
-    return [];
-  }
-  const pattern = new vscode.RelativePattern(folder, "tarn.env.*.yaml");
-  const uris = await vscode.workspace.findFiles(pattern);
-  return uris
-    .map((u) => {
-      const base = u.path.split("/").pop() ?? "";
-      const match = /^tarn\.env\.([A-Za-z0-9_\-]+)\.yaml$/.exec(base);
-      return match?.[1] ?? "";
-    })
-    .filter((n) => n.length > 0 && n !== "local");
-}

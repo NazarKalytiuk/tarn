@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import type { Report, ValidateReport } from "../util/schemaGuards";
+import type { EnvReport, Report, ValidateReport } from "../util/schemaGuards";
 
 export interface RunOptions {
   files: string[];
@@ -92,6 +92,16 @@ export interface TarnBackend {
     cwd: string,
     token: vscode.CancellationToken,
   ): Promise<ValidateReport | undefined>;
+  /**
+   * Structured environments: spawns `tarn env --json` and parses the
+   * output. Returns `undefined` on failure (missing config, older Tarn
+   * without T56, parse errors) so callers can decide whether to fall
+   * back to the file-glob discovery path.
+   */
+  envStructured(
+    cwd: string,
+    token: vscode.CancellationToken,
+  ): Promise<EnvReport | undefined>;
   exportCurl(
     files: string[],
     cwd: string,

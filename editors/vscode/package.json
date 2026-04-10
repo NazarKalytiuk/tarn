@@ -2,7 +2,7 @@
   "name": "tarn-vscode",
   "displayName": "Tarn",
   "description": "Test Explorer, CodeLens, and schema-aware authoring for Tarn API test files.",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "publisher": "nazarkalytiuk",
   "license": "MIT",
   "repository": {
@@ -161,6 +161,27 @@
         "command": "tarn.refreshDiscovery",
         "title": "Tarn: Refresh Test Discovery",
         "category": "Tarn"
+      },
+      {
+        "command": "tarn.reloadEnvironments",
+        "title": "Tarn: Reload Environments",
+        "category": "Tarn",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "tarn.setEnvironmentFromTree",
+        "title": "Tarn: Set Active (from tree)",
+        "category": "Tarn"
+      },
+      {
+        "command": "tarn.openEnvironmentSource",
+        "title": "Tarn: Open Environment Source File",
+        "category": "Tarn"
+      },
+      {
+        "command": "tarn.copyEnvironmentAsFlag",
+        "title": "Tarn: Copy as --env Flag",
+        "category": "Tarn"
       }
     ],
     "viewsContainers": {
@@ -174,6 +195,12 @@
     },
     "views": {
       "tarn": [
+        {
+          "id": "tarn.environments",
+          "name": "Environments",
+          "icon": "$(symbol-variable)",
+          "contextualTitle": "Tarn Environments"
+        },
         {
           "id": "tarn.runHistory",
           "name": "Run History",
@@ -242,6 +269,18 @@
           "when": "false"
         },
         {
+          "command": "tarn.setEnvironmentFromTree",
+          "when": "false"
+        },
+        {
+          "command": "tarn.openEnvironmentSource",
+          "when": "false"
+        },
+        {
+          "command": "tarn.copyEnvironmentAsFlag",
+          "when": "false"
+        },
+        {
           "command": "tarn.runFile",
           "when": "resourceLangId == tarn"
         },
@@ -275,6 +314,23 @@
           "command": "tarn.clearHistory",
           "when": "view == tarn.runHistory",
           "group": "navigation"
+        },
+        {
+          "command": "tarn.reloadEnvironments",
+          "when": "view == tarn.environments",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "tarn.openEnvironmentSource",
+          "when": "view == tarn.environments && viewItem =~ /^tarnEnvEntry/",
+          "group": "inline"
+        },
+        {
+          "command": "tarn.copyEnvironmentAsFlag",
+          "when": "view == tarn.environments && viewItem =~ /^tarnEnvEntry/",
+          "group": "inline"
         }
       ]
     },

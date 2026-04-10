@@ -1,5 +1,69 @@
 # Changelog
 
+## 0.5.0 — Phase 3: Environments tree view
+
+Second Phase 3 feature: a first-class Environments treeview under the
+Tarn activity bar container, backed by `tarn env --json` (Tarn T56).
+Replaces the glob-based discovery the extension used in Phase 1, and
+becomes the shared env cache that upcoming authoring features
+(completion, hover, go-to-definition) will read from.
+
+### Added
+
+- **`EnvironmentsView`** (NAZ-264). Implements `TreeDataProvider`,
+  loads from `backend.envStructured` on activation and on
+  `tarn.config.yaml` file changes (via `FileSystemWatcher`). Caches
+  the last successful report so repeated queries are free.
+- **Tree rendering**: one node per environment showing the active
+  check mark, name, source file relative path, and inline var count.
+  Tooltip lists every var with its redacted value. A click sets the
+  environment as active and toggles off on a second click.
+- **Per-node context menu**: `Open source file`, `Copy as --env flag`.
+  Inline action buttons on each tree item.
+- **`Tarn: Reload Environments`** command (also in the view title
+  bar) to force a fresh `tarn env --json` spawn.
+- **`Tarn: Set Active (from tree)`**, **`Tarn: Open Environment Source
+  File`**, **`Tarn: Copy as --env Flag`** commands — hidden from the
+  command palette (they require a context argument).
+- **`backend.envStructured(cwd, token)`** on the `TarnBackend`
+  interface. Returns `EnvReport | undefined`, parsing the output with
+  a new `parseEnvReport` zod schema.
+- **`envReportSchema`**, `EnvReport`, `EnvEntry` exported from
+  `schemaGuards.ts`.
+- **`TarnExtensionApi.testing.reloadEnvironments`**,
+  **`listEnvironments`**, **`getActiveEnvironment`** test hooks so
+  integration tests can drive the view without TreeDataProvider
+  plumbing.
+
+### Changed
+
+- **`Tarn: Select Environment…`** command now reads from the view's
+  cache instead of globbing `tarn.env.*.yaml` from the workspace
+  root. Picks include source file and var count in the quick-pick
+  item description.
+- Removed the dead `collectEnvironments` helper in `commands/index.ts`
+  that did the old glob-based discovery.
+- Integration test fixture workspace (`tests/integration/fixtures/workspace/`)
+  now ships a real `tarn.config.yaml` declaring staging + production
+  environments plus a redaction rule for `api_token`, so every
+  environments-related test runs against a realistic project layout.
+
+### Tests
+
+- Extension integration tests: **12 → 17 passing**. New
+  `environments.test.ts` covers: loading two environments in
+  alphabetical order, redaction of `api_token` via the project's
+  `redaction.env` list, command registration for all four new
+  commands, toggling the active environment via
+  `tarn.setEnvironmentFromTree`, and clipboard output of
+  `tarn.copyEnvironmentAsFlag`.
+- Extension unit tests unchanged: 76/76 passing.
+
+### Dependencies
+
+- Tarn T56 (`tarn env --json` schema polish + redaction), shipped
+  in `cfffb69`.
+
 ## 0.4.0 — Phase 3 kick-off: diagnostics on save
 
 First Phase 3 feature: the extension now surfaces Tarn parse errors as

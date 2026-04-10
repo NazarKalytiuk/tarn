@@ -149,3 +149,23 @@ export function parseValidateReport(raw: string): ValidateReport {
   const json = JSON.parse(raw);
   return validateReportSchema.parse(json);
 }
+
+const envEntrySchema = z.object({
+  name: z.string(),
+  source_file: z.string(),
+  vars: z.record(z.string()),
+});
+
+export const envReportSchema = z.object({
+  project_root: z.string().optional(),
+  default_env_file: z.string().optional(),
+  environments: z.array(envEntrySchema),
+});
+
+export type EnvReport = z.infer<typeof envReportSchema>;
+export type EnvEntry = z.infer<typeof envEntrySchema>;
+
+export function parseEnvReport(raw: string): EnvReport {
+  const json = JSON.parse(raw);
+  return envReportSchema.parse(json);
+}

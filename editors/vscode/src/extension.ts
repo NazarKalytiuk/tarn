@@ -14,6 +14,7 @@ import {
   RunHistoryStore,
   RunHistoryTreeProvider,
 } from "./views/RunHistoryView";
+import { EnvironmentsView } from "./views/EnvironmentsView";
 
 export interface TarnExtensionApi {
   readonly testControllerId: string;
@@ -23,6 +24,11 @@ export interface TarnExtensionApi {
   readonly testing: {
     readonly backend: import("./backend/TarnBackend").TarnBackend;
     readonly validateDocument: (uri: vscode.Uri) => Promise<void>;
+    readonly reloadEnvironments: () => Promise<void>;
+    readonly listEnvironments: () => Promise<
+      ReadonlyArray<{ name: string; source_file: string; vars: Readonly<Record<string, string>> }>
+    >;
+    readonly getActiveEnvironment: () => string | null;
   };
 }
 
@@ -77,6 +83,12 @@ export async function activate(
   const diagnostics = new TarnDiagnosticsProvider(backend);
   context.subscriptions.push(diagnostics);
 
+  const environmentsView = new EnvironmentsView(backend, tarnController.state);
+  context.subscriptions.push(
+    environmentsView,
+    vscode.window.registerTreeDataProvider("tarn.environments", environmentsView),
+  );
+
   const statusBar = new TarnStatusBar(tarnController.state);
   context.subscriptions.push(statusBar);
 
@@ -86,8 +98,10 @@ export async function activate(
       index,
       backend,
       history,
+      environmentsView,
       refreshStatusBar: () => statusBar.refresh(),
       refreshHistoryView: () => historyTree.refresh(),
+      refreshEnvironmentsView: () => environmentsView.refresh(),
     }),
   );
 
@@ -123,6 +137,7 @@ export async function activate(
       "tarn.showWalkthrough",
       "tarn.initProject",
       "tarn.refreshDiscovery",
+      "tarn.reloadEnvironments",
     ],
     testing: {
       backend,
@@ -130,6 +145,11 @@ export async function activate(
         const doc = await vscode.workspace.openTextDocument(uri);
         await diagnostics.validate(doc);
       },
+      reloadEnvironments: async () => {
+        await environmentsView.reload();
+      },
+      listEnvironments: async () => environmentsView.getEntries(),
+      getActiveEnvironment: () => tarnController.state.activeEnvironment,
     },
   };
 }
