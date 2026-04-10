@@ -27,6 +27,7 @@ export function createTarnTestController(
     activeTags: [],
     lastRequest: undefined,
     lastDryRun: false,
+    lastFailedItemIds: new Set(),
   };
 
   const deps = { controller, backend, index, state, history, onHistoryChanged };

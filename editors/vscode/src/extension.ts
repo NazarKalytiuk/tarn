@@ -18,6 +18,10 @@ export interface TarnExtensionApi {
   readonly testControllerId: string;
   readonly indexedFileCount: number;
   readonly commands: readonly string[];
+  /** Opaque backend handle exposed for integration tests only. Do not use from production code. */
+  readonly testing: {
+    readonly backend: import("./backend/TarnBackend").TarnBackend;
+  };
 }
 
 export async function activate(
@@ -103,6 +107,7 @@ export async function activate(
       "tarn.dryRunFile",
       "tarn.validateFile",
       "tarn.rerunLast",
+      "tarn.runFailed",
       "tarn.selectEnvironment",
       "tarn.setTagFilter",
       "tarn.clearTagFilter",
@@ -114,6 +119,7 @@ export async function activate(
       "tarn.initProject",
       "tarn.refreshDiscovery",
     ],
+    testing: { backend },
   };
 }
 

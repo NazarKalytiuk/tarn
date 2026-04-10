@@ -74,6 +74,36 @@ export function registerCommands(deps: CommandDeps): vscode.Disposable {
   );
 
   registrations.push(
+    vscode.commands.registerCommand("tarn.runFailed", async () => {
+      const failedIds = deps.tarnController.state.lastFailedItemIds;
+      if (failedIds.size === 0) {
+        vscode.window.showInformationMessage("Tarn: no failures from the last run.");
+        return;
+      }
+      const items: vscode.TestItem[] = [];
+      const visit = (item: vscode.TestItem) => {
+        if (failedIds.has(item.id)) {
+          items.push(item);
+        }
+        item.children.forEach(visit);
+      };
+      deps.tarnController.controller.items.forEach(visit);
+      if (items.length === 0) {
+        vscode.window.showInformationMessage(
+          "Tarn: failed items from the last run are no longer present.",
+        );
+        return;
+      }
+      const request = new vscode.TestRunRequest(
+        items,
+        undefined,
+        deps.tarnController.runProfile,
+      );
+      await runViaProfile(request, deps.tarnController.runProfile);
+    }),
+  );
+
+  registrations.push(
     vscode.commands.registerCommand("tarn.selectEnvironment", async () => {
       const envs = await collectEnvironments();
       type Pick = vscode.QuickPickItem & { value: string | null };

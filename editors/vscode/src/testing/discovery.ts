@@ -14,6 +14,18 @@ export const ids: TestItemIds = {
   step: (uri, testName, stepIndex) => `step:${uri.toString()}::${testName}::${stepIndex}`,
 };
 
+/** Structured metadata attached to a discovered TestItem. */
+export type ItemMeta =
+  | { kind: "file"; uri: vscode.Uri }
+  | { kind: "test"; uri: vscode.Uri; testName: string }
+  | { kind: "step"; uri: vscode.Uri; testName: string; stepIndex: number };
+
+const metaByItem = new WeakMap<vscode.TestItem, ItemMeta>();
+
+export function getItemMeta(item: vscode.TestItem): ItemMeta | undefined {
+  return metaByItem.get(item);
+}
+
 export function buildFileItem(
   controller: vscode.TestController,
   parsed: ParsedFile,
@@ -28,6 +40,7 @@ export function buildFileItem(
   if (parsed.ranges.fileNameRange) {
     fileItem.range = parsed.ranges.fileNameRange;
   }
+  metaByItem.set(fileItem, { kind: "file", uri: parsed.uri });
   rebuildChildren(controller, fileItem, parsed);
   return fileItem;
 }
@@ -52,6 +65,7 @@ function buildTestItem(
   const item = controller.createTestItem(ids.test(uri, test.name), test.name, uri);
   item.range = test.nameRange;
   item.description = test.description ?? undefined;
+  metaByItem.set(item, { kind: "test", uri, testName: test.name });
   const stepItems = test.steps.map((step) => buildStepItem(controller, uri, test.name, step));
   item.children.replace(stepItems);
   return item;
@@ -69,5 +83,11 @@ function buildStepItem(
     uri,
   );
   item.range = step.nameRange;
+  metaByItem.set(item, {
+    kind: "step",
+    uri,
+    testName,
+    stepIndex: step.index,
+  });
   return item;
 }

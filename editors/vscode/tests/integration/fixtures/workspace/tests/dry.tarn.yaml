@@ -1,0 +1,27 @@
+version: "1"
+name: "Fixture: dry run stream"
+description: "Hermetic test used by integration smoke tests; never hits the network"
+
+tests:
+  alpha:
+    steps:
+      - name: first alpha
+        request:
+          method: GET
+          url: "http://127.0.0.1:1/never"
+        assert:
+          status: 200
+      - name: second alpha
+        request:
+          method: GET
+          url: "http://127.0.0.1:1/never"
+        assert:
+          status: 200
+  beta:
+    steps:
+      - name: only beta
+        request:
+          method: GET
+          url: "http://127.0.0.1:1/never"
+        assert:
+          status: 200

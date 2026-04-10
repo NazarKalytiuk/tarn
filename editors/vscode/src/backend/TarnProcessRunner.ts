@@ -1,9 +1,13 @@
 import { spawn } from "child_process";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
+import * as readline from "readline";
 import * as vscode from "vscode";
 import { getOutputChannel } from "../outputChannel";
 import { formatCommandForLog } from "../util/shellEscape";
 import { parseReport } from "../util/schemaGuards";
-import type { RunOptions, RunOutcome, TarnBackend } from "./TarnBackend";
+import type { NdjsonEvent, RunOptions, RunOutcome, TarnBackend } from "./TarnBackend";
 import { readConfig } from "../config";
 
 interface CollectedOutput {
@@ -17,7 +21,10 @@ export class TarnProcessRunner implements TarnBackend {
   constructor(private readonly binaryPath: string) {}
 
   async run(options: RunOptions): Promise<RunOutcome> {
-    const args = this.buildRunArgs(options);
+    if (options.streamNdjson) {
+      return this.runNdjson(options);
+    }
+    const args = this.buildRunArgs(options, undefined);
     const collected = await this.spawnAndCollect(args, options.cwd, options.token);
     return this.toRunOutcome(collected, options.token, true);
   }
@@ -64,11 +71,17 @@ export class TarnProcessRunner implements TarnBackend {
     };
   }
 
-  private buildRunArgs(options: RunOptions): string[] {
+  private buildRunArgs(options: RunOptions, ndjsonReportPath: string | undefined): string[] {
     const args: string[] = ["run"];
-    args.push("--format", "json");
-    args.push("--json-mode", options.jsonMode ?? "verbose");
-    args.push("--no-progress");
+    if (ndjsonReportPath) {
+      args.push("--ndjson");
+      args.push("--format", `json=${ndjsonReportPath}`);
+      args.push("--json-mode", options.jsonMode ?? "verbose");
+    } else {
+      args.push("--format", "json");
+      args.push("--json-mode", options.jsonMode ?? "verbose");
+      args.push("--no-progress");
+    }
     if (options.dryRun) {
       args.push("--dry-run");
     }
@@ -81,6 +94,11 @@ export class TarnProcessRunner implements TarnBackend {
     if (options.tags && options.tags.length > 0) {
       args.push("--tag", options.tags.join(","));
     }
+    if (options.selectors) {
+      for (const selector of options.selectors) {
+        args.push("--select", selector);
+      }
+    }
     if (options.vars) {
       for (const [key, value] of Object.entries(options.vars)) {
         args.push("--var", `${key}=${value}`);
@@ -90,6 +108,111 @@ export class TarnProcessRunner implements TarnBackend {
       args.push(file);
     }
     return args;
+  }
+
+  private async runNdjson(options: RunOptions): Promise<RunOutcome> {
+    const reportPath = path.join(
+      os.tmpdir(),
+      `tarn-vscode-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`,
+    );
+    const args = this.buildRunArgs(options, reportPath);
+
+    const config = readConfig();
+    const output = getOutputChannel();
+    output.appendLine(`[tarn] $ ${formatCommandForLog(this.binaryPath, args)}`);
+
+    const child = spawn(this.binaryPath, args, {
+      cwd: options.cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+
+    let timedOut = false;
+    const watchdog = setTimeout(() => {
+      timedOut = true;
+      output.appendLine(
+        `[tarn] watchdog fired after ${config.requestTimeoutMs}ms, killing process`,
+      );
+      child.kill("SIGKILL");
+    }, config.requestTimeoutMs);
+    watchdog.unref();
+
+    const cancelSubscription = options.token.onCancellationRequested(() => {
+      output.appendLine("[tarn] cancellation requested, sending SIGINT");
+      child.kill("SIGINT");
+      const killTimer = setTimeout(() => {
+        if (!child.killed) {
+          child.kill("SIGKILL");
+        }
+      }, 2000);
+      killTimer.unref();
+    });
+
+    const stderrChunks: Buffer[] = [];
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderrChunks.push(chunk);
+    });
+
+    const rl = readline.createInterface({
+      input: child.stdout!,
+      crlfDelay: Infinity,
+    });
+
+    const stdoutLines: string[] = [];
+    rl.on("line", (line: string) => {
+      if (line.length === 0) {
+        return;
+      }
+      stdoutLines.push(line);
+      if (options.onEvent) {
+        try {
+          const event = JSON.parse(line) as NdjsonEvent;
+          options.onEvent(event);
+        } catch (err) {
+          output.appendLine(`[tarn] failed to parse NDJSON line: ${String(err)}`);
+        }
+      }
+    });
+
+    const exitCode = await new Promise<number | null>((resolve) => {
+      let settled = false;
+      const finalize = (code: number | null) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(watchdog);
+        cancelSubscription.dispose();
+        rl.close();
+        resolve(code);
+      };
+      child.on("error", (err) => {
+        stderrChunks.push(Buffer.from(String(err)));
+        finalize(null);
+      });
+      child.on("close", (code) => finalize(code));
+    });
+
+    const stderr = Buffer.concat(stderrChunks).toString("utf8");
+    if (stderr.length > 0) {
+      output.appendLine(`[tarn] stderr: ${stderr.trim()}`);
+    }
+
+    let report: RunOutcome["report"] = undefined;
+    try {
+      const raw = await fs.promises.readFile(reportPath, "utf8");
+      report = parseReport(raw);
+    } catch (err) {
+      output.appendLine(`[tarn] failed to read/parse NDJSON final report: ${String(err)}`);
+    } finally {
+      fs.promises.unlink(reportPath).catch(() => {});
+    }
+
+    return {
+      report,
+      exitCode,
+      stdout: stdoutLines.join("\n"),
+      stderr,
+      cancelled: options.token.isCancellationRequested || timedOut,
+    };
   }
 
   private spawnAndCollect(

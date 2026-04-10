@@ -1,4 +1,5 @@
 import * as path from "path";
+import * as fs from "fs";
 import * as cp from "child_process";
 import {
   downloadAndUnzipVSCode,
@@ -11,6 +12,26 @@ async function main(): Promise<void> {
     const extensionDevelopmentPath = path.resolve(__dirname, "../../..");
     const extensionTestsPath = path.resolve(__dirname, "./suite/index");
     const fixtureWorkspace = path.resolve(__dirname, "../fixtures/workspace");
+
+    // Use the freshly built tarn debug binary so --select and --ndjson
+    // are available. Integration tests always exercise the source tree's
+    // CLI, not whichever tarn happens to be on PATH.
+    const tarnDebugBinary = path.resolve(
+      __dirname,
+      "../../../../../target/debug/tarn",
+    );
+    if (!fs.existsSync(tarnDebugBinary)) {
+      throw new Error(
+        `tarn debug binary not found at ${tarnDebugBinary}. Run 'cargo build' in the tarn crate first.`,
+      );
+    }
+
+    const vscodeDir = path.join(fixtureWorkspace, ".vscode");
+    fs.mkdirSync(vscodeDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(vscodeDir, "settings.json"),
+      JSON.stringify({ "tarn.binaryPath": tarnDebugBinary }, null, 2),
+    );
 
     const vscodeExecutablePath = await downloadAndUnzipVSCode();
     const [cliPath, ...cliArgs] = resolveCliArgsFromVSCodeExecutablePath(vscodeExecutablePath);

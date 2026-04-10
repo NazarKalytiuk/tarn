@@ -1,5 +1,61 @@
 # Changelog
 
+## 0.3.0 — Phase 2: live streaming and selective execution
+
+Cashes in the Tarn-side `T51` (`--select`) and `T53` (NDJSON reporter) so
+the Test Explorer updates live as each step finishes and editor-driven
+"run test at cursor" / "rerun failed" workflows use precise selectors.
+
+### Added
+
+- **Live Test Explorer updates via NDJSON**. Runs now spawn `tarn run
+  --ndjson --format json=<tmp>` and parse `step_finished` /
+  `test_finished` / `file_finished` / `done` events from stdout as they
+  arrive. Passing steps turn green the moment they complete instead of
+  waiting for the final JSON report. Failures still use the final JSON
+  report so the `TestMessage` keeps its rich expected/actual/diff, full
+  request, full response, and remediation hints.
+- **Selective execution**. When a user clicks Run on a specific test or
+  step (from Test Explorer, CodeLens, or `Tarn: Run Current File`), the
+  backend derives `--select FILE::TEST[::STEP]` selectors from the
+  `TestRunRequest.include` items and forwards them to the CLI. Running
+  a single file still uses positional args; running a test adds
+  `FILE::TEST`; running a single step adds `FILE::TEST::index`.
+- **`Tarn: Run Failed Tests` command**. Tracks the set of failed item IDs
+  from the last completed run and reruns only those via selectors.
+- **Per-item metadata map** (`discovery.ts`). Every discovered
+  `TestItem` carries its structured kind (file / test / step), uri,
+  test name, and step index via a `WeakMap`, so the run handler never
+  has to parse item IDs.
+- Backend interface: `RunOptions` gains `selectors`, `streamNdjson`,
+  and `onEvent`. New `NdjsonEvent` union type for consumers that want
+  to observe the raw stream.
+- Extension API: `TarnExtensionApi` now exposes `testing.backend` so
+  integration tests can exercise the backend directly.
+
+### Changed
+
+- `runHandler.ts` rewritten to plan selectors up front, stream events
+  via `onEvent`, then apply the final JSON report with rich failure
+  `TestMessage`s. Files resolved from NDJSON events using a suffix
+  match against `parsedByPath`.
+- `TarnProcessRunner` splits the run path: NDJSON mode uses a
+  `readline` interface on stdout and writes the final report to a
+  tmp file, while the legacy path still supports polling consumers.
+  The tmp file is cleaned up on the way out.
+- `Tarn: Rerun Last Run` unchanged in behavior but now also remembers
+  whether the run was dry.
+
+### Tests
+
+- Extension unit tests: still 76/76 passing (no regressions).
+- Extension integration tests: 4 → **7 passing** against a real `tarn`
+  binary. New backend suite covers NDJSON streaming end-to-end, single
+  test selection, and single step selection. The integration runner
+  now writes `tarn.binaryPath` into the fixture workspace pointing at
+  `target/debug/tarn` so the test always exercises the source-built
+  CLI rather than whatever is on `PATH`.
+
 ## 0.2.0 — Phase 1 foundation
 
 Adds extension host integration on top of the existing declarative package.
