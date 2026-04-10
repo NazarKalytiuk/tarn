@@ -3309,3 +3309,259 @@ teardown:
         "duration key is one line below status key"
     );
 }
+
+// ============================================================================
+// T57: tarn list --file PATH --format json
+// ============================================================================
+
+#[test]
+fn list_file_json_emits_single_file_entry() {
+    let dir = TempDir::new().unwrap();
+    let file = write_test_file(
+        &dir,
+        "scoped.tarn.yaml",
+        r#"
+name: Scoped discovery
+tags: [smoke, http]
+setup:
+  - name: warm
+    request:
+      method: GET
+      url: "http://localhost/"
+teardown:
+  - name: cleanup
+    request:
+      method: POST
+      url: "http://localhost/cleanup"
+tests:
+  happy:
+    description: happy-path user flow
+    tags: [critical]
+    steps:
+      - name: login
+        request:
+          method: POST
+          url: "http://localhost/login"
+      - name: fetch_profile
+        request:
+          method: GET
+          url: "http://localhost/me"
+"#,
+    );
+
+    let output = tarn()
+        .args(["list", "--file", &file, "--format", "json"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+
+    let files = parsed["files"].as_array().expect("files array");
+    assert_eq!(files.len(), 1, "scoped listing should cover a single file");
+
+    let entry = &files[0];
+    assert_eq!(entry["file"].as_str().unwrap(), file);
+    assert_eq!(entry["name"].as_str().unwrap(), "Scoped discovery");
+
+    let tags: Vec<&str> = entry["tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert_eq!(tags, vec!["smoke", "http"]);
+
+    // Setup and teardown carry step names only (shape is minimal).
+    let setup = entry["setup"].as_array().unwrap();
+    assert_eq!(setup.len(), 1);
+    assert_eq!(setup[0]["name"].as_str().unwrap(), "warm");
+    let teardown = entry["teardown"].as_array().unwrap();
+    assert_eq!(teardown.len(), 1);
+    assert_eq!(teardown[0]["name"].as_str().unwrap(), "cleanup");
+
+    // No simple top-level steps.
+    let flat_steps = entry["steps"].as_array().unwrap();
+    assert!(flat_steps.is_empty());
+
+    // One named test group with its two steps.
+    let tests = entry["tests"].as_array().unwrap();
+    assert_eq!(tests.len(), 1);
+    let happy = &tests[0];
+    assert_eq!(happy["name"].as_str().unwrap(), "happy");
+    assert_eq!(
+        happy["description"].as_str().unwrap(),
+        "happy-path user flow"
+    );
+    let group_tags: Vec<&str> = happy["tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert_eq!(group_tags, vec!["critical"]);
+
+    let group_steps = happy["steps"].as_array().unwrap();
+    assert_eq!(group_steps.len(), 2);
+    assert_eq!(group_steps[0]["name"].as_str().unwrap(), "login");
+    assert_eq!(group_steps[1]["name"].as_str().unwrap(), "fetch_profile");
+}
+
+#[test]
+fn list_file_json_exits_2_for_unknown_file() {
+    let dir = TempDir::new().unwrap();
+    let missing = dir.path().join("does_not_exist.tarn.yaml");
+
+    let output = tarn()
+        .args([
+            "list",
+            "--file",
+            missing.to_str().unwrap(),
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "unknown --file must exit with config error code 2"
+    );
+
+    // Even on config error the JSON wrapper shape is still a files array,
+    // so callers do not need a special error path to read stdout.
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(parsed["files"].is_array());
+    assert_eq!(parsed["files"].as_array().unwrap().len(), 0);
+    let err = parsed["error"].as_str().unwrap();
+    assert!(
+        err.to_ascii_lowercase().contains("not found"),
+        "expected a 'not found' error, got: {}",
+        err
+    );
+}
+
+#[test]
+fn list_file_json_resolves_relative_path_outside_current_dir() {
+    // Writes a fixture under a subdirectory and asks `tarn list --file`
+    // with a path that is relative but does not live in `.` — the
+    // scoped listing must still resolve it without requiring the editor
+    // to normalise the path first.
+    let dir = TempDir::new().unwrap();
+    std::fs::create_dir_all(dir.path().join("nested/tests")).unwrap();
+    let nested_path = dir.path().join("nested/tests/api.tarn.yaml");
+    std::fs::write(
+        &nested_path,
+        r#"
+name: Nested file
+steps:
+  - name: ping
+    request:
+      method: GET
+      url: "http://localhost/ping"
+"#,
+    )
+    .unwrap();
+
+    // Drive tarn from `dir` so the argument `nested/tests/api.tarn.yaml`
+    // is relative to a working directory different from where the
+    // invocation would "naturally" sit, proving that scoped listing
+    // does not depend on the workspace glob.
+    let output = tarn()
+        .current_dir(dir.path())
+        .args([
+            "list",
+            "--file",
+            "nested/tests/api.tarn.yaml",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let files = parsed["files"].as_array().unwrap();
+    assert_eq!(files.len(), 1);
+    let entry = &files[0];
+    assert_eq!(
+        entry["file"].as_str().unwrap(),
+        "nested/tests/api.tarn.yaml"
+    );
+    assert_eq!(entry["name"].as_str().unwrap(), "Nested file");
+    let flat_steps = entry["steps"].as_array().unwrap();
+    assert_eq!(flat_steps.len(), 1);
+    assert_eq!(flat_steps[0]["name"].as_str().unwrap(), "ping");
+}
+
+#[test]
+fn list_file_human_format_prints_single_file_only() {
+    let dir = TempDir::new().unwrap();
+    let file = write_test_file(
+        &dir,
+        "scoped_human.tarn.yaml",
+        r#"
+name: Scoped human
+steps:
+  - name: ping
+    request:
+      method: GET
+      url: "http://localhost/"
+"#,
+    );
+    // A second file in the same directory must NOT appear in the output
+    // when --file targets only the first.
+    write_test_file(
+        &dir,
+        "other.tarn.yaml",
+        r#"
+name: Other
+steps:
+  - name: should-not-appear
+    request:
+      method: GET
+      url: "http://localhost/"
+"#,
+    );
+
+    let output = tarn().args(["list", "--file", &file]).output().unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Scoped human"), "stdout: {}", stdout);
+    assert!(stdout.contains("ping"), "stdout: {}", stdout);
+    assert!(
+        !stdout.contains("should-not-appear"),
+        "unrelated file leaked into scoped list: {}",
+        stdout
+    );
+}
+
+#[test]
+fn list_rejects_unknown_format_value() {
+    let dir = TempDir::new().unwrap();
+    let file = write_test_file(
+        &dir,
+        "x.tarn.yaml",
+        r#"
+name: X
+tests:
+  t:
+    steps: []
+"#,
+    );
+
+    let output = tarn()
+        .args(["list", "--file", &file, "--format", "yaml"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unknown list format"),
+        "expected format error, got: {}",
+        stderr
+    );
+}

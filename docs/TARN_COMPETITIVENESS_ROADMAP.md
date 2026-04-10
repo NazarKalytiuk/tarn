@@ -177,7 +177,7 @@ The right strategy is:
 | T54 | Add `cookies: per-test` model option and `--cookie-jar-per-test` flag; resets jar between named tests within a file **[shipped v0.4.1]** | 6 | M | - | `tarn/src/cookie.rs`, `tarn/src/model.rs`, `tarn/src/runner.rs` |
 | T55 | Add `location: {file, line, column}` to `StepResult` and `AssertionFailure`; optional field in `schemas/v1/report.json` **[shipped v0.4.2]** | 8 | M | T52 | `tarn/src/assert/types.rs`, `tarn/src/parser.rs`, `tarn/src/runner.rs`, `schemas/v1/report.json` |
 | T56 | Add `tarn env --json` returning named environments, source files, and resolved variables with redaction applied | 6 | S | - | `tarn/src/main.rs`, `tarn/src/env.rs`, `tarn/src/config.rs` |
-| T57 | Add `tarn list --file PATH --format json` for scoped discovery of a single file | 5 | S | - | `tarn/src/main.rs`, `tarn/src/parser.rs` |
+| T57 | Add `tarn list --file PATH --format json` for scoped discovery of a single file **[shipped v0.4.3]** | 5 | S | - | `tarn/src/main.rs`, `tarn/src/parser.rs` |
 | T58 | Add `--redact-header NAME` CLI flag (repeatable) merging with the configured redaction list; enables editors and CI to extend redaction without editing `tarn.config.yaml` | 5 | S | - | `tarn/src/main.rs`, `tarn/src/model.rs`, `tarn/src/report/json.rs` |
 
 ### Acceptance Criteria

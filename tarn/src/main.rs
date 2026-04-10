@@ -160,6 +160,14 @@ enum Commands {
         /// Filter by tag
         #[arg(long)]
         tag: Option<String>,
+
+        /// Restrict listing to a single file (skips workspace discovery)
+        #[arg(long)]
+        file: Option<PathBuf>,
+
+        /// Output format: human (default) or json
+        #[arg(long, default_value = "human")]
+        format: String,
     },
 
     /// List project-defined named environments
@@ -391,7 +399,9 @@ fn main() {
         ),
         Commands::Validate { path, format } => validate_command(path, &format),
         Commands::Fmt { path, check } => fmt_command(path, check),
-        Commands::List { tag } => list_command(tag.as_deref()),
+        Commands::List { tag, file, format } => {
+            list_command(tag.as_deref(), file.as_deref(), &format)
+        }
         Commands::Env { json } => env_command(json),
         Commands::ImportHurl { path, output } => import_hurl_command(&path, output.as_deref()),
         Commands::Init => init_command(),
@@ -1346,34 +1356,96 @@ fn fmt_command(path: Option<String>, check: bool) -> i32 {
     }
 }
 
-fn list_command(tag: Option<&str>) -> i32 {
-    let tag_filter = tag.map(runner::parse_tag_filter).unwrap_or_default();
-    let files = match resolve_files(None) {
-        Ok(f) => f,
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            return e.exit_code();
+fn list_command(tag: Option<&str>, file: Option<&Path>, format: &str) -> i32 {
+    let json_format = match format.to_ascii_lowercase().as_str() {
+        "human" => false,
+        "json" => true,
+        other => {
+            eprintln!(
+                "Error: unknown list format '{}'. Use 'human' or 'json'.",
+                other
+            );
+            return 2;
         }
     };
 
+    let tag_filter = tag.map(runner::parse_tag_filter).unwrap_or_default();
+
+    let files = match file {
+        Some(path) => match resolve_single_list_file(path) {
+            Ok(paths) => paths,
+            Err(e) => {
+                if json_format {
+                    let output = serde_json::json!({
+                        "files": [],
+                        "error": e.to_string(),
+                    });
+                    println!("{}", serde_json::to_string_pretty(&output).unwrap());
+                } else {
+                    eprintln!("Error: {}", e);
+                }
+                return e.exit_code();
+            }
+        },
+        None => match resolve_files(None) {
+            Ok(f) => f,
+            Err(e) => {
+                if json_format {
+                    let output = serde_json::json!({
+                        "files": [],
+                        "error": e.to_string(),
+                    });
+                    println!("{}", serde_json::to_string_pretty(&output).unwrap());
+                } else {
+                    eprintln!("Error: {}", e);
+                }
+                return e.exit_code();
+            }
+        },
+    };
+
+    if json_format {
+        list_files_json(&files, &tag_filter, file.is_some())
+    } else {
+        list_files_human(&files, &tag_filter)
+    }
+}
+
+fn resolve_single_list_file(path: &Path) -> Result<Vec<String>, TarnError> {
+    if !path.exists() {
+        return Err(TarnError::Config(format!(
+            "Path not found: {}",
+            path.display()
+        )));
+    }
+    if !path.is_file() {
+        return Err(TarnError::Config(format!(
+            "--file expects a file, not a directory: {}",
+            path.display()
+        )));
+    }
+    Ok(vec![path.display().to_string()])
+}
+
+fn list_files_human(files: &[String], tag_filter: &[String]) -> i32 {
     if files.is_empty() {
         println!("No test files found");
         return 0;
     }
 
-    for file_path in &files {
+    for file_path in files {
         let path = Path::new(file_path);
         match parser::parse_file(path) {
             Ok(tf) => {
                 let matches_simple =
-                    !tf.steps.is_empty() && runner::matches_tags(&tf.tags, &tag_filter);
+                    !tf.steps.is_empty() && runner::matches_tags(&tf.tags, tag_filter);
                 let matching_groups: Vec<_> = tf
                     .tests
                     .iter()
                     .filter(|(_, group)| {
                         let combined_tags: Vec<String> =
                             tf.tags.iter().chain(group.tags.iter()).cloned().collect();
-                        runner::matches_tags(&combined_tags, &tag_filter)
+                        runner::matches_tags(&combined_tags, tag_filter)
                     })
                     .collect();
 
@@ -1419,6 +1491,114 @@ fn list_command(tag: Option<&str>) -> i32 {
     }
 
     0
+}
+
+fn list_files_json(files: &[String], tag_filter: &[String], scoped_to_file: bool) -> i32 {
+    let mut file_entries: Vec<serde_json::Value> = Vec::with_capacity(files.len());
+    let mut had_error = false;
+
+    for file_path in files {
+        let path = Path::new(file_path);
+        match parser::parse_file(path) {
+            Ok(tf) => {
+                let matches_simple =
+                    !tf.steps.is_empty() && runner::matches_tags(&tf.tags, tag_filter);
+                let matching_groups: Vec<(&String, &tarn::model::TestGroup)> = tf
+                    .tests
+                    .iter()
+                    .filter(|(_, group)| {
+                        let combined_tags: Vec<String> =
+                            tf.tags.iter().chain(group.tags.iter()).cloned().collect();
+                        runner::matches_tags(&combined_tags, tag_filter)
+                    })
+                    .collect();
+
+                if !tag_filter.is_empty() && !matches_simple && matching_groups.is_empty() {
+                    continue;
+                }
+
+                let steps_json: Vec<serde_json::Value> = tf
+                    .steps
+                    .iter()
+                    .filter(|_| matches_simple || tag_filter.is_empty())
+                    .map(|s| serde_json::json!({ "name": s.name }))
+                    .collect();
+
+                let setup_json: Vec<serde_json::Value> = tf
+                    .setup
+                    .iter()
+                    .map(|s| serde_json::json!({ "name": s.name }))
+                    .collect();
+
+                let teardown_json: Vec<serde_json::Value> = tf
+                    .teardown
+                    .iter()
+                    .map(|s| serde_json::json!({ "name": s.name }))
+                    .collect();
+
+                let tests_json: Vec<serde_json::Value> = matching_groups
+                    .iter()
+                    .map(|(name, group)| {
+                        let group_steps: Vec<serde_json::Value> = group
+                            .steps
+                            .iter()
+                            .map(|s| serde_json::json!({ "name": s.name }))
+                            .collect();
+                        let mut obj = serde_json::Map::new();
+                        obj.insert(
+                            "name".into(),
+                            serde_json::Value::String((*name).to_string()),
+                        );
+                        if let Some(desc) = group.description.as_deref() {
+                            obj.insert(
+                                "description".into(),
+                                serde_json::Value::String(desc.to_string()),
+                            );
+                        }
+                        obj.insert(
+                            "tags".into(),
+                            serde_json::Value::Array(
+                                group
+                                    .tags
+                                    .iter()
+                                    .cloned()
+                                    .map(serde_json::Value::String)
+                                    .collect(),
+                            ),
+                        );
+                        obj.insert("steps".into(), serde_json::Value::Array(group_steps));
+                        serde_json::Value::Object(obj)
+                    })
+                    .collect();
+
+                file_entries.push(serde_json::json!({
+                    "file": file_path,
+                    "name": tf.name,
+                    "tags": tf.tags,
+                    "setup": setup_json,
+                    "steps": steps_json,
+                    "tests": tests_json,
+                    "teardown": teardown_json,
+                }));
+            }
+            Err(e) => {
+                had_error = true;
+                file_entries.push(serde_json::json!({
+                    "file": file_path,
+                    "error": e.to_string(),
+                }));
+            }
+        }
+    }
+
+    let output = serde_json::json!({ "files": file_entries });
+    println!("{}", serde_json::to_string_pretty(&output).unwrap());
+
+    if had_error && scoped_to_file {
+        2
+    } else {
+        0
+    }
 }
 
 fn import_hurl_command(path: &str, output: Option<&str>) -> i32 {
