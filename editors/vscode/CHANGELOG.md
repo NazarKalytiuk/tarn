@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.14.0 — Phase 4: HTML report webview
+
+Fourth Phase 4 feature: `Tarn: Open HTML Report` now generates a
+Tarn HTML dashboard for the active `.tarn.yaml` and opens it in a
+side-by-side webview. Clicking a failed step inside the report
+jumps to the exact YAML line in the source file.
+
+### Added
+
+- **`ReportWebview`** (NAZ-273). New
+  `src/views/ReportWebview.ts` singleton webview. Tarn's HTML report
+  is self-contained (inline CSS/JS/data), so we load it into
+  `webview.html` as a string — no `localResourceRoots` wiring
+  required. The panel is reused across invocations via `reveal`.
+- **`injectReportBridge`** pure helper that splices a small script
+  into the generated HTML just before `</body>`. The injected bridge
+  walks `.file-card[data-file]` and `.test-group[data-test]` nodes
+  (already emitted by the Tarn HTML reporter), derives the
+  `stepIndex` of each failed `.step` row, and attaches click
+  handlers that post `{type: "jumpTo", file, test, stepIndex}`
+  messages back to the extension host. Idempotent via a
+  `BRIDGE_MARKER` comment, so re-rendering never double-injects.
+- **Click-to-jump handler** in `ReportWebview.handleMessage`. Uses
+  the `WorkspaceIndex` to resolve the file path (exact / suffix /
+  basename match) and the YAML AST range for
+  `(testName, stepIndex)`. Opens the document in `ViewColumn.One`
+  so the report stays visible in the side column.
+- **`TarnBackend.runHtmlReport`** and `TarnProcessRunner`
+  implementation. Spawns `tarn run --format html=<tmpPath>
+  --no-progress` with the current env / tag filter / selectors,
+  returns `{ htmlPath, exitCode, stderr }`, and confirms the file
+  landed on disk before handing the path back.
+- **`tarn.openHtmlReport`** command. Resolves the active editor's
+  `.tarn.yaml` file, runs the report through
+  `vscode.window.withProgress`, reads the HTML, hands it to
+  `ReportWebview`, and deletes the tmp file immediately (no need to
+  keep it around since the content is already in the webview).
+- **Editor title menu + command palette gating**: the command is
+  available both in the palette and the `resourceLangId == tarn`
+  context menu so users can invoke it directly from a test file.
+- **Extension host API**: `testing.showReportHtml` and
+  `testing.sendReportMessage` so integration tests can drive the
+  panel and exercise the `jumpTo` handler without spawning tarn.
+
+### Tests
+
+- **Unit** (`tests/unit/reportWebview.test.ts`, 6 tests).
+  Covers bridge placement before `</body>`, selector presence for
+  the walker, idempotence, fallback when `</body>` is missing, and
+  the swallow-list for inner expand/collapse controls.
+- **Integration** (`tests/integration/suite/reportWebview.test.ts`,
+  5 tests). Registers the command, drives `showReportHtml` with a
+  minimal Tarn-style HTML fixture, sends synthetic `jumpTo` messages
+  and asserts the active editor and cursor line, and verifies
+  malformed messages are ignored.
+
+Total: 178 unit tests, 60 integration tests passing.
+
 ## 0.13.0 — Phase 4: Fix Plan view
 
 Third Phase 4 feature: a ranked remediation-hint tree for the most

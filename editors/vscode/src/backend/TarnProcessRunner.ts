@@ -13,7 +13,14 @@ import {
   type EnvReport,
   type ValidateReport,
 } from "../util/schemaGuards";
-import type { NdjsonEvent, RunOptions, RunOutcome, TarnBackend } from "./TarnBackend";
+import type {
+  HtmlReportOptions,
+  HtmlReportOutcome,
+  NdjsonEvent,
+  RunOptions,
+  RunOutcome,
+  TarnBackend,
+} from "./TarnBackend";
 import { readConfig } from "../config";
 
 interface CollectedOutput {
@@ -118,6 +125,50 @@ export class TarnProcessRunner implements TarnBackend {
     return {
       exitCode: collected.exitCode,
       stdout: collected.stdout,
+      stderr: collected.stderr,
+    };
+  }
+
+  async runHtmlReport(options: HtmlReportOptions): Promise<HtmlReportOutcome> {
+    const htmlPath = path.join(
+      os.tmpdir(),
+      `tarn-vscode-report-${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(2, 8)}.html`,
+    );
+    const args: string[] = [
+      "run",
+      "--format",
+      `html=${htmlPath}`,
+      "--no-progress",
+    ];
+    if (options.environment) {
+      args.push("--env", options.environment);
+    }
+    if (options.tags && options.tags.length > 0) {
+      args.push("--tag", options.tags.join(","));
+    }
+    if (options.selectors) {
+      for (const selector of options.selectors) {
+        args.push("--select", selector);
+      }
+    }
+    for (const file of options.files) {
+      args.push(file);
+    }
+    const collected = await this.spawnAndCollect(args, options.cwd, options.token);
+    // A failing run still produces a valid HTML report, so the only
+    // thing we care about here is whether the file landed on disk.
+    let landed = false;
+    try {
+      await fs.promises.access(htmlPath, fs.constants.R_OK);
+      landed = true;
+    } catch {
+      // File was never written — tarn bailed before the HTML reporter ran.
+    }
+    return {
+      htmlPath: landed ? htmlPath : undefined,
+      exitCode: collected.exitCode,
       stderr: collected.stderr,
     };
   }

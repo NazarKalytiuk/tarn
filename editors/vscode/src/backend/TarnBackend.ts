@@ -74,8 +74,25 @@ export type NdjsonEvent =
       };
     };
 
+export interface HtmlReportOptions {
+  files: string[];
+  cwd: string;
+  environment?: string | null;
+  tags?: string[];
+  selectors?: string[];
+  token: vscode.CancellationToken;
+}
+
+export interface HtmlReportOutcome {
+  /** Absolute path to the generated HTML report, or undefined on failure. */
+  htmlPath: string | undefined;
+  exitCode: number | null;
+  stderr: string;
+}
+
 export interface TarnBackend {
   run(options: RunOptions): Promise<RunOutcome>;
+  runHtmlReport(options: HtmlReportOptions): Promise<HtmlReportOutcome>;
   validate(
     files: string[],
     cwd: string,

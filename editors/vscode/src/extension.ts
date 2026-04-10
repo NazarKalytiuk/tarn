@@ -27,6 +27,7 @@ import {
 import { EnvironmentsView } from "./views/EnvironmentsView";
 import { CapturesInspector } from "./views/CapturesInspector";
 import { FixPlanView } from "./views/FixPlanView";
+import { ReportWebview } from "./views/ReportWebview";
 
 export interface TarnExtensionApi {
   readonly testControllerId: string;
@@ -60,6 +61,8 @@ export interface TarnExtensionApi {
     readonly fixPlanSnapshot: () => ReadonlyArray<
       import("./views/FixPlanView").FixPlanGroup
     >;
+    readonly showReportHtml: (html: string) => void;
+    readonly sendReportMessage: (message: unknown) => Promise<boolean>;
   };
 }
 
@@ -108,6 +111,9 @@ export async function activate(
     fixPlanView,
     vscode.window.registerTreeDataProvider("tarn.fixPlan", fixPlanView),
   );
+
+  const reportWebview = new ReportWebview(index);
+  context.subscriptions.push(reportWebview);
 
   const tarnController = createTarnTestController(
     index,
@@ -193,6 +199,7 @@ export async function activate(
       stepDetailsPanel,
       capturesInspector,
       fixPlanView,
+      reportWebview,
       refreshStatusBar: () => statusBar.refresh(),
       refreshHistoryView: () => historyTree.refresh(),
       refreshEnvironmentsView: () => environmentsView.refresh(),
@@ -236,6 +243,7 @@ export async function activate(
       "tarn.copyCaptureValue",
       "tarn.toggleHideCaptures",
       "tarn.jumpToFailure",
+      "tarn.openHtmlReport",
     ],
     testing: {
       backend,
@@ -277,6 +285,8 @@ export async function activate(
       toggleHideCaptures: () => capturesInspector.toggleHideAllValues(),
       loadFixPlanFromReport: (report) => fixPlanView.loadFromReport(report),
       fixPlanSnapshot: () => fixPlanView.snapshot(),
+      showReportHtml: (html) => reportWebview.show(html),
+      sendReportMessage: (message) => reportWebview.handleMessage(message),
     },
   };
 }
