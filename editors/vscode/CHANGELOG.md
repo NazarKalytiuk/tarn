@@ -1,5 +1,82 @@
 # Changelog
 
+## 0.8.0 — Phase 3: Symbol navigation (definition, references, rename)
+
+Fifth Phase 3 feature: Tarn interpolation tokens now participate in
+VS Code's standard symbol navigation surface. Right-click a capture
+or an env key inside `{{ ... }}` and the usual "Go to Definition",
+"Find All References", and "Rename Symbol" actions Just Work.
+
+### Added
+
+- **`TarnDefinitionProvider`** (NAZ-267). Jumps from a
+  `{{ capture.x }}` reference to the step that declares
+  `capture: { x: ... }`, respecting the capture's file scope.
+  Jumps from `{{ env.key }}` to the file(s) listed by the
+  `EnvironmentsView` cache, with an in-file line lookup that
+  grep-matches `^<key>:` in each source file so the cursor lands
+  on the actual declaration line instead of line 0.
+- **`TarnReferencesProvider`**. Returns every
+  `{{ capture.NAME }}` usage in the current file, plus the
+  declaration if `includeDeclaration` is true. Works equally well
+  when the cursor is on a reference or on the declaration key
+  inside a `capture:` block. Env references are explicitly
+  out-of-scope for v1 (they span multiple files); the provider
+  returns an empty list rather than a misleading partial answer.
+- **`TarnRenameProvider`**. Renames a capture across its
+  declaration and every in-file reference as a single
+  WorkspaceEdit. `prepareRename` narrows the edit range to just
+  the identifier (so renaming from a reference doesn't accidentally
+  rewrite the `{{ }}` punctuation). Rejects renames when:
+  - the cursor is on an env token (edit the source file directly);
+  - the file has YAML parse errors (fix first);
+  - the capture is not declared in the current file (probably came
+    from an `include:` directive — edit the included file);
+  - the new name isn't a valid identifier
+    (`^[A-Za-z_][A-Za-z0-9_]*$`).
+- **`buildCaptureIndex(source)`** helper in
+  `src/language/completion/captures.ts`. Walks the YAML CST once
+  and returns a searchable index of every capture declaration with
+  its phase, test name, step info, and byte-offset key range.
+  Shared by definition / references / rename so they stay
+  consistent and cheap.
+- **`findCaptureReferences(source, nameFilter?)`** helper.
+  Regex-scans the document for `{{ capture.NAME }}` tokens and
+  returns the identifier-only byte ranges (not the `{{`/`}}`
+  punctuation) so rename edits are precise.
+- **`cursorSymbol(document, position)`** helper in
+  `src/language/SymbolProviders.ts`. Wraps `findHoverToken` and
+  falls back to the capture index to detect clicks on declaration
+  keys inside `capture:` blocks. Returns a tagged union
+  (`env` / `capture-ref` / `capture-decl`) the three providers
+  consume.
+
+### Tests
+
+- **10 new unit tests** in `captureSymbols.test.ts` exercise
+  `buildCaptureIndex` and `findCaptureReferences` against a
+  multi-test fixture: capture collection from setup / tests /
+  teardown, per-declaration phase and test-name recording,
+  `findDeclarationAt` offset hit-testing, `findByName` lookup,
+  reference scanning over mixed env/capture/builtin interpolations,
+  name filtering, whitespace tolerance inside `{{ ... }}`, and
+  empty-source handling.
+- **6 new integration tests** in `symbols.test.ts` drive the
+  providers through VS Code's public commands
+  (`vscode.executeDefinitionProvider`,
+  `vscode.executeReferenceProvider`,
+  `vscode.executeDocumentRenameProvider`, `vscode.prepareRename`)
+  against a real extension host: go-to-definition on a capture
+  reference lands on the declaring key line, go-to-definition on
+  `{{ env.base_url }}` produces locations in at least one env
+  source file, find-all-references on a capture returns all 3
+  expected locations (2 refs + 1 decl), renaming a capture
+  replaces every occurrence via a single WorkspaceEdit, invalid
+  new names are rejected, and `prepareRename` on a reference
+  returns only the identifier range (not the whole `{{ }}` token).
+- Extension unit tests: **111 → 121 passing**.
+- Extension integration tests: **28 → 34 passing**.
+
 ## 0.7.0 — Phase 3: Hover provider for interpolation
 
 Fourth Phase 3 feature: hovering over any `{{ env.x }}`,

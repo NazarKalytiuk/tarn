@@ -272,3 +272,150 @@ function getNodeRange(node: unknown): [number, number, number | undefined] | und
   if (!r) return undefined;
   return [r[0], r[1], r[2]];
 }
+
+// ---------------------------------------------------------------------------
+// Capture symbol index (definition / references / rename)
+// ---------------------------------------------------------------------------
+
+/**
+ * A single `capture: { name: ... }` declaration in a test file. Byte
+ * offsets point at the scalar key node so providers can turn them into
+ * VS Code ranges via `document.positionAt`.
+ */
+export interface CaptureDeclaration {
+  name: string;
+  phase: "setup" | "test" | "teardown";
+  testName?: string;
+  stepIndex: number;
+  stepName: string;
+  /** Byte offset range of the capture key node (the `name:` scalar). */
+  keyStart: number;
+  keyEnd: number;
+}
+
+/**
+ * Searchable index of every capture declaration in a file. Returned by
+ * `buildCaptureIndex` and consumed by definition / references / rename
+ * providers.
+ */
+export interface CaptureIndex {
+  readonly declarations: readonly CaptureDeclaration[];
+  findDeclarationAt(offset: number): CaptureDeclaration | undefined;
+  findByName(name: string): CaptureDeclaration[];
+}
+
+/**
+ * Walk a Tarn YAML file's CST and collect every capture declaration
+ * (from setup, flat steps, named tests, and teardown). Returns
+ * `undefined` when the document has parse errors so callers can bail
+ * out before offering a broken rename.
+ */
+export function buildCaptureIndex(source: string): CaptureIndex | undefined {
+  let doc: YAMLDocument.Parsed;
+  try {
+    doc = parseDocument(source, { keepSourceTokens: false });
+  } catch {
+    return undefined;
+  }
+  if (doc.errors.length > 0) {
+    return undefined;
+  }
+  const root = doc.contents;
+  if (!isMap(root)) {
+    return undefined;
+  }
+
+  const declarations: CaptureDeclaration[] = [];
+
+  const collectStepCaptures = (
+    stepsNode: unknown,
+    phase: "setup" | "test" | "teardown",
+    testName: string | undefined,
+  ): void => {
+    if (!isSeq(stepsNode)) return;
+    stepsNode.items.forEach((item, index) => {
+      if (!isMap(item)) return;
+      const stepName = getScalarString(item, "name") ?? `step ${index + 1}`;
+      const captureBlock = getMapValue(item, "capture");
+      if (!isMap(captureBlock)) return;
+      for (const pair of captureBlock.items) {
+        if (!isScalar(pair.key)) continue;
+        const name = String(pair.key.value);
+        const range = getNodeRange(pair.key);
+        if (!range) continue;
+        declarations.push({
+          name,
+          phase,
+          testName,
+          stepIndex: index,
+          stepName,
+          keyStart: range[0],
+          keyEnd: range[1],
+        });
+      }
+    });
+  };
+
+  collectStepCaptures(getMapValue(root, "setup"), "setup", undefined);
+  collectStepCaptures(getMapValue(root, "steps"), "test", undefined);
+
+  const testsNode = getMapValue(root, "tests");
+  if (isMap(testsNode)) {
+    for (const pair of testsNode.items) {
+      if (!isScalar(pair.key)) continue;
+      const testName = String(pair.key.value);
+      const value = pair.value;
+      if (!isMap(value)) continue;
+      collectStepCaptures(getMapValue(value, "steps"), "test", testName);
+    }
+  }
+
+  collectStepCaptures(getMapValue(root, "teardown"), "teardown", undefined);
+
+  return {
+    declarations,
+    findDeclarationAt(offset: number): CaptureDeclaration | undefined {
+      return declarations.find(
+        (d) => offset >= d.keyStart && offset < d.keyEnd,
+      );
+    },
+    findByName(name: string): CaptureDeclaration[] {
+      return declarations.filter((d) => d.name === name);
+    },
+  };
+}
+
+/**
+ * Regex-scan a document for every `{{ capture.NAME }}` reference.
+ * Returns byte-offset ranges for the identifier portion only (not the
+ * `{{` / `}}` punctuation) so providers can highlight the renameable
+ * word precisely. `nameFilter` narrows results to a single name.
+ */
+export interface CaptureReference {
+  name: string;
+  nameStart: number;
+  nameEnd: number;
+}
+
+export function findCaptureReferences(
+  source: string,
+  nameFilter?: string,
+): CaptureReference[] {
+  const pattern = /\{\{\s*capture\.([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g;
+  const results: CaptureReference[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(source)) !== null) {
+    const fullMatch = match[0];
+    const name = match[1];
+    if (nameFilter && nameFilter !== name) {
+      continue;
+    }
+    // Offset of the identifier inside the match: skip the `{{`, any
+    // whitespace, and the `capture.` prefix.
+    const identifierOffsetInMatch = fullMatch.indexOf(name);
+    const nameStart = match.index + identifierOffsetInMatch;
+    const nameEnd = nameStart + name.length;
+    results.push({ name, nameStart, nameEnd });
+  }
+  return results;
+}

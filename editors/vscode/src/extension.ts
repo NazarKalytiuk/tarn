@@ -6,6 +6,11 @@ import { TarnDocumentSymbolProvider } from "./language/DocumentSymbolProvider";
 import { TarnDiagnosticsProvider } from "./language/DiagnosticsProvider";
 import { TarnCompletionProvider } from "./language/CompletionProvider";
 import { TarnHoverProvider } from "./language/HoverProvider";
+import {
+  TarnDefinitionProvider,
+  TarnReferencesProvider,
+  TarnRenameProvider,
+} from "./language/SymbolProviders";
 import { TarnStatusBar } from "./statusBar";
 import { registerCommands } from "./commands";
 import { TarnProcessRunner } from "./backend/TarnProcessRunner";
@@ -106,6 +111,21 @@ export async function activate(
   const hoverProvider = new TarnHoverProvider(environmentsView);
   context.subscriptions.push(
     vscode.languages.registerHoverProvider({ language: "tarn" }, hoverProvider),
+  );
+
+  context.subscriptions.push(
+    vscode.languages.registerDefinitionProvider(
+      { language: "tarn" },
+      new TarnDefinitionProvider(environmentsView),
+    ),
+    vscode.languages.registerReferenceProvider(
+      { language: "tarn" },
+      new TarnReferencesProvider(),
+    ),
+    vscode.languages.registerRenameProvider(
+      { language: "tarn" },
+      new TarnRenameProvider(),
+    ),
   );
 
   const statusBar = new TarnStatusBar(tarnController.state);

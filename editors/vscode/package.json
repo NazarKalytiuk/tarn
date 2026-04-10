@@ -2,7 +2,7 @@
   "name": "tarn-vscode",
   "displayName": "Tarn",
   "description": "Test Explorer, CodeLens, and schema-aware authoring for Tarn API test files.",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "publisher": "nazarkalytiuk",
   "license": "MIT",
   "repository": {
