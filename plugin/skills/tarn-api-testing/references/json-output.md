@@ -226,3 +226,8 @@ FOR each file in report.files:
 - Non-JSON response bodies are preserved as JSON strings
 - `remediation_hints` provides actionable suggestions when available
 - Full JSON schema: `schemas/v1/report.json`
+
+## Filtering Output
+
+- `--only-failed` drops passing files, tests, and steps from the `files` array so you can focus on what needs fixing. Top-level `summary` counts still reflect the full run, so PASSED/FAILED totals stay accurate even when passing entries are hidden.
+- Streaming progress: by default `tarn run --format json` prints per-test progress lines to **stderr** as tests finish; the structured JSON report is written to stdout once all tests complete. stdout remains pure JSON and is always safe to pipe into `jq` or parse directly. Use `--no-progress` to silence the stderr stream.

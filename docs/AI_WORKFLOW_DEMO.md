@@ -94,3 +94,18 @@ Expected summary:
   }
 }
 ```
+
+## Tips for Large Suites
+
+When the agent is iterating on a suite with hundreds of tests, two flags keep the feedback loop tight:
+
+- `--only-failed` prunes passing files, tests, and steps from both human and JSON output. Summary counts still reflect the full run, so CI reports stay accurate, but the agent only has to read the failures it needs to fix.
+- Progress streaming is on by default: with `--format json` the structured report goes to stdout and per-test progress lines go to stderr, so the agent can tail stderr for liveness while still parsing stdout at the end. Use `--no-progress` if a CI harness already timestamps every stdout line and you prefer the classic batch dump.
+
+```bash
+# CI-friendly: show only failures in JSON, no stderr noise
+tarn run --only-failed --no-progress --format json
+
+# Interactive debugging: stream progress to stderr, final JSON to stdout
+tarn run --only-failed --format json
+```

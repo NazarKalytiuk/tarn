@@ -1885,6 +1885,213 @@ fn html_report_matches_golden() {
 }
 
 #[test]
+fn only_failed_hides_passing_tests_in_human_output() {
+    let server = DemoServer::start();
+    let dir = TempDir::new().unwrap();
+
+    let test_file = write_test_file(
+        &dir,
+        "mixed.tarn.yaml",
+        &format!(
+            r#"
+name: Mixed suite
+tests:
+  happy_path:
+    steps:
+      - name: healthy request
+        request:
+          method: GET
+          url: "{base}/health"
+        assert:
+          status: 200
+  broken_path:
+    steps:
+      - name: wrong status expected
+        request:
+          method: GET
+          url: "{base}/health"
+        assert:
+          status: 418
+"#,
+            base = server.base_url()
+        ),
+    );
+
+    let output = tarn()
+        .args(["run", &test_file, "--only-failed", "--no-progress"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("healthy request"),
+        "passing step should be hidden: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("wrong status expected"),
+        "failing step should be visible: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("1 passed"),
+        "summary should still report totals: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("1 failed"),
+        "summary should still report totals: {}",
+        stdout
+    );
+}
+
+#[test]
+fn only_failed_prunes_passing_entries_from_json_output() {
+    let server = DemoServer::start();
+    let dir = TempDir::new().unwrap();
+
+    let test_file = write_test_file(
+        &dir,
+        "mixed_json.tarn.yaml",
+        &format!(
+            r#"
+name: Mixed JSON suite
+tests:
+  ok:
+    steps:
+      - name: healthy
+        request:
+          method: GET
+          url: "{base}/health"
+        assert:
+          status: 200
+  nope:
+    steps:
+      - name: wrong status
+        request:
+          method: GET
+          url: "{base}/health"
+        assert:
+          status: 500
+"#,
+            base = server.base_url()
+        ),
+    );
+
+    let output = tarn()
+        .args([
+            "run",
+            &test_file,
+            "--format",
+            "json",
+            "--only-failed",
+            "--no-progress",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let files = parsed["files"].as_array().unwrap();
+    assert_eq!(files.len(), 1);
+    let tests = files[0]["tests"].as_array().unwrap();
+    assert_eq!(tests.len(), 1, "only the failing test should remain");
+    assert_eq!(tests[0]["name"], "nope");
+    let steps = tests[0]["steps"].as_array().unwrap();
+    assert!(
+        steps.iter().all(|s| s["status"] == "FAILED"),
+        "expected only failed steps, got {:?}",
+        steps
+    );
+
+    let summary = &parsed["summary"]["steps"];
+    assert_eq!(summary["passed"], 1);
+    assert_eq!(summary["failed"], 1);
+}
+
+#[test]
+fn streaming_progress_emits_to_stderr_when_json_is_on_stdout() {
+    let server = DemoServer::start();
+    let dir = TempDir::new().unwrap();
+
+    let test_file = write_test_file(
+        &dir,
+        "stream.tarn.yaml",
+        &format!(
+            r#"
+name: Stream suite
+tests:
+  first:
+    steps:
+      - name: stream step one
+        request:
+          method: GET
+          url: "{base}/health"
+        assert:
+          status: 200
+"#,
+            base = server.base_url()
+        ),
+    );
+
+    let output = tarn()
+        .args(["run", &test_file, "--format", "json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("stream step one"),
+        "progress should stream on stderr, got stderr={}",
+        stderr
+    );
+    // stdout should remain parseable JSON (streaming must not pollute it).
+    let _: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .expect("stdout should still be pure JSON when streaming to stderr");
+}
+
+#[test]
+fn no_progress_suppresses_stderr_streaming() {
+    let server = DemoServer::start();
+    let dir = TempDir::new().unwrap();
+
+    let test_file = write_test_file(
+        &dir,
+        "nostream.tarn.yaml",
+        &format!(
+            r#"
+name: Quiet suite
+tests:
+  first:
+    steps:
+      - name: silent step
+        request:
+          method: GET
+          url: "{base}/health"
+        assert:
+          status: 200
+"#,
+            base = server.base_url()
+        ),
+    );
+
+    let output = tarn()
+        .args(["run", &test_file, "--format", "json", "--no-progress"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("silent step"),
+        "with --no-progress stderr should stay quiet, got: {}",
+        stderr
+    );
+}
+
+#[test]
 #[ignore]
 fn dump_report_goldens() {
     println!("=== report.json.golden ===");

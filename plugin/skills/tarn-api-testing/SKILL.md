@@ -30,10 +30,19 @@ tarn run --format json                # structured JSON output
 tarn run --format json --json-mode compact  # compact JSON (no pretty-print)
 tarn run --tag smoke                  # run only tests tagged "smoke"
 tarn run --env staging                # use tarn.env.staging.yaml
+tarn run --only-failed                # hide passing tests, show failures only
+tarn run --only-failed --format json  # CI-friendly JSON filtered to failures
+tarn run --no-progress                # disable streaming progress (batch dump)
 tarn validate                         # check syntax without executing
 tarn validate tests/users.tarn.yaml   # validate specific file
 tarn list                             # list all tests and steps (dry run)
 ```
+
+### Streaming and filtering
+
+- `tarn run` streams per-test output as each test finishes (per-file in `--parallel` mode). With `--format human` the stream writes to stdout; with structured formats (`json`, `junit`, `tap`, `html`, `curl`) it writes to stderr so stdout stays parseable.
+- `--only-failed` drops passing files, tests, and steps from both human and JSON output. Summary counts still reflect the full run.
+- `--no-progress` disables streaming and prints the final report in one batch at the end — use it when a CI harness already timestamps every line.
 
 ## Writing Tests
 

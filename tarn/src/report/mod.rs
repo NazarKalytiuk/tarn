@@ -3,12 +3,20 @@ pub mod html;
 pub mod human;
 pub mod json;
 pub mod junit;
+pub mod progress;
 pub mod redaction;
 pub mod tap;
 
 use crate::assert::types::RunResult;
 use std::path::PathBuf;
 use std::str::FromStr;
+
+/// Options that tweak how test results are rendered.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RenderOptions {
+    /// Show only failed tests/steps in the output. Summary counts stay accurate.
+    pub only_failed: bool,
+}
 
 /// Output format for test results.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,9 +75,20 @@ impl OutputTarget {
 
 /// Render test results in the specified format.
 pub fn render(result: &RunResult, format: OutputFormat) -> String {
+    render_with_options(result, format, RenderOptions::default())
+}
+
+/// Render test results in the specified format with rendering options.
+pub fn render_with_options(
+    result: &RunResult,
+    format: OutputFormat,
+    opts: RenderOptions,
+) -> String {
     match format {
-        OutputFormat::Human => human::render(result),
-        OutputFormat::Json => json::render(result),
+        OutputFormat::Human => human::render_with_options(result, opts),
+        OutputFormat::Json => {
+            json::render_with_options(result, json::JsonOutputMode::Verbose, opts)
+        }
         OutputFormat::Junit => junit::render(result),
         OutputFormat::Tap => tap::render(result),
         OutputFormat::Html => html::render(result),

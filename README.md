@@ -79,6 +79,8 @@ tarn run tests/health.tarn.yaml        # run the scaffolded test directly
 tarn fmt --check                       # verify canonical YAML formatting
 tarn run --env staging                 # use staging environment
 tarn run --format json                 # structured output for LLM/CI
+tarn run --only-failed                 # show only failing tests in the output
+tarn run --no-progress                 # disable streaming progress (batch dump at end)
 tarn run --watch                       # re-run on file changes
 tarn run --parallel                    # run files in parallel
 tarn list --tag smoke                  # inspect matching tests without running them
@@ -850,6 +852,8 @@ tarn completions <SHELL>           Generate shell completions
 | `--var <KEY=VALUE>` | Override env variables (repeatable) |
 | `--env <NAME>` | Load `tarn.env.{name}.yaml` |
 | `-v, --verbose` | Print full request/response for every step |
+| `--only-failed` | Show only failed tests and steps (summary counts stay accurate) |
+| `--no-progress` | Disable streaming progress output; print the final report in one batch |
 | `--dry-run` | Show interpolated requests without sending |
 | `-w, --watch` | Re-run on file changes |
 | `--parallel` | Run test files in parallel |
@@ -874,9 +878,25 @@ tarn run --watch                                # re-run on changes
 tarn run --parallel --jobs 4                    # parallel execution
 tarn run -v                                     # verbose
 tarn run --dry-run                              # preview only
+tarn run --only-failed                          # hide passing tests, show failures only
+tarn run --no-progress                          # disable streaming, batch dump at end
+tarn run --only-failed --format json            # CI-friendly: only failed items in JSON
 tarn fmt tests/                                  # rewrite a directory in place
 tarn fmt tests/auth.tarn.yaml --check            # CI-style formatting check
 ```
+
+### Streaming Progress
+
+By default `tarn run` streams per-test output as each test finishes instead of dumping everything at the end. The behaviour adapts to how stdout is used:
+
+- **Sequential (default)** &mdash; each test is printed the moment it completes. You see progress live as the suite runs.
+- **Parallel (`--parallel`)** &mdash; each file is printed atomically when it completes, so output from concurrently running files never interleaves.
+- **Stdout is `human`** &mdash; streaming writes directly to stdout and the final emit prints only the summary line (no duplication).
+- **Stdout is a structured format** (`json`, `junit`, `tap`, `html`, `curl`) &mdash; progress streams to stderr so stdout stays pure and parseable.
+
+Pass `--no-progress` to disable streaming entirely and restore the old "batch at end" behaviour (useful for CI logs that already capture per-line timestamps).
+
+`--only-failed` works with both streaming and batch modes: passing tests and steps are omitted everywhere, but the final summary still reports total passed/failed counts.
 
 ### Exit Codes
 

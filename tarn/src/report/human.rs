@@ -1,30 +1,45 @@
-use crate::assert::types::{FileResult, RunResult, StepResult};
+use crate::assert::types::{FileResult, RunResult, StepResult, TestResult};
+use crate::model::RedactionConfig;
 use crate::report::redaction::sanitize_assertion;
+use crate::report::RenderOptions;
 use colored::Colorize;
 
 /// Render test results as colored human-readable output.
 pub fn render(result: &RunResult) -> String {
+    render_with_options(result, RenderOptions::default())
+}
+
+/// Render test results as colored human-readable output with the given options.
+pub fn render_with_options(result: &RunResult, opts: RenderOptions) -> String {
     let mut output = String::new();
 
     for file_result in &result.file_results {
-        render_file(&mut output, file_result);
+        if opts.only_failed && file_result.passed {
+            continue;
+        }
+        render_file(&mut output, file_result, opts);
     }
 
-    // Summary line
+    output.push_str(&render_summary(result));
+    output
+}
+
+/// Render the trailing summary line (with a leading newline) for a run result.
+pub fn render_summary(result: &RunResult) -> String {
     let passed = result.passed_steps();
     let failed = result.failed_steps();
     let duration = result.duration_ms;
 
-    output.push('\n');
+    let mut out = String::from("\n");
     if failed == 0 {
-        output.push_str(&format!(
+        out.push_str(&format!(
             " {} {} passed ({}ms)\n",
             "Results:".bold(),
             passed.to_string().green(),
             duration
         ));
     } else {
-        output.push_str(&format!(
+        out.push_str(&format!(
             " {} {} passed, {} failed ({}ms)\n",
             "Results:".bold(),
             passed.to_string().green(),
@@ -32,50 +47,131 @@ pub fn render(result: &RunResult) -> String {
             duration
         ));
     }
-
-    output
+    out
 }
 
-fn render_file(output: &mut String, file_result: &FileResult) {
-    output.push_str(&format!(
+/// Render the file header line (the `TARN Running <path>` banner plus file name).
+pub fn render_file_header(file_result: &FileResult) -> String {
+    render_file_header_parts(&file_result.file, &file_result.name)
+}
+
+/// Render a file header from its raw parts. Used by progress reporters that
+/// don't yet have a `FileResult` struct built (e.g. streaming before tests run).
+pub fn render_file_header_parts(file_path: &str, file_name: &str) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
         "\n {} Running {}\n\n",
         "TARN".bold().white().on_blue(),
-        file_result.file.dimmed()
+        file_path.dimmed()
     ));
-
-    output.push_str(&format!(" {} {}\n", "●".bold(), file_result.name.bold()));
-
-    // Setup
-    if !file_result.setup_results.is_empty() {
-        output.push_str(&format!("\n   {}\n", "Setup".dimmed()));
-        for step in &file_result.setup_results {
-            render_step(output, step, file_result);
-        }
-    }
-
-    // Tests
-    for test in &file_result.test_results {
-        output.push('\n');
-        if let Some(ref desc) = test.description {
-            output.push_str(&format!("   {} — {}\n", test.name.bold(), desc.dimmed()));
-        } else {
-            output.push_str(&format!("   {}\n", test.name.bold()));
-        }
-        for step in &test.step_results {
-            render_step(output, step, file_result);
-        }
-    }
-
-    // Teardown
-    if !file_result.teardown_results.is_empty() {
-        output.push_str(&format!("\n   {}\n", "Teardown".dimmed()));
-        for step in &file_result.teardown_results {
-            render_step(output, step, file_result);
-        }
-    }
+    out.push_str(&format!(" {} {}\n", "●".bold(), file_name.bold()));
+    out
 }
 
-fn render_step(output: &mut String, step: &StepResult, file_result: &FileResult) {
+/// Render the setup block if it contains any (filtered) steps to display.
+pub fn render_setup_block(
+    setup_results: &[StepResult],
+    redaction: &RedactionConfig,
+    redacted_values: &[String],
+    opts: RenderOptions,
+) -> String {
+    let has_visible = setup_results
+        .iter()
+        .any(|s| !(opts.only_failed && s.passed));
+    if !has_visible {
+        return String::new();
+    }
+    let mut out = String::new();
+    out.push_str(&format!("\n   {}\n", "Setup".dimmed()));
+    for step in setup_results {
+        if opts.only_failed && step.passed {
+            continue;
+        }
+        render_step_into(&mut out, step, redaction, redacted_values);
+    }
+    out
+}
+
+/// Render a single test group block (header + steps).
+pub fn render_test_block(
+    test: &TestResult,
+    redaction: &RedactionConfig,
+    redacted_values: &[String],
+    opts: RenderOptions,
+) -> String {
+    if opts.only_failed && test.passed {
+        return String::new();
+    }
+    let mut out = String::new();
+    out.push('\n');
+    if let Some(ref desc) = test.description {
+        out.push_str(&format!("   {} — {}\n", test.name.bold(), desc.dimmed()));
+    } else {
+        out.push_str(&format!("   {}\n", test.name.bold()));
+    }
+    for step in &test.step_results {
+        if opts.only_failed && step.passed {
+            continue;
+        }
+        render_step_into(&mut out, step, redaction, redacted_values);
+    }
+    out
+}
+
+/// Render the teardown block if it contains any (filtered) steps to display.
+pub fn render_teardown_block(
+    teardown_results: &[StepResult],
+    redaction: &RedactionConfig,
+    redacted_values: &[String],
+    opts: RenderOptions,
+) -> String {
+    let has_visible = teardown_results
+        .iter()
+        .any(|s| !(opts.only_failed && s.passed));
+    if !has_visible {
+        return String::new();
+    }
+    let mut out = String::new();
+    out.push_str(&format!("\n   {}\n", "Teardown".dimmed()));
+    for step in teardown_results {
+        if opts.only_failed && step.passed {
+            continue;
+        }
+        render_step_into(&mut out, step, redaction, redacted_values);
+    }
+    out
+}
+
+fn render_file(output: &mut String, file_result: &FileResult, opts: RenderOptions) {
+    output.push_str(&render_file_header(file_result));
+    output.push_str(&render_setup_block(
+        &file_result.setup_results,
+        &file_result.redaction,
+        &file_result.redacted_values,
+        opts,
+    ));
+    for test in &file_result.test_results {
+        output.push_str(&render_test_block(
+            test,
+            &file_result.redaction,
+            &file_result.redacted_values,
+            opts,
+        ));
+    }
+    output.push_str(&render_teardown_block(
+        &file_result.teardown_results,
+        &file_result.redaction,
+        &file_result.redacted_values,
+        opts,
+    ));
+}
+
+fn render_step_into(
+    output: &mut String,
+    step: &StepResult,
+    redaction: &RedactionConfig,
+    redacted_values: &[String],
+) {
     if step.passed {
         output.push_str(&format!(
             "   {} {} ({}ms)\n",
@@ -93,11 +189,7 @@ fn render_step(output: &mut String, step: &StepResult, file_result: &FileResult)
         // Show failure details
         let failures = step.failures();
         for (i, failure) in failures.iter().enumerate() {
-            let failure = sanitize_assertion(
-                failure,
-                &file_result.redaction,
-                &file_result.redacted_values,
-            );
+            let failure = sanitize_assertion(failure, redaction, redacted_values);
             let connector = if i == failures.len() - 1 {
                 "└─"
             } else {

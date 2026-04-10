@@ -11,6 +11,7 @@ use crate::model::{
     Assertion, AuthConfig, HttpTransportConfig, PollConfig, RedactionConfig, Step, StepCookies,
     TestFile,
 };
+use crate::report::progress::{ProgressReporter, ReportContext};
 use crate::scripting;
 use base64::Engine;
 use indexmap::IndexMap;
@@ -62,10 +63,12 @@ pub fn run_file(
         tag_filter,
         opts,
         &mut cookie_jars,
+        None,
     )
 }
 
 /// Run a single test file with an externally managed cookie jar set.
+#[allow(clippy::too_many_arguments)]
 pub fn run_file_with_cookie_jars(
     test_file: &TestFile,
     file_path: &str,
@@ -73,6 +76,7 @@ pub fn run_file_with_cookie_jars(
     tag_filter: &[String],
     opts: &RunOptions,
     cookie_jars: &mut HashMap<String, CookieJar>,
+    progress: Option<&(dyn ProgressReporter + Send + Sync)>,
 ) -> Result<FileResult, TarnError> {
     let start = Instant::now();
     let client = http::HttpClient::new(&opts.http)?;
@@ -114,6 +118,10 @@ pub fn run_file_with_cookie_jars(
         .unwrap_or(Path::new("."))
         .to_path_buf();
 
+    if let Some(p) = progress {
+        p.file_started(file_path, &test_file.name);
+    }
+
     // Run setup steps
     let setup_results = run_steps(
         &test_file.setup,
@@ -129,6 +137,15 @@ pub fn run_file_with_cookie_jars(
         &base_dir,
     )?;
     let setup_failed = setup_results.iter().any(|s| !s.passed);
+
+    if let Some(p) = progress {
+        let snapshot: Vec<String> = redacted_values.iter().cloned().collect();
+        let ctx = ReportContext {
+            redaction: &redaction,
+            redacted_values: &snapshot,
+        };
+        p.setup_finished(&setup_results, &ctx);
+    }
 
     let mut test_results = Vec::new();
 
@@ -151,14 +168,23 @@ pub fn run_file_with_cookie_jars(
             )?;
             let passed = step_results.iter().all(|s| s.passed);
             let duration_ms = step_results.iter().map(|s| s.duration_ms).sum();
-            test_results.push(TestResult {
+            let test_result = TestResult {
                 name: test_file.name.clone(),
                 description: test_file.description.clone(),
                 passed,
                 duration_ms,
                 step_results,
                 captures: step_captures.clone(),
-            });
+            };
+            if let Some(p) = progress {
+                let snapshot: Vec<String> = redacted_values.iter().cloned().collect();
+                let ctx = ReportContext {
+                    redaction: &redaction,
+                    redacted_values: &snapshot,
+                };
+                p.test_finished(&test_result, &ctx);
+            }
+            test_results.push(test_result);
         }
 
         // Full format: named test groups (with tag filtering)
@@ -193,14 +219,23 @@ pub fn run_file_with_cookie_jars(
             )?;
             let passed = step_results.iter().all(|s| s.passed);
             let duration_ms = step_results.iter().map(|s| s.duration_ms).sum();
-            test_results.push(TestResult {
+            let test_result = TestResult {
                 name: name.clone(),
                 description: test_group.description.clone(),
                 passed,
                 duration_ms,
                 step_results,
                 captures: test_captures.clone(),
-            });
+            };
+            if let Some(p) = progress {
+                let snapshot: Vec<String> = redacted_values.iter().cloned().collect();
+                let ctx = ReportContext {
+                    redaction: &redaction,
+                    redacted_values: &snapshot,
+                };
+                p.test_finished(&test_result, &ctx);
+            }
+            test_results.push(test_result);
         }
     }
 
@@ -219,11 +254,20 @@ pub fn run_file_with_cookie_jars(
         &base_dir,
     )?;
 
+    if let Some(p) = progress {
+        let snapshot: Vec<String> = redacted_values.iter().cloned().collect();
+        let ctx = ReportContext {
+            redaction: &redaction,
+            redacted_values: &snapshot,
+        };
+        p.teardown_finished(&teardown_results, &ctx);
+    }
+
     let all_passed = !setup_failed
         && test_results.iter().all(|t| t.passed)
         && teardown_results.iter().all(|s| s.passed);
 
-    Ok(FileResult {
+    let file_result = FileResult {
         file: file_path.to_string(),
         name: test_file.name.clone(),
         passed: all_passed,
@@ -233,7 +277,13 @@ pub fn run_file_with_cookie_jars(
         setup_results,
         test_results,
         teardown_results,
-    })
+    };
+
+    if let Some(p) = progress {
+        p.file_finished(&file_result);
+    }
+
+    Ok(file_result)
 }
 
 /// Run a sequence of steps, accumulating captures.

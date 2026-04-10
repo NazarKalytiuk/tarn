@@ -15,7 +15,8 @@ use tarn::model::{HttpTransportConfig, HttpVersionPreference, TestFile};
 use tarn::model::Defaults;
 use tarn::parser;
 use tarn::report::json::JsonOutputMode;
-use tarn::report::{self, OutputFormat, OutputTarget};
+use tarn::report::progress::{HumanProgress, ProgressMode, ProgressReporter};
+use tarn::report::{self, OutputFormat, OutputTarget, RenderOptions};
 use tarn::runner;
 
 #[derive(Parser)]
@@ -55,6 +56,14 @@ enum Commands {
         /// Print full request/response for every step
         #[arg(short, long)]
         verbose: bool,
+
+        /// Show only failed tests and steps in the output
+        #[arg(long = "only-failed")]
+        only_failed: bool,
+
+        /// Disable streaming progress output (print the final report in one batch)
+        #[arg(long = "no-progress")]
+        no_progress: bool,
 
         /// Show interpolated requests without sending them
         #[arg(long)]
@@ -265,6 +274,8 @@ fn main() {
             vars,
             env_name,
             verbose,
+            only_failed,
+            no_progress,
             dry_run,
             watch,
             parallel,
@@ -286,6 +297,8 @@ fn main() {
             env_name.as_deref(),
             tag.as_deref(),
             verbose,
+            only_failed,
+            no_progress,
             dry_run,
             watch,
             parallel,
@@ -374,6 +387,8 @@ fn run_command(
     env_name: Option<&str>,
     tag: Option<&str>,
     verbose: bool,
+    only_failed: bool,
+    no_progress: bool,
     dry_run: bool,
     watch: bool,
     parallel: bool,
@@ -441,6 +456,8 @@ fn run_command(
         return 2;
     }
 
+    let render_opts = RenderOptions { only_failed };
+
     // Build the run closure (used by both normal and watch mode)
     let do_run = |run_files: &[String]| {
         execute_run(
@@ -451,6 +468,8 @@ fn run_command(
             &run_opts,
             &output_targets,
             json_output_mode,
+            render_opts,
+            no_progress,
             cookie_jar_path,
             effective_parallel,
             jobs,
@@ -473,14 +492,38 @@ fn execute_run(
     run_opts: &runner::RunOptions,
     output_targets: &[OutputTarget],
     json_output_mode: JsonOutputMode,
+    render_opts: RenderOptions,
+    no_progress: bool,
     cookie_jar_path: Option<&str>,
     parallel: bool,
     jobs: Option<usize>,
 ) -> i32 {
     let start = std::time::Instant::now();
 
+    let human_on_stdout = output_targets.iter().any(|t| {
+        matches!(t.format, OutputFormat::Human) && t.writes_to_stdout() && t.path.is_none()
+    });
+
+    let progress = if no_progress {
+        None
+    } else {
+        build_progress_reporter(parallel, human_on_stdout, render_opts)
+    };
+    let streamed_human_to_stdout = progress.is_some() && human_on_stdout;
+    let progress_ref: Option<&(dyn ProgressReporter + Send + Sync)> = progress
+        .as_ref()
+        .map(|p| p.as_ref() as &(dyn ProgressReporter + Send + Sync));
+
     let file_results = if parallel {
-        run_files_parallel(files, cli_vars, env_name, tag_filter, run_opts, jobs)
+        run_files_parallel(
+            files,
+            cli_vars,
+            env_name,
+            tag_filter,
+            run_opts,
+            jobs,
+            progress_ref,
+        )
     } else {
         run_files_sequential(
             files,
@@ -489,6 +532,7 @@ fn execute_run(
             tag_filter,
             run_opts,
             cookie_jar_path,
+            progress_ref,
         )
     };
 
@@ -505,12 +549,40 @@ fn execute_run(
         duration_ms: start.elapsed().as_millis() as u64,
     };
 
-    if let Err(e) = emit_run_outputs(&run_result, output_targets, json_output_mode) {
+    if let Err(e) = emit_run_outputs(
+        &run_result,
+        output_targets,
+        json_output_mode,
+        render_opts,
+        streamed_human_to_stdout,
+    ) {
         eprintln!("Error: {}", e);
         return 3;
     }
 
     run_result_exit_code(&run_result)
+}
+
+/// Build the appropriate streaming progress reporter based on mode and which
+/// format owns stdout. When human is the stdout target, we stream to stdout so
+/// the user sees live output; otherwise we stream to stderr to keep stdout clean
+/// for structured formats.
+fn build_progress_reporter(
+    parallel: bool,
+    human_on_stdout: bool,
+    render_opts: RenderOptions,
+) -> Option<Box<dyn ProgressReporter + Send + Sync>> {
+    let writer: Box<dyn std::io::Write + Send> = if human_on_stdout {
+        Box::new(std::io::stdout())
+    } else {
+        Box::new(std::io::stderr())
+    };
+    let mode = if parallel {
+        ProgressMode::Parallel
+    } else {
+        ProgressMode::Sequential
+    };
+    Some(Box::new(HumanProgress::new(writer, render_opts, mode)))
 }
 
 fn parse_output_targets(specs: &[String]) -> Result<Vec<OutputTarget>, String> {
@@ -537,13 +609,21 @@ fn emit_run_outputs(
     run_result: &RunResult,
     output_targets: &[OutputTarget],
     json_output_mode: JsonOutputMode,
+    render_opts: RenderOptions,
+    streamed_human_to_stdout: bool,
 ) -> Result<(), String> {
     for target in output_targets {
+        let is_stdout_human = matches!(target.format, OutputFormat::Human)
+            && target.writes_to_stdout()
+            && target.path.is_none();
         let output = match target.format {
             OutputFormat::Json => {
-                tarn::report::json::render_with_mode(run_result, json_output_mode)
+                tarn::report::json::render_with_options(run_result, json_output_mode, render_opts)
             }
-            _ => report::render(run_result, target.format),
+            OutputFormat::Human if is_stdout_human && streamed_human_to_stdout => {
+                tarn::report::human::render_summary(run_result)
+            }
+            _ => report::render_with_options(run_result, target.format, render_opts),
         };
         match target.format {
             OutputFormat::Html => {
@@ -664,6 +744,7 @@ fn open_report_in_browser(report_path: &Path) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_files_sequential(
     files: &[String],
     cli_vars: &[(String, String)],
@@ -671,6 +752,7 @@ fn run_files_sequential(
     tag_filter: &[String],
     run_opts: &runner::RunOptions,
     cookie_jar_path: Option<&str>,
+    progress: Option<&(dyn ProgressReporter + Send + Sync)>,
 ) -> Result<Vec<tarn::assert::types::FileResult>, (i32, String)> {
     let mut results = Vec::new();
     let mut cookie_jars = if let Some(path) = cookie_jar_path {
@@ -698,6 +780,7 @@ fn run_files_sequential(
             tag_filter,
             &file_run_opts,
             &mut cookie_jars,
+            progress,
         )
         .map_err(|e| (e.exit_code(), e.to_string()))?;
         results.push(result);
@@ -711,6 +794,7 @@ fn run_files_sequential(
     Ok(results)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_files_parallel(
     files: &[String],
     cli_vars: &[(String, String)],
@@ -718,6 +802,7 @@ fn run_files_parallel(
     tag_filter: &[String],
     run_opts: &runner::RunOptions,
     jobs: Option<usize>,
+    progress: Option<&(dyn ProgressReporter + Send + Sync)>,
 ) -> Result<Vec<tarn::assert::types::FileResult>, (i32, String)> {
     use rayon::prelude::*;
 
@@ -743,14 +828,18 @@ fn run_files_parallel(
             };
             let resolved_env = resolve_env_for_file(&test_file, path, env_name, cli_vars)
                 .map_err(|e| (e.exit_code(), e.to_string()))?;
-            runner::run_file(
+            let result = runner::run_file(
                 &test_file,
                 file_path,
                 &resolved_env,
                 tag_filter,
                 &file_run_opts,
             )
-            .map_err(|e| (e.exit_code(), e.to_string()))
+            .map_err(|e| (e.exit_code(), e.to_string()))?;
+            if let Some(p) = progress {
+                p.file_finished(&result);
+            }
+            Ok(result)
         })
         .collect::<Result<Vec<_>, _>>()?;
 
@@ -1684,6 +1773,8 @@ steps:
                 },
             ],
             JsonOutputMode::Verbose,
+            RenderOptions::default(),
+            false,
         )
         .unwrap();
 

@@ -2,6 +2,7 @@ use crate::assert::types::{ErrorCode, FileResult, RunResult, StepResult};
 use crate::report::redaction::{
     redact_headers, sanitize_assertion, sanitize_json, sanitize_string,
 };
+use crate::report::RenderOptions;
 use serde_json::{json, Value};
 use std::str::FromStr;
 
@@ -25,16 +26,31 @@ impl FromStr for JsonOutputMode {
 
 /// Render test results as structured JSON per spec.
 pub fn render(result: &RunResult) -> String {
-    render_with_mode(result, JsonOutputMode::Verbose)
+    render_with_options(result, JsonOutputMode::Verbose, RenderOptions::default())
 }
 
 pub fn render_with_mode(result: &RunResult, mode: JsonOutputMode) -> String {
+    render_with_options(result, mode, RenderOptions::default())
+}
+
+pub fn render_with_options(
+    result: &RunResult,
+    mode: JsonOutputMode,
+    opts: RenderOptions,
+) -> String {
+    let files_json: Vec<Value> = result
+        .file_results
+        .iter()
+        .filter(|file| !(opts.only_failed && file.passed))
+        .map(|file| render_file(file, mode, opts))
+        .collect();
+
     let output = json!({
         "schema_version": 1,
         "version": "1",
         "timestamp": chrono::Utc::now().to_rfc3339(),
         "duration_ms": result.duration_ms,
-        "files": result.file_results.iter().map(|file| render_file(file, mode)).collect::<Vec<_>>(),
+        "files": files_json,
         "summary": {
             "files": result.total_files(),
             "tests": result.file_results.iter().map(|f| f.test_results.len()).sum::<usize>(),
@@ -50,7 +66,46 @@ pub fn render_with_mode(result: &RunResult, mode: JsonOutputMode) -> String {
     serde_json::to_string_pretty(&output).unwrap()
 }
 
-fn render_file(file: &FileResult, mode: JsonOutputMode) -> Value {
+fn render_file(file: &FileResult, mode: JsonOutputMode, opts: RenderOptions) -> Value {
+    let setup_json: Vec<Value> = file
+        .setup_results
+        .iter()
+        .filter(|step| !(opts.only_failed && step.passed))
+        .map(|step| render_step(step, &file.redaction, &file.redacted_values, mode))
+        .collect();
+
+    let tests_json: Vec<Value> = file
+        .test_results
+        .iter()
+        .filter(|t| !(opts.only_failed && t.passed))
+        .map(|t| {
+            let steps_json: Vec<Value> = t
+                .step_results
+                .iter()
+                .filter(|step| !(opts.only_failed && step.passed))
+                .map(|step| render_step(step, &file.redaction, &file.redacted_values, mode))
+                .collect();
+            let mut test_obj = json!({
+                "name": t.name,
+                "description": t.description,
+                "status": if t.passed { "PASSED" } else { "FAILED" },
+                "duration_ms": t.duration_ms,
+                "steps": steps_json,
+            });
+            if !t.captures.is_empty() {
+                test_obj["captures"] = json!(t.captures);
+            }
+            test_obj
+        })
+        .collect();
+
+    let teardown_json: Vec<Value> = file
+        .teardown_results
+        .iter()
+        .filter(|step| !(opts.only_failed && step.passed))
+        .map(|step| render_step(step, &file.redaction, &file.redacted_values, mode))
+        .collect();
+
     json!({
         "file": file.file,
         "name": file.name,
@@ -61,21 +116,9 @@ fn render_file(file: &FileResult, mode: JsonOutputMode) -> Value {
             "passed": file.passed_steps(),
             "failed": file.failed_steps(),
         },
-        "setup": file.setup_results.iter().map(|step| render_step(step, &file.redaction, &file.redacted_values, mode)).collect::<Vec<_>>(),
-        "tests": file.test_results.iter().map(|t| {
-            let mut test_obj = json!({
-                "name": t.name,
-                "description": t.description,
-                "status": if t.passed { "PASSED" } else { "FAILED" },
-                "duration_ms": t.duration_ms,
-                "steps": t.step_results.iter().map(|step| render_step(step, &file.redaction, &file.redacted_values, mode)).collect::<Vec<_>>(),
-            });
-            if !t.captures.is_empty() {
-                test_obj["captures"] = json!(t.captures);
-            }
-            test_obj
-        }).collect::<Vec<_>>(),
-        "teardown": file.teardown_results.iter().map(|step| render_step(step, &file.redaction, &file.redacted_values, mode)).collect::<Vec<_>>(),
+        "setup": setup_json,
+        "tests": tests_json,
+        "teardown": teardown_json,
     })
 }
 
