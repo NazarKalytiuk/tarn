@@ -8,8 +8,8 @@ use crate::error::TarnError;
 use crate::http;
 use crate::interpolation::{self, Context};
 use crate::model::{
-    Assertion, AuthConfig, HttpTransportConfig, PollConfig, RedactionConfig, Step, StepCookies,
-    TestFile,
+    Assertion, AuthConfig, CookieMode, HttpTransportConfig, PollConfig, RedactionConfig, Step,
+    StepCookies, TestFile,
 };
 use crate::report::progress::{ProgressReporter, ReportContext};
 use crate::scripting;
@@ -29,6 +29,27 @@ pub struct RunOptions {
     pub dry_run: bool,
     /// Runtime HTTP transport settings.
     pub http: HttpTransportConfig,
+    /// CLI override that forces per-test cookie jar isolation regardless
+    /// of the file's declared `cookies:` mode. Used by the
+    /// `--cookie-jar-per-test` flag and the VS Code extension's subset runs.
+    pub cookie_jar_per_test: bool,
+}
+
+/// Name of the default cookie jar used when no `cookies: <name>` is set on a step.
+const DEFAULT_JAR_NAME: &str = "default";
+
+/// Resolve the effective cookie mode for a file run. CLI override wins over
+/// the file's declared mode. `Off` always wins over per-test because "off"
+/// means no jar activity at all, and there is nothing to reset.
+fn effective_cookie_mode(declared: Option<CookieMode>, cli_per_test: bool) -> CookieMode {
+    let base = declared.unwrap_or_default();
+    if base == CookieMode::Off {
+        return CookieMode::Off;
+    }
+    if cli_per_test {
+        return CookieMode::PerTest;
+    }
+    base
 }
 
 /// Check if a file or test matches tag filter (AND logic: all tags must be present).
@@ -127,12 +148,11 @@ pub fn run_file_with_cookie_jars(
     // Build interpolation context with resolved env
     let mut captures: HashMap<String, serde_json::Value> = HashMap::new();
 
-    // Cookie jars: enabled by default, disabled with `cookies: "off"`
-    let cookies_enabled = test_file
-        .cookies
-        .as_deref()
-        .map(|c| c != "off")
-        .unwrap_or(true);
+    // Cookie jars: enabled by default, disabled with `cookies: "off"`.
+    // `per-test` (file-level) or `--cookie-jar-per-test` (CLI override) clear
+    // the default jar between named tests; setup/teardown still share it.
+    let cookie_mode = effective_cookie_mode(test_file.cookies, opts.cookie_jar_per_test);
+    let cookies_enabled = cookie_mode != CookieMode::Off;
 
     // Resolve base directory for file paths (e.g., multipart file references)
     let base_dir = Path::new(file_path)
@@ -233,6 +253,13 @@ pub fn run_file_with_cookie_jars(
             // Skip tests that no selector matches.
             if !selector::any_matches_test(selectors, file_path, name) {
                 continue;
+            }
+
+            // Per-test cookie isolation: wipe the default jar before each
+            // named test runs so session state never leaks between tests.
+            // Named jars (multi-user scenarios) are intentionally preserved.
+            if cookie_mode == CookieMode::PerTest {
+                cookie_jars.remove(DEFAULT_JAR_NAME);
             }
 
             let selected_steps = filter_steps(&test_group.steps, selectors, file_path, name);
@@ -449,8 +476,8 @@ fn format_transport(transport: http::RequestTransportOptions) -> String {
 /// Returns None if cookies are disabled for this step, or the jar name.
 fn resolve_jar_name(step: &Step) -> Option<String> {
     match &step.cookies {
-        None => Some("default".to_string()),
-        Some(StepCookies::Enabled(true)) => Some("default".to_string()),
+        None => Some(DEFAULT_JAR_NAME.to_string()),
+        Some(StepCookies::Enabled(true)) => Some(DEFAULT_JAR_NAME.to_string()),
         Some(StepCookies::Enabled(false)) => None,
         Some(StepCookies::Named(name)) => Some(name.clone()),
     }
@@ -1699,6 +1726,40 @@ steps:
 "#;
         let tf: crate::model::TestFile = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(resolve_jar_name(&tf.steps[0]), Some("admin".to_string()));
+    }
+
+    // --- effective_cookie_mode ---
+
+    #[test]
+    fn effective_cookie_mode_default_is_auto() {
+        assert_eq!(effective_cookie_mode(None, false), CookieMode::Auto);
+    }
+
+    #[test]
+    fn effective_cookie_mode_off_file_beats_cli_per_test() {
+        // Explicit `cookies: off` in the file disables cookies entirely.
+        // The CLI --cookie-jar-per-test flag must not re-enable them.
+        assert_eq!(
+            effective_cookie_mode(Some(CookieMode::Off), true),
+            CookieMode::Off
+        );
+    }
+
+    #[test]
+    fn effective_cookie_mode_cli_upgrades_auto_to_per_test() {
+        assert_eq!(
+            effective_cookie_mode(Some(CookieMode::Auto), true),
+            CookieMode::PerTest
+        );
+        assert_eq!(effective_cookie_mode(None, true), CookieMode::PerTest);
+    }
+
+    #[test]
+    fn effective_cookie_mode_file_per_test_without_cli() {
+        assert_eq!(
+            effective_cookie_mode(Some(CookieMode::PerTest), false),
+            CookieMode::PerTest
+        );
     }
 
     #[test]

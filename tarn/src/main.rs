@@ -97,6 +97,11 @@ enum Commands {
         #[arg(long = "cookie-jar")]
         cookie_jar: Option<String>,
 
+        /// Reset the default cookie jar between named tests in each file.
+        /// Overrides the file's declared `cookies:` mode (except `off`).
+        #[arg(long = "cookie-jar-per-test")]
+        cookie_jar_per_test: bool,
+
         /// Explicit proxy URL for HTTP/HTTPS requests
         #[arg(long)]
         proxy: Option<String>,
@@ -299,6 +304,7 @@ fn main() {
             parallel,
             jobs,
             cookie_jar,
+            cookie_jar_per_test,
             proxy,
             no_proxy,
             cacert,
@@ -324,6 +330,7 @@ fn main() {
             parallel,
             jobs,
             cookie_jar.as_deref(),
+            cookie_jar_per_test,
             HttpTransportConfig {
                 proxy,
                 no_proxy,
@@ -416,6 +423,7 @@ fn run_command(
     parallel: bool,
     jobs: Option<usize>,
     cookie_jar_path: Option<&str>,
+    cookie_jar_per_test: bool,
     cli_http_transport: HttpTransportConfig,
 ) -> i32 {
     let project =
@@ -479,6 +487,7 @@ fn run_command(
         verbose,
         dry_run,
         http: cli_http_transport,
+        cookie_jar_per_test,
     };
     let effective_parallel = parallel || project.config.parallel;
 

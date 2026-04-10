@@ -52,6 +52,7 @@ pub fn tarn_run(params: &Value) -> Result<Value, String> {
         verbose: false,
         dry_run: false,
         http: HttpTransportConfig::default(),
+        cookie_jar_per_test: false,
     };
 
     let start = std::time::Instant::now();

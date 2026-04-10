@@ -174,7 +174,7 @@ The right strategy is:
 | T51 | Add `--select FILE::TEST::STEP` flag, repeatable, ANDs with `--tag`; enables run-test-at-cursor, rerun-failed, per-step curl export | 9 | M | - | `tarn/src/main.rs`, `tarn/src/runner.rs`, `tarn/tests/integration_test.rs` |
 | T52 | Add `tarn validate --format json` emitting `{files:[{file, valid, errors:[{message,line,column,path}]}]}` | 8 | S | - | `tarn/src/main.rs`, `tarn/src/parser.rs`, `schemas/v1/` |
 | T53 | Add NDJSON progress reporter behind `--ndjson` / `--format ndjson`; emits `file_started`, `step_finished`, `test_finished`, `file_finished`, `done`; co-exists with final JSON | 9 | S | - | `tarn/src/report/progress.rs`, `tarn/src/report/mod.rs`, `tarn/src/main.rs` |
-| T54 | Add `cookies: per-test` model option and `--cookie-jar-per-test` flag; resets jar between named tests within a file | 6 | M | - | `tarn/src/cookie.rs`, `tarn/src/model.rs`, `tarn/src/runner.rs` |
+| T54 | Add `cookies: per-test` model option and `--cookie-jar-per-test` flag; resets jar between named tests within a file **[shipped v0.4.1]** | 6 | M | - | `tarn/src/cookie.rs`, `tarn/src/model.rs`, `tarn/src/runner.rs` |
 | T55 | Add `location: {file, line, column}` to `StepResult` and `AssertionFailure`; optional field in `schemas/v1/report.json` | 8 | M | T52 | `tarn/src/assert/types.rs`, `tarn/src/parser.rs`, `tarn/src/runner.rs`, `schemas/v1/report.json` |
 | T56 | Add `tarn env --json` returning named environments, source files, and resolved variables with redaction applied | 6 | S | - | `tarn/src/main.rs`, `tarn/src/env.rs`, `tarn/src/config.rs` |
 | T57 | Add `tarn list --file PATH --format json` for scoped discovery of a single file | 5 | S | - | `tarn/src/main.rs`, `tarn/src/parser.rs` |

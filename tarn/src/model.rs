@@ -129,8 +129,42 @@ pub struct TestFile {
     #[serde(default)]
     pub steps: Vec<Step>,
 
-    /// Cookie handling mode: "auto" (default) or "off"
-    pub cookies: Option<String>,
+    /// Cookie handling mode: "auto" (default), "off", or "per-test"
+    #[serde(default)]
+    pub cookies: Option<CookieMode>,
+}
+
+/// File-level cookie handling mode.
+///
+/// - `Auto` (default) — single file-scoped jar shared across setup, tests, teardown.
+/// - `Off` — cookies disabled entirely for the file.
+/// - `PerTest` — the default jar is cleared between named tests so subset runs
+///   and flaky suites never see session state from a prior test. Setup and
+///   teardown still share the file-level jar. Named jars are unaffected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CookieMode {
+    #[default]
+    Auto,
+    Off,
+    PerTest,
+}
+
+impl<'de> Deserialize<'de> for CookieMode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        match value.as_str() {
+            "auto" => Ok(CookieMode::Auto),
+            "off" => Ok(CookieMode::Off),
+            "per-test" => Ok(CookieMode::PerTest),
+            other => Err(serde::de::Error::custom(format!(
+                "cookies must be \"auto\", \"off\", or \"per-test\" (got \"{}\")",
+                other
+            ))),
+        }
+    }
 }
 
 /// A named group of test steps.
@@ -1112,7 +1146,71 @@ steps:
       url: "http://localhost:3000"
 "#;
         let tf: TestFile = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(tf.cookies.as_deref(), Some("off"));
+        assert_eq!(tf.cookies, Some(CookieMode::Off));
+    }
+
+    #[test]
+    fn deserialize_cookies_auto() {
+        let yaml = r#"
+name: Auto cookies
+cookies: "auto"
+steps:
+  - name: test
+    request:
+      method: GET
+      url: "http://localhost:3000"
+"#;
+        let tf: TestFile = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(tf.cookies, Some(CookieMode::Auto));
+    }
+
+    #[test]
+    fn deserialize_cookies_per_test() {
+        let yaml = r#"
+name: Per-test cookies
+cookies: "per-test"
+tests:
+  login:
+    steps:
+      - name: test
+        request:
+          method: GET
+          url: "http://localhost:3000"
+"#;
+        let tf: TestFile = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(tf.cookies, Some(CookieMode::PerTest));
+    }
+
+    #[test]
+    fn deserialize_cookies_invalid_value_is_rejected() {
+        let yaml = r#"
+name: Bad cookies
+cookies: "sometimes"
+steps:
+  - name: test
+    request:
+      method: GET
+      url: "http://localhost:3000"
+"#;
+        let err = serde_yaml::from_str::<TestFile>(yaml).unwrap_err();
+        assert!(
+            err.to_string().contains("per-test"),
+            "error should mention the valid options, got: {err}"
+        );
+    }
+
+    #[test]
+    fn deserialize_cookies_default_is_none() {
+        let yaml = r#"
+name: Default cookies
+steps:
+  - name: test
+    request:
+      method: GET
+      url: "http://localhost:3000"
+"#;
+        let tf: TestFile = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(tf.cookies, None);
     }
 
     #[test]

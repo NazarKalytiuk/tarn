@@ -34,8 +34,8 @@
     },
     "cookies": {
       "type": "string",
-      "description": "Cookie handling mode: 'auto' (default) or 'off'",
-      "enum": ["auto", "off"],
+      "description": "Cookie handling mode: 'auto' (default), 'off' (no cookie jar), or 'per-test' (clear the default jar between named tests; named jars are preserved). The CLI flag --cookie-jar-per-test overrides this, except when the value is 'off'.",
+      "enum": ["auto", "off", "per-test"],
       "default": "auto"
     },
     "redaction": {

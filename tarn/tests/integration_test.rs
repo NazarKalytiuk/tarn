@@ -1510,6 +1510,196 @@ steps:
         .stdout(predicate::str::contains("2 passed"));
 }
 
+/// Build a named-test file that (1) sets a session cookie in test A and
+/// (2) asserts in test B that the session cookie is *absent*. The
+/// assertion only holds when the default cookie jar is reset between
+/// named tests.
+fn per_test_cookies_fixture(base_url: &str, mode_line: &str) -> String {
+    format!(
+        r#"
+name: Per-test cookie isolation
+{mode_line}
+tests:
+  login:
+    steps:
+      - name: Issue session cookie
+        request:
+          method: GET
+          url: "{base}/cookies/set"
+        assert:
+          status: 200
+          body:
+            "$.issued": true
+      - name: Same test still sees the cookie
+        request:
+          method: GET
+          url: "{base}/cookies/check"
+        assert:
+          status: 200
+          body:
+            "$.session": "abc123"
+  isolated:
+    steps:
+      - name: Second test must not see the login session
+        request:
+          method: GET
+          url: "{base}/cookies/check"
+        assert:
+          status: 200
+          body:
+            "$.session": null
+            "$.area": null
+"#,
+        base = base_url,
+        mode_line = mode_line,
+    )
+}
+
+#[test]
+fn cookies_leak_between_named_tests_by_default() {
+    // Baseline: without per-test mode the session cookie from `login`
+    // leaks into `isolated` and the isolation assertion fails. This
+    // proves the new mode is doing real work.
+    let server = DemoServer::start();
+    let dir = TempDir::new().unwrap();
+
+    let test_file = write_test_file(
+        &dir,
+        "cookies-default-leaks.tarn.yaml",
+        &per_test_cookies_fixture(&server.base_url(), ""),
+    );
+
+    tarn()
+        .args(["run", &test_file])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("1 passed").or(predicate::str::contains("failed")));
+}
+
+#[test]
+fn cookies_per_test_mode_isolates_named_tests() {
+    // `cookies: per-test` in the file clears the default jar between
+    // named tests, so the session set in `login` never reaches
+    // `isolated`. Both tests pass.
+    let server = DemoServer::start();
+    let dir = TempDir::new().unwrap();
+
+    let test_file = write_test_file(
+        &dir,
+        "cookies-per-test.tarn.yaml",
+        &per_test_cookies_fixture(&server.base_url(), "cookies: \"per-test\""),
+    );
+
+    tarn()
+        .args(["run", &test_file])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("3 passed"));
+}
+
+#[test]
+fn cookie_jar_per_test_cli_flag_overrides_file_default() {
+    // The `--cookie-jar-per-test` CLI flag must override a file that
+    // does not declare per-test mode.
+    let server = DemoServer::start();
+    let dir = TempDir::new().unwrap();
+
+    let test_file = write_test_file(
+        &dir,
+        "cookies-cli-per-test.tarn.yaml",
+        &per_test_cookies_fixture(&server.base_url(), ""),
+    );
+
+    tarn()
+        .args(["run", &test_file, "--cookie-jar-per-test"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("3 passed"));
+}
+
+#[test]
+fn cookies_off_wins_over_cookie_jar_per_test_cli_flag() {
+    // `cookies: "off"` is a hard disable and must not be silently
+    // re-enabled by --cookie-jar-per-test. With cookies off, the
+    // session is never captured, so the isolated test naturally sees
+    // no session cookie — the whole file passes.
+    let server = DemoServer::start();
+    let dir = TempDir::new().unwrap();
+
+    let test_file = write_test_file(
+        &dir,
+        "cookies-off-vs-cli.tarn.yaml",
+        &format!(
+            r#"
+name: Cookies off wins
+cookies: "off"
+tests:
+  login:
+    steps:
+      - name: Issue session cookie
+        request:
+          method: GET
+          url: "{}/cookies/set"
+        assert:
+          status: 200
+      - name: Cookies are off so nothing is seen
+        request:
+          method: GET
+          url: "{}/cookies/check"
+        assert:
+          status: 200
+          body:
+            "$.session": null
+  isolated:
+    steps:
+      - name: Second test also sees nothing
+        request:
+          method: GET
+          url: "{}/cookies/check"
+        assert:
+          status: 200
+          body:
+            "$.session": null
+"#,
+            server.base_url(),
+            server.base_url(),
+            server.base_url()
+        ),
+    );
+
+    tarn()
+        .args(["run", &test_file, "--cookie-jar-per-test"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("3 passed"));
+}
+
+#[test]
+fn cookies_per_test_rejects_invalid_mode() {
+    // An unknown cookies mode must be a parse-time validation error, not
+    // a silent fallback to auto. Guards future additions to the enum.
+    let dir = TempDir::new().unwrap();
+    let test_file = write_test_file(
+        &dir,
+        "cookies-invalid.tarn.yaml",
+        r#"
+name: Bad cookies value
+cookies: "sometimes"
+steps:
+  - name: noop
+    request:
+      method: GET
+      url: "http://127.0.0.1:1/"
+"#,
+    );
+
+    tarn()
+        .args(["run", &test_file])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("per-test"));
+}
+
 #[test]
 fn timeout_failures_are_reported_in_json() {
     let server = DemoServer::start();

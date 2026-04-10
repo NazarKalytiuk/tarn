@@ -523,6 +523,14 @@ Disable automatic cookies per file:
 cookies: "off"
 ```
 
+Or reset the default jar between named tests in a file so IDE subset runs and flaky suites never see session state from a prior test. Setup and teardown still share the file-level jar. Named jars (multi-user scenarios) are untouched.
+
+```yaml
+cookies: "per-test"
+```
+
+The `--cookie-jar-per-test` CLI flag forces per-test isolation regardless of the file's declared mode (except when the file sets `cookies: "off"`, which always wins).
+
 ## Auth
 
 Tarn supports first-class `bearer` and `basic` auth helpers, while keeping explicit `Authorization` headers as the escape hatch:
