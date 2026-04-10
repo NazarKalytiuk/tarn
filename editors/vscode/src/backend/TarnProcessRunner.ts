@@ -7,6 +7,7 @@ import * as vscode from "vscode";
 import { getOutputChannel } from "../outputChannel";
 import { formatCommandForLog } from "../util/shellEscape";
 import {
+  parseBenchResult,
   parseEnvReport,
   parseReport,
   parseValidateReport,
@@ -14,6 +15,8 @@ import {
   type ValidateReport,
 } from "../util/schemaGuards";
 import type {
+  BenchOptions,
+  BenchOutcome,
   HtmlReportOptions,
   HtmlReportOutcome,
   NdjsonEvent,
@@ -123,6 +126,57 @@ export class TarnProcessRunner implements TarnBackend {
   ): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
     const collected = await this.spawnAndCollect(["init"], cwd, token);
     return {
+      exitCode: collected.exitCode,
+      stdout: collected.stdout,
+      stderr: collected.stderr,
+    };
+  }
+
+  async runBench(options: BenchOptions): Promise<BenchOutcome> {
+    const args: string[] = [
+      "bench",
+      options.file,
+      "-n",
+      String(options.requests),
+      "-c",
+      String(options.concurrency),
+      "--step",
+      String(options.stepIndex),
+      "--format",
+      "json",
+    ];
+    if (options.rampUp && options.rampUp.trim().length > 0) {
+      args.push("--ramp-up", options.rampUp.trim());
+    }
+    if (options.environment) {
+      args.push("--env", options.environment);
+    }
+    if (options.vars) {
+      for (const [key, value] of Object.entries(options.vars)) {
+        args.push("--var", `${key}=${value}`);
+      }
+    }
+    const collected = await this.spawnAndCollect(args, options.cwd, options.token);
+    if (options.token.isCancellationRequested || collected.timedOut) {
+      return {
+        result: undefined,
+        exitCode: collected.exitCode,
+        stdout: collected.stdout,
+        stderr: collected.stderr,
+      };
+    }
+    let result: BenchOutcome["result"] = undefined;
+    if (collected.stdout.trim().length > 0) {
+      try {
+        result = parseBenchResult(collected.stdout);
+      } catch (err) {
+        getOutputChannel().appendLine(
+          `[tarn] failed to parse bench JSON (exit ${collected.exitCode}): ${String(err)}`,
+        );
+      }
+    }
+    return {
+      result,
       exitCode: collected.exitCode,
       stdout: collected.stdout,
       stderr: collected.stderr,

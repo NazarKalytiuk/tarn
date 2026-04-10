@@ -1,5 +1,92 @@
 # Changelog
 
+## 0.15.0 — Phase 4: Bench runner wizard
+
+Fifth Phase 4 feature: `Tarn: Benchmark Step…` wraps the existing
+`tarn bench` subcommand in an interactive quick-pick wizard and
+renders the resulting JSON summary in a webview panel.
+
+### Added
+
+- **`tarn.benchStep`** command (NAZ-274) wired into the command
+  palette and the `resourceLangId == tarn` editor title / context
+  menu. Uses `$(dashboard)` codicon for visibility.
+- **Bench wizard** (`src/commands/bench.ts`). Drives the user
+  through four prompts:
+  1. Quick-pick of every benchmarkable step in the active file
+     (setup / test / teardown sections, labelled
+     `"test_name / step_name"`). The last-selected step is hoisted
+     to the top for one-click re-runs.
+  2. Input box for request count (default 100, validated as a
+     positive integer).
+  3. Input box for concurrency (default 10, validated as a
+     positive integer).
+  4. Input box for optional ramp-up duration, validated against
+     `^\d+(ms|s|m)?$` so only Tarn-recognized durations are
+     accepted.
+  The wizard persists every setting per-file in
+  `context.workspaceState` under the `tarn.benchSettings:<path>`
+  key, so repeat benchmarks require pressing Enter four times.
+- **`TarnBackend.runBench`** and `TarnProcessRunner` implementation.
+  Builds `tarn bench <file> -n N -c C --step IDX --format json
+  [--ramp-up X] [--env E] [--var k=v …]`, parses stdout through a
+  new `benchResultSchema` zod guard, and surfaces parse failures
+  via the output channel rather than crashing the wizard.
+- **`benchResultSchema`** in `src/util/schemaGuards.ts`. Mirrors
+  the shape of `tarn bench --format json`: `step_name`, `method`,
+  `url`, `concurrency`, `ramp_up_ms`, `total_requests`,
+  `successful`, `failed`, `error_rate`, `total_duration_ms`,
+  `throughput_rps`, per-phase `latency` and `timings` stats,
+  `status_codes`, `errors`, `gates`, and `passed_gates`.
+- **`BenchRunnerPanel`** webview (`src/views/BenchRunnerPanel.ts`).
+  Singleton side-column panel with four sections:
+  - *Summary grid* — throughput, totals, error rate, wall-clock,
+    concurrency, and a gate outcome chip tinted green/red.
+  - *Latency bars* — CSS-width bars for min / mean / p50 / p95 /
+    p99 / max with a shared horizontal scale so relative spread is
+    obvious at a glance. Std-dev surfaces below the bars.
+  - *Status codes + errors + gates* — table and bullet list forms.
+  - *Raw JSON* — pretty-printed, HTML-escaped `<pre>` block for
+    copy-paste.
+- **Extension host API**: `testing.showBenchResult` and
+  `testing.lastBenchContext` so integration tests can drive the
+  panel without spawning `tarn bench`.
+
+### Changed
+
+- **`CommandDeps`** now carries `benchRunnerPanel` and
+  `workspaceState` so the bench command can open the panel and
+  persist per-file settings through the standard command wiring.
+
+### Deviations from the ticket
+
+- **No chart.js dependency.** `tarn bench --format json` only emits
+  aggregate percentiles (not histogram buckets), so there's no
+  chartable data beyond p50/p95/p99. Four CSS-width bars render
+  that data more honestly and skip a ~200 KB external asset, a
+  CSP/`localResourceRoots` wiring round-trip, and a dead
+  `media/webview/chart.js` path.
+- **No live streaming progress.** `tarn bench` doesn't emit NDJSON
+  while running; the panel opens once the final JSON summary is in
+  hand. Users see a `withProgress` notification during the run.
+
+### Tests
+
+- **Unit** (`tests/unit/benchRunnerPanel.test.ts`, 13 tests).
+  Covers `benchResultSchema` (real tarn output, minimal shape,
+  rejection of malformed latency), `percentWidth` (scaling, zero/
+  negative max, clamping, tiny-value floor), formatters
+  (`formatNumber`, `formatPercent`, `formatDuration`), `renderBar`
+  (label/value emission, HTML escaping), and `buildSettingsKey`
+  (per-file namespacing).
+- **Integration** (`tests/integration/suite/benchRunner.test.ts`,
+  3 tests). Registers the command, primes the panel via
+  `testing.showBenchResult` with a synthetic `BenchRunContext`,
+  and asserts that repeat `show` calls replace the previous
+  context.
+
+Total: 191 unit tests, 63 integration tests passing.
+
 ## 0.14.0 — Phase 4: HTML report webview
 
 Fourth Phase 4 feature: `Tarn: Open HTML Report` now generates a

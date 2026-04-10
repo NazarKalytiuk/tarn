@@ -1,5 +1,10 @@
 import * as vscode from "vscode";
-import type { EnvReport, Report, ValidateReport } from "../util/schemaGuards";
+import type {
+  BenchResult,
+  EnvReport,
+  Report,
+  ValidateReport,
+} from "../util/schemaGuards";
 
 export interface RunOptions {
   files: string[];
@@ -74,6 +79,27 @@ export type NdjsonEvent =
       };
     };
 
+export interface BenchOptions {
+  /** Workspace-relative path to the .tarn.yaml file to benchmark. */
+  file: string;
+  cwd: string;
+  stepIndex: number;
+  requests: number;
+  concurrency: number;
+  /** Ramp-up duration in Tarn format (e.g. "5s", "500ms"). */
+  rampUp?: string;
+  environment?: string | null;
+  vars?: Record<string, string>;
+  token: vscode.CancellationToken;
+}
+
+export interface BenchOutcome {
+  result: BenchResult | undefined;
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+}
+
 export interface HtmlReportOptions {
   files: string[];
   cwd: string;
@@ -93,6 +119,7 @@ export interface HtmlReportOutcome {
 export interface TarnBackend {
   run(options: RunOptions): Promise<RunOutcome>;
   runHtmlReport(options: HtmlReportOptions): Promise<HtmlReportOutcome>;
+  runBench(options: BenchOptions): Promise<BenchOutcome>;
   validate(
     files: string[],
     cwd: string,

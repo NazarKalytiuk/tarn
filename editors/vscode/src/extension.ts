@@ -28,6 +28,7 @@ import { EnvironmentsView } from "./views/EnvironmentsView";
 import { CapturesInspector } from "./views/CapturesInspector";
 import { FixPlanView } from "./views/FixPlanView";
 import { ReportWebview } from "./views/ReportWebview";
+import { BenchRunnerPanel } from "./views/BenchRunnerPanel";
 
 export interface TarnExtensionApi {
   readonly testControllerId: string;
@@ -63,6 +64,12 @@ export interface TarnExtensionApi {
     >;
     readonly showReportHtml: (html: string) => void;
     readonly sendReportMessage: (message: unknown) => Promise<boolean>;
+    readonly showBenchResult: (
+      context: import("./views/BenchRunnerPanel").BenchRunContext,
+    ) => void;
+    readonly lastBenchContext: () =>
+      | import("./views/BenchRunnerPanel").BenchRunContext
+      | undefined;
   };
 }
 
@@ -114,6 +121,9 @@ export async function activate(
 
   const reportWebview = new ReportWebview(index);
   context.subscriptions.push(reportWebview);
+
+  const benchRunnerPanel = new BenchRunnerPanel();
+  context.subscriptions.push(benchRunnerPanel);
 
   const tarnController = createTarnTestController(
     index,
@@ -200,6 +210,8 @@ export async function activate(
       capturesInspector,
       fixPlanView,
       reportWebview,
+      benchRunnerPanel,
+      workspaceState: context.workspaceState,
       refreshStatusBar: () => statusBar.refresh(),
       refreshHistoryView: () => historyTree.refresh(),
       refreshEnvironmentsView: () => environmentsView.refresh(),
@@ -244,6 +256,7 @@ export async function activate(
       "tarn.toggleHideCaptures",
       "tarn.jumpToFailure",
       "tarn.openHtmlReport",
+      "tarn.benchStep",
     ],
     testing: {
       backend,
@@ -287,6 +300,8 @@ export async function activate(
       fixPlanSnapshot: () => fixPlanView.snapshot(),
       showReportHtml: (html) => reportWebview.show(html),
       sendReportMessage: (message) => reportWebview.handleMessage(message),
+      showBenchResult: (context) => benchRunnerPanel.show(context),
+      lastBenchContext: () => benchRunnerPanel.lastContext(),
     },
   };
 }

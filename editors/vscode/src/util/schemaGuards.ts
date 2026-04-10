@@ -151,6 +151,60 @@ export function parseValidateReport(raw: string): ValidateReport {
   return validateReportSchema.parse(json);
 }
 
+const latencyStatsSchema = z.object({
+  min_ms: z.number(),
+  max_ms: z.number(),
+  mean_ms: z.number(),
+  median_ms: z.number(),
+  p95_ms: z.number(),
+  p99_ms: z.number(),
+  stdev_ms: z.number(),
+});
+
+const benchGateSchema = z.object({
+  name: z.string(),
+  threshold: z.unknown().optional(),
+  value: z.unknown().optional(),
+  passed: z.boolean(),
+  message: z.string().optional(),
+});
+
+export const benchResultSchema = z.object({
+  step_name: z.string(),
+  method: z.string(),
+  url: z.string(),
+  concurrency: z.number(),
+  ramp_up_ms: z.number().nullable().optional(),
+  total_requests: z.number(),
+  successful: z.number(),
+  failed: z.number(),
+  error_rate: z.number(),
+  total_duration_ms: z.number(),
+  throughput_rps: z.number(),
+  latency: latencyStatsSchema,
+  timings: z
+    .object({
+      total: latencyStatsSchema.optional(),
+      ttfb: latencyStatsSchema.optional(),
+      body_read: latencyStatsSchema.optional(),
+      connect: latencyStatsSchema.nullable().optional(),
+      tls: latencyStatsSchema.nullable().optional(),
+    })
+    .optional(),
+  status_codes: z.record(z.number()).optional(),
+  errors: z.array(z.string()).optional(),
+  gates: z.array(benchGateSchema).optional(),
+  passed_gates: z.boolean().optional(),
+});
+
+export type BenchResult = z.infer<typeof benchResultSchema>;
+export type BenchGate = z.infer<typeof benchGateSchema>;
+
+export function parseBenchResult(raw: string): BenchResult {
+  const json = JSON.parse(raw);
+  return benchResultSchema.parse(json);
+}
+
 const envEntrySchema = z.object({
   name: z.string(),
   source_file: z.string(),

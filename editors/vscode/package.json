@@ -2,7 +2,7 @@
   "name": "tarn-vscode",
   "displayName": "Tarn",
   "description": "Test Explorer, CodeLens, and schema-aware authoring for Tarn API test files.",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "publisher": "nazarkalytiuk",
   "license": "MIT",
   "repository": {
@@ -209,6 +209,12 @@
         "title": "Tarn: Open HTML Report",
         "category": "Tarn",
         "icon": "$(graph)"
+      },
+      {
+        "command": "tarn.benchStep",
+        "title": "Tarn: Benchmark Step…",
+        "category": "Tarn",
+        "icon": "$(dashboard)"
       }
     ],
     "viewsContainers": {
@@ -349,6 +355,10 @@
         },
         {
           "command": "tarn.openHtmlReport",
+          "when": "resourceLangId == tarn"
+        },
+        {
+          "command": "tarn.benchStep",
           "when": "resourceLangId == tarn"
         }
       ],

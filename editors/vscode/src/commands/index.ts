@@ -12,6 +12,8 @@ import type { CapturesInspector } from "../views/CapturesInspector";
 import type { FixPlanView } from "../views/FixPlanView";
 import { deserializeRange } from "../views/FixPlanView";
 import type { ReportWebview } from "../views/ReportWebview";
+import type { BenchRunnerPanel } from "../views/BenchRunnerPanel";
+import { registerBenchCommand } from "./bench";
 import { readConfig } from "../config";
 import * as fs from "fs";
 import * as path from "path";
@@ -27,6 +29,8 @@ export interface CommandDeps {
   capturesInspector: CapturesInspector;
   fixPlanView: FixPlanView;
   reportWebview: ReportWebview;
+  benchRunnerPanel: BenchRunnerPanel;
+  workspaceState: vscode.Memento;
   refreshStatusBar: () => void;
   refreshHistoryView: () => void;
   refreshEnvironmentsView: () => void;
@@ -538,6 +542,16 @@ export function registerCommands(deps: CommandDeps): vscode.Disposable {
         await vscode.commands.executeCommand("tarn.runTestFromCodeLens", itemId, true);
       },
     ),
+  );
+
+  registrations.push(
+    registerBenchCommand({
+      backend: deps.backend,
+      index: deps.index,
+      panel: deps.benchRunnerPanel,
+      tarnController: deps.tarnController,
+      workspaceState: deps.workspaceState,
+    }),
   );
 
   return vscode.Disposable.from(...registrations);
