@@ -1,5 +1,67 @@
 # Changelog
 
+## 0.13.0 — Phase 4: Fix Plan view
+
+Third Phase 4 feature: a ranked remediation-hint tree for the most
+recent failing run. Every failed step from the final JSON report
+contributes one entry per `remediation_hint`, grouped by
+`failure_category`, with click-to-jump that lands the cursor on the
+offending step's line.
+
+### Added
+
+- **`FixPlanView`** (NAZ-271). New
+  `src/views/FixPlanView.ts` tree data provider. Walks
+  `files[].tests[].steps[]` on every completed run, filters to
+  `status: "FAILED"`, and creates one leaf per `remediation_hint`.
+  Failures that report a category but no hints surface as a
+  placeholder entry so they still appear in the view (rather than
+  silently disappearing).
+- **Category grouping** with a stable sort order: `assertion_failed`,
+  `capture_error`, `unresolved_template`, `parse_error`,
+  `connection_error`, `timeout`, then anything unknown.
+  `humanizeCategory` renders friendly labels (`"Assertion failed"`,
+  `"Connection error"`, etc.) and `iconForCategory` assigns a
+  distinct codicon per group.
+- **Click-to-jump**. Each entry's `TreeItem.command` fires
+  `tarn.jumpToFailure` with the fixture URI and a serialized range,
+  opening the file and placing the cursor on the failing step's
+  line. The command registration lives in `src/commands/index.ts`
+  and is hidden from the command palette (it requires arguments).
+- **`tarn.fixPlan`** view declared under the `tarn` activity bar
+  container with the `lightbulb` codicon. Ships with a placeholder
+  node ("No fix plan available…") until the first failing run
+  populates it.
+- **Extension host API**: `testing.loadFixPlanFromReport` and
+  `testing.fixPlanSnapshot` so integration tests can drive the view
+  without spawning a real run.
+
+### Changed
+
+- **`runHandler`** now calls `fixPlanView.loadFromReport` after the
+  existing `lastRunCache` / `capturesInspector` hooks. A passing run
+  empties the view; a failing run repopulates it.
+- **`createTarnTestController`** signature accepts a `FixPlanView`
+  parameter so the run handler can forward reports to it.
+
+### Tests
+
+- **Unit** (`tests/unit/fixPlanView.test.ts`, 9 tests).
+  Covers `flattenReportToPlan` (empty reports, per-category
+  grouping, no-hint placeholder, default category fallback,
+  location attachment, category ordering) plus `categoryOrder`,
+  `humanizeCategory`, and `deserializeRange`.
+- **Integration** (`tests/integration/suite/fixPlan.test.ts`, 6
+  tests). Primes the view via `loadFixPlanFromReport` with a
+  synthetic report pointing at the existing fixture
+  `tests/health.tarn.yaml`, asserts category grouping, verifies
+  that the resolved step range lands on the real line from the
+  WorkspaceIndex, and exercises `tarn.jumpToFailure` end-to-end by
+  asserting the active editor and cursor position after the command
+  runs.
+
+Total: 172 unit tests, 55 integration tests passing.
+
 ## 0.12.0 — Phase 4: Captures Inspector view
 
 Second Phase 4 feature: a debugger-style "locals" tree for captured

@@ -26,6 +26,7 @@ import {
 } from "./views/RunHistoryView";
 import { EnvironmentsView } from "./views/EnvironmentsView";
 import { CapturesInspector } from "./views/CapturesInspector";
+import { FixPlanView } from "./views/FixPlanView";
 
 export interface TarnExtensionApi {
   readonly testControllerId: string;
@@ -53,6 +54,12 @@ export interface TarnExtensionApi {
     readonly isCaptureKeyRedacted: (key: string) => boolean;
     readonly isHidingAllCaptures: () => boolean;
     readonly toggleHideCaptures: () => void;
+    readonly loadFixPlanFromReport: (
+      report: import("./util/schemaGuards").Report,
+    ) => void;
+    readonly fixPlanSnapshot: () => ReadonlyArray<
+      import("./views/FixPlanView").FixPlanGroup
+    >;
   };
 }
 
@@ -96,12 +103,19 @@ export async function activate(
     vscode.window.registerTreeDataProvider("tarn.captures", capturesInspector),
   );
 
+  const fixPlanView = new FixPlanView(index);
+  context.subscriptions.push(
+    fixPlanView,
+    vscode.window.registerTreeDataProvider("tarn.fixPlan", fixPlanView),
+  );
+
   const tarnController = createTarnTestController(
     index,
     backend,
     history,
     lastRunCache,
     capturesInspector,
+    fixPlanView,
     () => historyTree.refresh(),
   );
   context.subscriptions.push(tarnController);
@@ -178,6 +192,7 @@ export async function activate(
       lastRunCache,
       stepDetailsPanel,
       capturesInspector,
+      fixPlanView,
       refreshStatusBar: () => statusBar.refresh(),
       refreshHistoryView: () => historyTree.refresh(),
       refreshEnvironmentsView: () => environmentsView.refresh(),
@@ -220,6 +235,7 @@ export async function activate(
       "tarn.showStepDetails",
       "tarn.copyCaptureValue",
       "tarn.toggleHideCaptures",
+      "tarn.jumpToFailure",
     ],
     testing: {
       backend,
@@ -259,6 +275,8 @@ export async function activate(
       isCaptureKeyRedacted: (key) => capturesInspector.isKeyRedacted(key),
       isHidingAllCaptures: () => capturesInspector.isHidingAllValues(),
       toggleHideCaptures: () => capturesInspector.toggleHideAllValues(),
+      loadFixPlanFromReport: (report) => fixPlanView.loadFromReport(report),
+      fixPlanSnapshot: () => fixPlanView.snapshot(),
     },
   };
 }

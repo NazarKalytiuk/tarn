@@ -6,6 +6,7 @@ import type { TarnBackend } from "../backend/TarnBackend";
 import type { RunHistoryStore } from "../views/RunHistoryView";
 import type { LastRunCache } from "./LastRunCache";
 import type { CapturesInspector } from "../views/CapturesInspector";
+import type { FixPlanView } from "../views/FixPlanView";
 
 export interface TarnTestController extends vscode.Disposable {
   controller: vscode.TestController;
@@ -22,6 +23,7 @@ export function createTarnTestController(
   history: RunHistoryStore,
   lastRunCache: LastRunCache,
   capturesInspector: CapturesInspector,
+  fixPlanView: FixPlanView,
   onHistoryChanged: () => void,
 ): TarnTestController {
   const controller = vscode.tests.createTestController("tarn", "Tarn");
@@ -42,6 +44,7 @@ export function createTarnTestController(
     history,
     lastRunCache,
     capturesInspector,
+    fixPlanView,
     onHistoryChanged,
   };
   const runHandler = createRunHandler(deps, false);

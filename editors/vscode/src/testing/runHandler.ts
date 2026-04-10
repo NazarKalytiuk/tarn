@@ -9,6 +9,7 @@ import { RunHistoryStore } from "../views/RunHistoryView";
 import { getItemMeta, ids } from "./discovery";
 import type { LastRunCache } from "./LastRunCache";
 import type { CapturesInspector } from "../views/CapturesInspector";
+import type { FixPlanView } from "../views/FixPlanView";
 
 export interface RunState {
   activeEnvironment: string | null;
@@ -27,6 +28,7 @@ export interface HandlerDeps {
   history: RunHistoryStore;
   lastRunCache: LastRunCache;
   capturesInspector: CapturesInspector;
+  fixPlanView: FixPlanView;
   onHistoryChanged: () => void;
 }
 
@@ -139,6 +141,7 @@ async function executeRun(
   // via tarn.showStepDetails.
   deps.lastRunCache.loadFromReport(outcome.report);
   deps.capturesInspector.loadFromReport(outcome.report);
+  deps.fixPlanView.loadFromReport(outcome.report);
 
   // Track which items failed so Tarn: Run Failed can target them later.
   deps.state.lastFailedItemIds = collectFailedItemIds(itemsById, outcome.report, parsedByPath);

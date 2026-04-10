@@ -9,6 +9,8 @@ import { EnvironmentsView, resolveEnvSourceUri } from "../views/EnvironmentsView
 import type { LastRunCache, StepKey } from "../testing/LastRunCache";
 import type { RequestResponsePanel } from "../views/RequestResponsePanel";
 import type { CapturesInspector } from "../views/CapturesInspector";
+import type { FixPlanView } from "../views/FixPlanView";
+import { deserializeRange } from "../views/FixPlanView";
 
 export interface CommandDeps {
   tarnController: TarnTestController;
@@ -19,6 +21,7 @@ export interface CommandDeps {
   lastRunCache: LastRunCache;
   stepDetailsPanel: RequestResponsePanel;
   capturesInspector: CapturesInspector;
+  fixPlanView: FixPlanView;
   refreshStatusBar: () => void;
   refreshHistoryView: () => void;
   refreshEnvironmentsView: () => void;
@@ -230,6 +233,33 @@ export function registerCommands(deps: CommandDeps): vscode.Disposable {
     vscode.commands.registerCommand("tarn.toggleHideCaptures", () => {
       deps.capturesInspector.toggleHideAllValues();
     }),
+  );
+
+  registrations.push(
+    vscode.commands.registerCommand(
+      "tarn.jumpToFailure",
+      async (
+        uriString: string,
+        rangeRaw: [number, number, number, number],
+      ) => {
+        if (typeof uriString !== "string" || !Array.isArray(rangeRaw)) {
+          return;
+        }
+        try {
+          const uri = vscode.Uri.parse(uriString);
+          const range = deserializeRange(rangeRaw);
+          const doc = await vscode.workspace.openTextDocument(uri);
+          await vscode.window.showTextDocument(doc, {
+            selection: range,
+            preserveFocus: false,
+          });
+        } catch (err) {
+          getOutputChannel().appendLine(
+            `[tarn] jumpToFailure failed: ${String(err)}`,
+          );
+        }
+      },
+    ),
   );
 
   registrations.push(

@@ -2,7 +2,7 @@
   "name": "tarn-vscode",
   "displayName": "Tarn",
   "description": "Test Explorer, CodeLens, and schema-aware authoring for Tarn API test files.",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "publisher": "nazarkalytiuk",
   "license": "MIT",
   "repository": {
@@ -198,6 +198,11 @@
         "title": "Tarn: Toggle Hide All Capture Values",
         "category": "Tarn",
         "icon": "$(eye-closed)"
+      },
+      {
+        "command": "tarn.jumpToFailure",
+        "title": "Tarn: Jump to Failure",
+        "category": "Tarn"
       }
     ],
     "viewsContainers": {
@@ -228,6 +233,12 @@
           "name": "Captures Inspector",
           "icon": "$(list-tree)",
           "contextualTitle": "Tarn Captures Inspector"
+        },
+        {
+          "id": "tarn.fixPlan",
+          "name": "Fix Plan",
+          "icon": "$(lightbulb)",
+          "contextualTitle": "Tarn Fix Plan"
         }
       ]
     },
@@ -308,6 +319,10 @@
         },
         {
           "command": "tarn.copyCaptureValue",
+          "when": "false"
+        },
+        {
+          "command": "tarn.jumpToFailure",
           "when": "false"
         },
         {
