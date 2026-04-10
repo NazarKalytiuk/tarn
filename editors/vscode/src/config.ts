@@ -11,7 +11,6 @@ export interface TarnConfig {
   requestTimeoutMs: number;
   showCodeLens: boolean;
   statusBarEnabled: boolean;
-  redactionExtraHeaders: string[];
 }
 
 export function readConfig(scope?: vscode.Uri): TarnConfig {
@@ -31,7 +30,6 @@ export function readConfig(scope?: vscode.Uri): TarnConfig {
     requestTimeoutMs: cfg.get<number>("requestTimeoutMs", 120000),
     showCodeLens: cfg.get<boolean>("showCodeLens", true),
     statusBarEnabled: cfg.get<boolean>("statusBar.enabled", true),
-    redactionExtraHeaders: cfg.get<string[]>("redactionExtraHeaders", []),
   };
 }
 

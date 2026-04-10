@@ -146,6 +146,16 @@
         "command": "tarn.showWalkthrough",
         "title": "Tarn: Open Getting Started",
         "category": "Tarn"
+      },
+      {
+        "command": "tarn.initProject",
+        "title": "Tarn: Init Project Here",
+        "category": "Tarn"
+      },
+      {
+        "command": "tarn.refreshDiscovery",
+        "title": "Tarn: Refresh Test Discovery",
+        "category": "Tarn"
       }
     ],
     "viewsContainers": {
@@ -341,15 +351,6 @@
           "type": "boolean",
           "default": true,
           "description": "Show the Tarn status bar entry.",
-          "scope": "resource"
-        },
-        "tarn.redactionExtraHeaders": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": [],
-          "description": "Additional header names to redact in captured output.",
           "scope": "resource"
         }
       }

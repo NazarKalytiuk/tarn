@@ -52,6 +52,18 @@ export class TarnProcessRunner implements TarnBackend {
     };
   }
 
+  async initProject(
+    cwd: string,
+    token: vscode.CancellationToken,
+  ): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
+    const collected = await this.spawnAndCollect(["init"], cwd, token);
+    return {
+      exitCode: collected.exitCode,
+      stdout: collected.stdout,
+      stderr: collected.stderr,
+    };
+  }
+
   private buildRunArgs(options: RunOptions): string[] {
     const args: string[] = ["run"];
     args.push("--format", "json");

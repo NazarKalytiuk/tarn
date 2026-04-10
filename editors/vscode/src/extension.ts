@@ -14,7 +14,15 @@ import {
   RunHistoryTreeProvider,
 } from "./views/RunHistoryView";
 
-export async function activate(context: vscode.ExtensionContext): Promise<void> {
+export interface TarnExtensionApi {
+  readonly testControllerId: string;
+  readonly indexedFileCount: number;
+  readonly commands: readonly string[];
+}
+
+export async function activate(
+  context: vscode.ExtensionContext,
+): Promise<TarnExtensionApi | undefined> {
   const output = getOutputChannel();
   output.appendLine("[tarn] activating");
 
@@ -85,6 +93,28 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   output.appendLine(
     `[tarn] ready (${index.all.length} test file(s) indexed)`,
   );
+
+  return {
+    testControllerId: tarnController.controller.id,
+    indexedFileCount: index.all.length,
+    commands: [
+      "tarn.runAll",
+      "tarn.runFile",
+      "tarn.dryRunFile",
+      "tarn.validateFile",
+      "tarn.rerunLast",
+      "tarn.selectEnvironment",
+      "tarn.setTagFilter",
+      "tarn.clearTagFilter",
+      "tarn.showOutput",
+      "tarn.installTarn",
+      "tarn.exportCurl",
+      "tarn.clearHistory",
+      "tarn.showWalkthrough",
+      "tarn.initProject",
+      "tarn.refreshDiscovery",
+    ],
+  };
 }
 
 export function deactivate(): void {

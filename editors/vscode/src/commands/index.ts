@@ -191,6 +191,68 @@ export function registerCommands(deps: CommandDeps): vscode.Disposable {
   );
 
   registrations.push(
+    vscode.commands.registerCommand("tarn.initProject", async () => {
+      const folder = await pickInitFolder();
+      if (!folder) {
+        return;
+      }
+      const existing = await detectExistingScaffold(folder);
+      if (existing) {
+        const choice = await vscode.window.showWarningMessage(
+          `The folder already contains '${existing}'. Running tarn init here will overwrite scaffold files.`,
+          { modal: true },
+          "Proceed",
+        );
+        if (choice !== "Proceed") {
+          return;
+        }
+      }
+      const token = new vscode.CancellationTokenSource().token;
+      const out = getOutputChannel();
+      out.show(true);
+      out.appendLine(`[tarn] initializing project in ${folder.fsPath}`);
+      const result = await deps.backend.initProject(folder.fsPath, token);
+      if (result.stdout) {
+        out.appendLine(result.stdout.trim());
+      }
+      if (result.stderr) {
+        out.appendLine(result.stderr.trim());
+      }
+      if (result.exitCode !== 0) {
+        vscode.window.showErrorMessage(
+          `Tarn init failed (exit ${result.exitCode}). See output for details.`,
+        );
+        return;
+      }
+      const isCurrentWorkspace = vscode.workspace.workspaceFolders?.some(
+        (f) => f.uri.fsPath === folder.fsPath,
+      );
+      if (isCurrentWorkspace) {
+        await vscode.commands.executeCommand("tarn.refreshDiscovery");
+        vscode.window.showInformationMessage("Tarn: project scaffolded in current workspace.");
+      } else {
+        const open = await vscode.window.showInformationMessage(
+          "Tarn: project scaffolded. Open the folder?",
+          "Open in New Window",
+          "Open in Current Window",
+        );
+        if (open === "Open in New Window") {
+          await vscode.commands.executeCommand("vscode.openFolder", folder, { forceNewWindow: true });
+        } else if (open === "Open in Current Window") {
+          await vscode.commands.executeCommand("vscode.openFolder", folder);
+        }
+      }
+    }),
+  );
+
+  registrations.push(
+    vscode.commands.registerCommand("tarn.refreshDiscovery", async () => {
+      await deps.index.initialize();
+      deps.tarnController.refresh();
+    }),
+  );
+
+  registrations.push(
     vscode.commands.registerCommand(
       "tarn.runTestFromCodeLens",
       async (itemId: string, dryRun: boolean) => {
@@ -271,6 +333,59 @@ function findItemById(
   };
   controller.items.forEach(visit);
   return found;
+}
+
+async function pickInitFolder(): Promise<vscode.Uri | undefined> {
+  const current = vscode.workspace.workspaceFolders ?? [];
+  const items: (vscode.QuickPickItem & { value: "current" | "browse" | vscode.Uri })[] = [];
+  for (const folder of current) {
+    items.push({
+      label: `$(folder) ${folder.name}`,
+      description: folder.uri.fsPath,
+      detail: "Use this workspace folder",
+      value: folder.uri,
+    });
+  }
+  items.push({
+    label: "$(folder-opened) Browse…",
+    description: "Pick another folder",
+    value: "browse",
+  });
+  if (items.length === 0) {
+    return undefined;
+  }
+  const picked = await vscode.window.showQuickPick(items, {
+    placeHolder: "Where should Tarn init the new project?",
+  });
+  if (!picked) {
+    return undefined;
+  }
+  if (picked.value === "browse") {
+    const uris = await vscode.window.showOpenDialog({
+      canSelectFiles: false,
+      canSelectFolders: true,
+      canSelectMany: false,
+      openLabel: "Initialize Tarn here",
+    });
+    return uris?.[0];
+  }
+  if (picked.value === "current") {
+    return undefined;
+  }
+  return picked.value;
+}
+
+async function detectExistingScaffold(folder: vscode.Uri): Promise<string | undefined> {
+  const candidates = ["tarn.config.yaml", "tarn.env.yaml", "tests", "examples"];
+  for (const name of candidates) {
+    try {
+      await vscode.workspace.fs.stat(vscode.Uri.joinPath(folder, name));
+      return name;
+    } catch {
+      // not present, keep going
+    }
+  }
+  return undefined;
 }
 
 async function collectEnvironments(): Promise<string[]> {

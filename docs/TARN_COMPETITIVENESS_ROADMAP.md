@@ -7,7 +7,7 @@ This document is now a historical roadmap record.
 
 All planned items `T01` through `T50` were implemented. Use this file for scope history and sequencing context, not as the live backlog. For current product direction, use [`docs/TARN_PRODUCT_STRATEGY.md`](./TARN_PRODUCT_STRATEGY.md).
 
-One post-roadmap addition has been appended: `T51`–`T57` capture the additive CLI contract needed by the new VS Code extension work. See [Post-Roadmap Additions](#post-roadmap-additions-vs-code-extension-contract) at the end of this file and [`docs/VSCODE_EXTENSION.md`](./VSCODE_EXTENSION.md) for the full extension spec.
+One post-roadmap addition has been appended: `T51`–`T58` capture the additive CLI contract needed by the new VS Code extension work. See [Post-Roadmap Additions](#post-roadmap-additions-vs-code-extension-contract) at the end of this file and [`docs/VSCODE_EXTENSION.md`](./VSCODE_EXTENSION.md) for the full extension spec.
 
 ## Completion Summary
 
@@ -178,6 +178,7 @@ The right strategy is:
 | T55 | Add `location: {file, line, column}` to `StepResult` and `AssertionFailure`; optional field in `schemas/v1/report.json` | 8 | M | T52 | `tarn/src/assert/types.rs`, `tarn/src/parser.rs`, `tarn/src/runner.rs`, `schemas/v1/report.json` |
 | T56 | Add `tarn env --json` returning named environments, source files, and resolved variables with redaction applied | 6 | S | - | `tarn/src/main.rs`, `tarn/src/env.rs`, `tarn/src/config.rs` |
 | T57 | Add `tarn list --file PATH --format json` for scoped discovery of a single file | 5 | S | - | `tarn/src/main.rs`, `tarn/src/parser.rs` |
+| T58 | Add `--redact-header NAME` CLI flag (repeatable) merging with the configured redaction list; enables editors and CI to extend redaction without editing `tarn.config.yaml` | 5 | S | - | `tarn/src/main.rs`, `tarn/src/model.rs`, `tarn/src/report/json.rs` |
 
 ### Acceptance Criteria
 
@@ -230,6 +231,13 @@ The right strategy is:
 - `tarn list --file path/to/file.tarn.yaml --format json` prints only that file's tests and steps.
 - Output is a strict subset of the current `tarn list` output so existing consumers are unaffected.
 - Unknown file is exit code `2`.
+
+**T58** `--redact-header` CLI flag
+- `tarn run --redact-header x-custom-token --redact-header x-debug` merges these header names into the effective redaction list.
+- Flag is repeatable; values are case-insensitive.
+- Merges with both the default built-in list and any `redaction:` block loaded from config or test files. Never narrows — only widens.
+- Applies to both JSON and human reports.
+- No change to `tarn.config.yaml` semantics; this is a pure CLI augmentation.
 
 ### Sequencing and Release Plan
 

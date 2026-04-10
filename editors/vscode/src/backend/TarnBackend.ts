@@ -30,4 +30,8 @@ export interface TarnBackend {
     mode: "all" | "failed",
     token: vscode.CancellationToken,
   ): Promise<{ exitCode: number | null; stdout: string; stderr: string }>;
+  initProject(
+    cwd: string,
+    token: vscode.CancellationToken,
+  ): Promise<{ exitCode: number | null; stdout: string; stderr: string }>;
 }
