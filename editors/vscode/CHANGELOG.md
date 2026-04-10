@@ -1,5 +1,60 @@
 # Changelog
 
+## 0.16.0 — Phase 4: Hurl import wizard
+
+Sixth Phase 4 feature: `Tarn: Import Hurl File…` wraps
+`tarn import-hurl` in an open-dialog + save-dialog wizard so users
+can migrate existing Hurl test files into Tarn YAML from the
+command palette.
+
+### Added
+
+- **`tarn.importHurl`** command (NAZ-275) registered in
+  `package.json` with `$(arrow-down)` icon. Available from the
+  command palette.
+- **Import wizard** (`src/commands/importHurl.ts`):
+  1. `showOpenDialog` filtered to `.hurl` files.
+  2. `showSaveDialog` with a default destination of
+     `<name>.tarn.yaml` next to the source (see
+     `defaultHurlDestination`).
+  3. Backend spawn inside `vscode.window.withProgress` with
+     cancellation support.
+  4. On success, opens the imported file and surfaces a
+     `showInformationMessage` with **Run** and **Validate** quick
+     actions that forward to the existing `tarn.runFile` /
+     `tarn.validateFile` commands.
+  5. On failure, appends stderr to the Tarn output channel and
+     raises an error message with the exit code.
+- **`defaultHurlDestination`** helper exported from the command
+  module. Strips `.hurl` case-insensitively (preserving any dotted
+  stem like `foo.bar.hurl` → `foo.bar.tarn.yaml`) and falls back to
+  appending `.tarn.yaml` if the source has no `.hurl` suffix.
+- **`runImportHurl`** internal helper extracted from the wizard.
+  Accepts explicit `source`, `dest`, and `cwd` so the integration
+  test can drive the spawn-and-return path without invoking the
+  VS Code dialogs.
+- **`TarnBackend.importHurl`** method on the backend interface and
+  `TarnProcessRunner`. Shells out `tarn import-hurl <src> -o <dest>`
+  and returns `{ exitCode, stdout, stderr }`.
+- **Extension host API**: `testing.importHurl` forwards to
+  `runImportHurl` so integration tests can import a real fixture
+  without clicking through native dialogs.
+
+### Tests
+
+- **Unit** (`tests/unit/importHurl.test.ts`, 5 tests). Covers
+  `defaultHurlDestination`: `.hurl` stripping, dotted stems,
+  non-`.hurl` sources, case-insensitive suffix match, deeply
+  nested paths.
+- **Integration** (`tests/integration/suite/importHurl.test.ts`,
+  3 tests). Creates a temp directory, writes a minimal `.hurl`
+  fixture, drives the backend through `testing.importHurl`, and
+  asserts the resulting `.tarn.yaml` contains the expected method,
+  URL, and status assertion. Also asserts command registration
+  and graceful failure when the source file is missing.
+
+Total: 196 unit tests, 66 integration tests passing.
+
 ## 0.15.0 — Phase 4: Bench runner wizard
 
 Fifth Phase 4 feature: `Tarn: Benchmark Step…` wraps the existing

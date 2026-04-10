@@ -156,6 +156,12 @@ export interface TarnBackend {
     cwd: string,
     token: vscode.CancellationToken,
   ): Promise<{ exitCode: number | null; stdout: string; stderr: string }>;
+  importHurl(
+    source: string,
+    dest: string,
+    cwd: string,
+    token: vscode.CancellationToken,
+  ): Promise<{ exitCode: number | null; stdout: string; stderr: string }>;
   /**
    * Format a document's content via `tarn fmt`. The backend is
    * responsible for routing the content through a tmp file (since

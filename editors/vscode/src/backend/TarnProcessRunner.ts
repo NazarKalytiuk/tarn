@@ -132,6 +132,21 @@ export class TarnProcessRunner implements TarnBackend {
     };
   }
 
+  async importHurl(
+    source: string,
+    dest: string,
+    cwd: string,
+    token: vscode.CancellationToken,
+  ): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
+    const args = ["import-hurl", source, "-o", dest];
+    const collected = await this.spawnAndCollect(args, cwd, token);
+    return {
+      exitCode: collected.exitCode,
+      stdout: collected.stdout,
+      stderr: collected.stderr,
+    };
+  }
+
   async runBench(options: BenchOptions): Promise<BenchOutcome> {
     const args: string[] = [
       "bench",

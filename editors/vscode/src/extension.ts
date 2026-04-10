@@ -29,6 +29,7 @@ import { CapturesInspector } from "./views/CapturesInspector";
 import { FixPlanView } from "./views/FixPlanView";
 import { ReportWebview } from "./views/ReportWebview";
 import { BenchRunnerPanel } from "./views/BenchRunnerPanel";
+import { runImportHurl } from "./commands/importHurl";
 
 export interface TarnExtensionApi {
   readonly testControllerId: string;
@@ -70,6 +71,11 @@ export interface TarnExtensionApi {
     readonly lastBenchContext: () =>
       | import("./views/BenchRunnerPanel").BenchRunContext
       | undefined;
+    readonly importHurl: (
+      source: string,
+      dest: string,
+      cwd: string,
+    ) => Promise<{ success: boolean; exitCode: number | null; stderr: string }>;
   };
 }
 
@@ -257,6 +263,7 @@ export async function activate(
       "tarn.jumpToFailure",
       "tarn.openHtmlReport",
       "tarn.benchStep",
+      "tarn.importHurl",
     ],
     testing: {
       backend,
@@ -302,6 +309,8 @@ export async function activate(
       sendReportMessage: (message) => reportWebview.handleMessage(message),
       showBenchResult: (context) => benchRunnerPanel.show(context),
       lastBenchContext: () => benchRunnerPanel.lastContext(),
+      importHurl: (source, dest, cwd) =>
+        runImportHurl(backend, source, dest, cwd),
     },
   };
 }

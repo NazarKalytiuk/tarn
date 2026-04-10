@@ -2,7 +2,7 @@
   "name": "tarn-vscode",
   "displayName": "Tarn",
   "description": "Test Explorer, CodeLens, and schema-aware authoring for Tarn API test files.",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "publisher": "nazarkalytiuk",
   "license": "MIT",
   "repository": {
@@ -215,6 +215,12 @@
         "title": "Tarn: Benchmark Step…",
         "category": "Tarn",
         "icon": "$(dashboard)"
+      },
+      {
+        "command": "tarn.importHurl",
+        "title": "Tarn: Import Hurl File…",
+        "category": "Tarn",
+        "icon": "$(arrow-down)"
       }
     ],
     "viewsContainers": {

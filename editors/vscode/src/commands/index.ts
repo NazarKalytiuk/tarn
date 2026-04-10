@@ -14,6 +14,7 @@ import { deserializeRange } from "../views/FixPlanView";
 import type { ReportWebview } from "../views/ReportWebview";
 import type { BenchRunnerPanel } from "../views/BenchRunnerPanel";
 import { registerBenchCommand } from "./bench";
+import { registerImportHurlCommand } from "./importHurl";
 import { readConfig } from "../config";
 import * as fs from "fs";
 import * as path from "path";
@@ -553,6 +554,8 @@ export function registerCommands(deps: CommandDeps): vscode.Disposable {
       workspaceState: deps.workspaceState,
     }),
   );
+
+  registrations.push(registerImportHurlCommand({ backend: deps.backend }));
 
   return vscode.Disposable.from(...registrations);
 
