@@ -10,6 +10,77 @@ What this means for the extension itself: the stable surface is now CI-enforced.
 
 The `1.0.0` release itself is cut by NAZ-288's version alignment step — the extension version, the Tarn `Cargo.toml` version, and the matching git tag all bump together. Between now and then, the extension keeps shipping normal minor releases on the `0.x` track (see `0.24.0` below for the staging release that introduces the API promise mechanics).
 
+## 0.25.0 — Phase 6: Marketplace assets (NAZ-287)
+
+First polish pass at the Marketplace listing so that when `1.0.0` cuts the
+extension has a real gallery banner, a real README hook, and a real asset
+pipeline behind it. This release ships the **pipeline** — `galleryBanner`
+wired into `package.json`, the README's opening paragraphs rewritten for a
+Marketplace visitor instead of a developer reading the source tree, and the
+`editors/vscode/media/marketplace/` directory created as the single home
+for every gallery asset the listing references.
+
+The binary assets checked in with this release are intentionally 1×1
+placeholder PNGs (plus a 1-frame GIF) generated from Node, because this
+ticket was executed in a headless environment that cannot drive a screen
+recorder. The **real** deliverable is
+[`editors/vscode/media/marketplace/README.md`](media/marketplace/README.md)
+— a per-file capture plan that spells out, for every screenshot and for
+the 30-second demo GIF: target resolution, exact scene, fixture to use,
+and the hero element. A human operator is expected to replace each
+placeholder with a real capture in a follow-up commit; because the
+file paths, `.vscodeignore` rules, and `package.json` wiring are already
+in place, that follow-up is a drag-and-drop plus `npx @vscode/vsce package`.
+
+### Added
+
+- **`galleryBanner`** in `editors/vscode/package.json`:
+  `{ "color": "#1E1B4B", "theme": "dark" }`. Deep indigo because the only
+  pre-existing brand asset in the repo (`media/tarn-icon.svg`) is
+  monochrome and inherits `currentColor`, so there is no existing palette
+  to match. Indigo reads cleanly against VS Code's dark chrome, gives
+  white foreground text WCAG AA contrast, and avoids colliding with the
+  red/green/yellow VS Code reserves for test-status UI. Rationale is
+  documented in `media/marketplace/README.md` so a future rebrand can be
+  updated in one place.
+- **`editors/vscode/media/marketplace/`** — new directory containing
+  placeholder binaries for every image the README inlines:
+  `banner.png`, `screenshot-test-explorer.png`, `screenshot-streaming.png`,
+  `screenshot-diff.png`, `screenshot-env-picker.png`,
+  `screenshot-codelens.png`, and `demo.gif`. Each is a minimal valid
+  1×1 solid-colour image that renders without broken-image icons and lets
+  the VSIX packaging pipeline be verified end-to-end before the human
+  capture pass.
+- **`editors/vscode/media/marketplace/README.md`** — the capture plan.
+  Lists every asset, the exact scene/fixture to record, target
+  resolution, hero element, and a frame-by-frame script for the 30-second
+  diagnosis-loop GIF (run → failure → jump-to-line → fix → rerun →
+  green). This is the real deliverable of this ticket.
+
+### Changed
+
+- **`editors/vscode/README.md` opening rewritten for Marketplace
+  first-impression.** The file previously opened with *"First-class editor
+  support for Tarn API test files."* which is accurate but assumes the
+  reader already knows what Tarn is. The new opening leads with the
+  value proposition — *"Run, debug, and iterate on API tests without
+  leaving the editor"* — and anchors it to the concrete loop a user will
+  actually feel (run → see failure → jump to line → fix → rerun → green)
+  before the first `##` heading. Four screenshots are inlined in the
+  Features section so the Marketplace preview shows real artwork instead
+  of a wall of bullet points. Every image path resolves to a placeholder
+  today and will resolve to a real capture when the human operator
+  replaces the files.
+- **Version bumped `0.24.0 → 0.25.0`.** Marketplace-asset changes ship on
+  the normal 0.x cadence; the `1.0.0` bump is still owned by NAZ-288.
+
+### Not changed
+
+- **No runtime behavior change.** The activation manifest, commands,
+  views, and public API are untouched. Extension bundle size is
+  unchanged — the marketplace assets ship in the VSIX alongside the
+  bundle, not inside it.
+
 ## 0.24.0 — Phase 6: Stable API promise (NAZ-285)
 
 The extension's return value from `activate()` has been an `interface TarnExtensionApi` since Phase 1, but nothing bound downstream integrators to any particular subset of that interface, and nothing stopped a future PR from deleting a field that an external extension had started to depend on. This release pins the public surface as a hard contract so the roadmap can safely cut `1.0.0` (gated on NAZ-288).

@@ -2,7 +2,7 @@
   "name": "tarn-vscode",
   "displayName": "Tarn",
   "description": "Test Explorer, CodeLens, and schema-aware authoring for Tarn API test files.",
-  "version": "0.24.0",
+  "version": "0.25.0",
   "publisher": "nazarkalytiuk",
   "license": "MIT",
   "repository": {
@@ -10,6 +10,10 @@
     "url": "https://github.com/NazarKalytiuk/hive.git"
   },
   "homepage": "https://github.com/NazarKalytiuk/hive",
+  "galleryBanner": {
+    "color": "#1E1B4B",
+    "theme": "dark"
+  },
   "engines": {
     "vscode": "^1.90.0"
   },
