@@ -296,9 +296,7 @@ Every setting is `machine-overridable` where appropriate so Remote-SSH and Dev C
 
 ## Mapping Results to Editor Ranges
 
-Tarn's JSON report does not currently include `line` or `column` fields. We solve this in the extension without waiting on a CLI change.
-
-Every `.tarn.yaml` is parsed with `yaml` in CST mode into a `NodeRangeMap`:
+Tarn's JSON report carries an optional `location: { file, line, column }` on every `StepResult`, `AssertionDetail`, and `AssertionFailure` that maps back to a YAML operator key. This field was added by Tarn T55 (NAZ-260) and is 1-based to match every other line/column Tarn already prints in its human and error output. `ResultMapper` prefers this JSON-reported location over the editor's current YAML AST for runtime result anchoring. The AST layer still builds `NodeRangeMap` for the authoring features below — it just loses its job as the anchor source for red squiggles.
 
 ```
 NodeRangeMap
@@ -308,9 +306,23 @@ NodeRangeMap
   teardownRanges: StepRange[]
 ```
 
-When a JSON report arrives, `ResultMapper` walks `files[].tests[].steps[]` in order and joins by `(testName, stepIndex)`. Duplicate step names are resolved by array index. The AST layer is shared with CodeLens, document symbols, hover, completion, and rename, so it is not extra cost.
+### Preference order
 
-Once Tarn adds location metadata (§6.5), AST-based matching remains the source of truth for authoring features, and JSON-side location becomes the source of truth for runtime results.
+When a JSON report arrives, `ResultMapper.buildFailureMessages` resolves the source anchor for each failure in this exact order:
+
+1. **`failure.location`** (per-assertion) — used for the individual assertion failure's `TestMessage`. Lands on the exact operator node (`status:`, `body $.path:`, `headers:`, etc.) the user authored.
+2. **`step.location`** (step-level) — used as the fallback for any assertion failure that lacks its own location, and as the anchor for generic (non-assertion) failures like connection errors or capture failures. Lands on the step's `- name:` key.
+3. **`stepItem.range`** (AST) — used only when the JSON report omits `location` entirely. This covers older Tarn versions that predate T55, and `include:`-expanded steps where Tarn emits `location: None` because the step was synthesized from an include directive rather than the top-level file.
+
+The 1-based `line` and `column` from Tarn are decremented by 1 before they become a `vscode.Position`. A Tarn location is a single point, not a range, so the mapper builds a zero-width `vscode.Range` at that point; VS Code expands it to the enclosing token for rendering.
+
+### Drift-free by construction
+
+The whole reason this precedence exists is drift. The AST layer is rebuilt every time the file changes on disk, so `stepItem.range` reflects *the current file*, not the one Tarn actually executed. If the user edits the file between the moment Tarn starts a run and the moment the extension renders the report — or runs several tests in parallel while the editor keeps auto-formatting — the AST range can land dozens of lines away from the real step.
+
+The JSON-reported `location` was captured inside Tarn at parse time, before any HTTP work ran. It is pinned to the exact file the CLI saw, and it survives every subsequent edit in the workbench. Integration tests in `resultMapperLocation.test.ts` verify this by inserting two blank lines at the top of the fixture between run start and report parse, then asserting the diagnostic still lands on the original assertion node.
+
+The AST path is never removed — it is the source of truth for authoring features (CodeLens, document symbols, hover, completion, rename) and it is also the fallback for reports that don't carry `location`. Both paths coexist permanently.
 
 ## Streaming Results Live
 

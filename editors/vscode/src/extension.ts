@@ -32,6 +32,7 @@ import { BenchRunnerPanel } from "./views/BenchRunnerPanel";
 import { runImportHurl } from "./commands/importHurl";
 import { runInitProject } from "./commands/initProject";
 import { FailureNotifier } from "./notifications";
+import { buildFailureMessages as buildFailureMessagesImpl } from "./testing/ResultMapper";
 
 export interface TarnExtensionApi {
   readonly testControllerId: string;
@@ -106,6 +107,21 @@ export interface TarnExtensionApi {
         options: { dryRun: boolean; files: string[] },
       ) => Promise<boolean>;
     };
+    /**
+     * Build VS Code `TestMessage`s for a failing step, honoring the
+     * JSON-reported `location` metadata (Tarn T55) with an AST range
+     * fallback. Exposed for integration tests that want to verify the
+     * location resolution pipeline end-to-end against a real Tarn run.
+     *
+     * The `astFallback` parameter simulates the AST-derived
+     * `stepItem.range` from discovery. Pass `null` to simulate a step
+     * with no AST anchor at all.
+     */
+    readonly buildFailureMessagesForStep: (
+      step: import("./util/schemaGuards").StepResult,
+      fileUri: vscode.Uri,
+      astFallback: vscode.Range | null,
+    ) => vscode.TestMessage[];
   };
 }
 
@@ -369,6 +385,31 @@ export async function activate(
           failureNotifier.wouldNotify(report, options),
         maybeNotify: (report, options) =>
           failureNotifier.maybeNotify(report, options),
+      },
+      buildFailureMessagesForStep: (step, fileUri, astFallback) => {
+        // Synthesize a minimal ParsedFile. We deliberately do not pull
+        // the real WorkspaceIndex entry so the test can feed in a
+        // specific URI (e.g., a fixture outside the indexed workspace).
+        const parsed = {
+          uri: fileUri,
+          ranges: {
+            fileName: "(integration-test synthetic)",
+            fileNameRange: undefined,
+            tests: [],
+            setup: [],
+            teardown: [],
+          },
+        };
+        // Synthesize a minimal TestItem with just the fields
+        // buildFailureMessages reads (`range`). Using a plain object
+        // matches the unit-test pattern and avoids the TestController
+        // tree.
+        const stepItem = { range: astFallback ?? undefined };
+        return buildFailureMessagesImpl(
+          step,
+          stepItem as unknown as vscode.TestItem,
+          parsed as unknown as import("./workspace/WorkspaceIndex").ParsedFile,
+        );
       },
     },
   };

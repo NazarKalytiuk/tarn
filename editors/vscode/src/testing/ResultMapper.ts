@@ -1,5 +1,12 @@
 import * as vscode from "vscode";
-import type { Report, FileResult, StepResult, TestResult, AssertionDetail } from "../util/schemaGuards";
+import type {
+  Report,
+  FileResult,
+  StepResult,
+  TestResult,
+  AssertionDetail,
+  Location as TarnLocation,
+} from "../util/schemaGuards";
 import type { ParsedFile } from "../workspace/WorkspaceIndex";
 import { ids } from "./discovery";
 
@@ -80,20 +87,102 @@ export function buildFailureMessages(
   parsed: ParsedFile,
 ): vscode.TestMessage[] {
   const messages: vscode.TestMessage[] = [];
-  const location = stepItem.range
-    ? new vscode.Location(parsed.uri, stepItem.range)
-    : undefined;
+
+  // Preference order for the step-level fallback anchor:
+  //   1. step.location from the JSON report (Tarn T55, NAZ-260)
+  //   2. stepItem.range derived from the current workspace YAML AST
+  //
+  // The JSON path is drift-free: the line/column were captured when
+  // Tarn loaded the file at run time, so they still point at the
+  // original step even if the user edited the file since then.
+  const stepLocation = resolveStepLocation(step, stepItem, parsed);
 
   const failures = step.assertions?.failures ?? [];
   if (failures.length > 0) {
     for (const failure of failures) {
-      messages.push(renderAssertionFailure(step, failure, location));
+      // Each assertion failure can carry its own location — typically
+      // the `assert.<operator>` key inside the step body. When it does,
+      // use it so the squiggle lands on the exact operator node.
+      const failureLocation =
+        locationFromTarn(failure.location, parsed) ?? stepLocation;
+      messages.push(renderAssertionFailure(step, failure, failureLocation));
     }
   } else {
-    messages.push(renderGenericFailure(step, location));
+    messages.push(renderGenericFailure(step, stepLocation));
   }
 
   return messages;
+}
+
+/**
+ * Resolve the step-level source anchor used for failure decorations.
+ *
+ * Prefers `step.location` from the JSON report, which is authoritative
+ * at run time and survives concurrent file edits (drift-free). Falls
+ * back to the AST-derived `stepItem.range` so older Tarn versions and
+ * `include:`-expanded steps (where Tarn emits `location: None`) still
+ * produce a usable anchor.
+ */
+export function resolveStepLocation(
+  step: StepResult,
+  stepItem: vscode.TestItem,
+  parsed: ParsedFile,
+): vscode.Location | undefined {
+  const fromJson = locationFromTarn(step.location, parsed);
+  if (fromJson) {
+    return fromJson;
+  }
+  if (stepItem.range) {
+    return new vscode.Location(parsed.uri, stepItem.range);
+  }
+  return undefined;
+}
+
+/**
+ * Convert a Tarn-reported (1-based) `location` into a `vscode.Location`.
+ *
+ * Tarn emits `line` and `column` as 1-based indices because that is
+ * what every error message in the CLI already uses. VS Code's
+ * `Position` API is 0-based, so every consumer must decrement before
+ * constructing a `Position`. The resulting range is a zero-width
+ * caret at the location; the editor expands it to the enclosing token
+ * for rendering.
+ *
+ * Prefers the URI of the parsed YAML file we already hold in memory.
+ * Only falls back to building a fresh URI from `location.file` when
+ * that path does not match — a defensive branch for future scenarios
+ * where Tarn may report a location inside an `include:`d sub-file.
+ */
+export function locationFromTarn(
+  location: TarnLocation | undefined,
+  parsed: ParsedFile,
+): vscode.Location | undefined {
+  if (!location) {
+    return undefined;
+  }
+  const line = Math.max(location.line - 1, 0);
+  const column = Math.max(location.column - 1, 0);
+  const position = new vscode.Position(line, column);
+  const range = new vscode.Range(position, position);
+  const uri = resolveLocationUri(location.file, parsed);
+  return new vscode.Location(uri, range);
+}
+
+function resolveLocationUri(
+  reportedFile: string,
+  parsed: ParsedFile,
+): vscode.Uri {
+  // If the location points at the same file we already indexed, reuse
+  // the parsed URI to keep VS Code's URI identity stable with the rest
+  // of the mapping pipeline.
+  if (
+    reportedFile === parsed.uri.fsPath ||
+    parsed.uri.fsPath.endsWith(reportedFile) ||
+    reportedFile.endsWith(parsed.uri.fsPath)
+  ) {
+    return parsed.uri;
+  }
+  return vscode.Uri.file(reportedFile);
 }
 
 function renderAssertionFailure(

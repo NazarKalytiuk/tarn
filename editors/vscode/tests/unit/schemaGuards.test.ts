@@ -199,4 +199,126 @@ describe("parseReport", () => {
     const bad = { duration_ms: 1 };
     expect(() => parseReport(JSON.stringify(bad))).toThrow();
   });
+
+  it("accepts optional `location` on steps and on assertion details/failures (NAZ-281)", () => {
+    // Tarn T55 (NAZ-260) attaches a 1-based `location: { file, line, column }`
+    // to every step and to every assertion detail/failure that maps back to
+    // a YAML operator key. The extension consumes this in ResultMapper, so
+    // the zod schema must preserve it through parseReport without dropping
+    // the field or rejecting the payload.
+    const withLocations = {
+      duration_ms: 7,
+      files: [
+        {
+          file: "tests/health.tarn.yaml",
+          name: "Health",
+          status: "FAILED",
+          duration_ms: 7,
+          summary: { total: 1, passed: 0, failed: 1 },
+          tests: [
+            {
+              name: "smoke",
+              description: null,
+              status: "FAILED",
+              duration_ms: 7,
+              steps: [
+                {
+                  name: "GET /status/500",
+                  status: "FAILED",
+                  duration_ms: 7,
+                  location: {
+                    file: "/ws/tests/health.tarn.yaml",
+                    line: 9,
+                    column: 9,
+                  },
+                  assertions: {
+                    total: 1,
+                    passed: 0,
+                    failed: 1,
+                    details: [
+                      {
+                        assertion: "status",
+                        passed: false,
+                        expected: "200",
+                        actual: "500",
+                        message: "Expected HTTP status 200, got 500",
+                        diff: null,
+                        location: {
+                          file: "/ws/tests/health.tarn.yaml",
+                          line: 14,
+                          column: 11,
+                        },
+                      },
+                    ],
+                    failures: [
+                      {
+                        assertion: "status",
+                        expected: "200",
+                        actual: "500",
+                        message: "Expected HTTP status 200, got 500",
+                        diff: null,
+                        location: {
+                          file: "/ws/tests/health.tarn.yaml",
+                          line: 14,
+                          column: 11,
+                        },
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      summary: {
+        files: 1,
+        tests: 1,
+        steps: { total: 1, passed: 0, failed: 1 },
+        status: "FAILED" as const,
+      },
+    };
+    const report = parseReport(JSON.stringify(withLocations));
+    const step = report.files[0].tests[0].steps[0];
+    expect(step.location).toEqual({
+      file: "/ws/tests/health.tarn.yaml",
+      line: 9,
+      column: 9,
+    });
+    expect(step.assertions?.details?.[0].location).toEqual({
+      file: "/ws/tests/health.tarn.yaml",
+      line: 14,
+      column: 11,
+    });
+    expect(step.assertions?.failures?.[0].location).toEqual({
+      file: "/ws/tests/health.tarn.yaml",
+      line: 14,
+      column: 11,
+    });
+  });
+
+  it("rejects a location with non-positive line (must be 1-based)", () => {
+    // Tarn spec: line and column are 1-based >= 1. A line of 0 means
+    // a producer bug and must not silently coerce to a valid Position.
+    const bad = {
+      ...passingReport,
+      files: [
+        {
+          ...passingReport.files[0],
+          tests: [
+            {
+              ...passingReport.files[0].tests[0],
+              steps: [
+                {
+                  ...passingReport.files[0].tests[0].steps[0],
+                  location: { file: "x.yaml", line: 0, column: 1 },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    expect(() => parseReport(JSON.stringify(bad))).toThrow();
+  });
 });

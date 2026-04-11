@@ -1,5 +1,98 @@
 # Changelog
 
+## 0.21.0 — Phase 5: Consume location metadata (NAZ-281)
+
+Tarn T55 (shipped in NAZ-260) now emits an optional
+`location: { file, line, column }` object on every `StepResult`, every
+`AssertionDetail`, and every `AssertionFailure` that maps back to a
+YAML operator key. This release teaches `ResultMapper` to prefer those
+run-time-captured coordinates over the editor's current YAML AST, so
+failure diagnostics stay anchored on the exact assertion node even if
+the user edits the file between the moment Tarn loaded it and the
+moment the extension renders the report. AST lookup remains the
+authoring-side source of truth (CodeLens, completion, hover, rename)
+and the fallback path for older Tarn versions or `include:`-expanded
+steps where the CLI emits `location: None`.
+
+### Added
+
+- **`locationSchema`** in `src/util/schemaGuards.ts` — a new zod
+  shape with `file: string`, `line: int>=1`, `column: int>=1` that
+  matches Tarn's 1-based coordinates exactly. The schema is exported
+  alongside the existing `Report`, `StepResult`, and `AssertionDetail`
+  types and is wired into `stepResultSchema` and `assertionDetailSchema`
+  as an optional field so older reports still parse.
+- **`locationFromTarn(location, parsed)`** helper in
+  `src/testing/ResultMapper.ts` — converts a Tarn-reported
+  `{file, line, column}` into a `vscode.Location`, normalizing 1-based
+  line/column into 0-based `Position`s and reusing the `ParsedFile` URI
+  when the reported file matches to keep VS Code URI identity stable
+  with the rest of the mapping pipeline.
+- **`resolveStepLocation(step, stepItem, parsed)`** — the step-level
+  resolver that encodes the new preference order: JSON
+  `step.location` first, AST `stepItem.range` second. Exported so
+  downstream views (fix plan, run history, webview jump-to) can reuse
+  the same precedence if needed.
+- **`api.testing.buildFailureMessagesForStep`** — a narrow testing hook
+  on the extension API that lets integration tests run a real Tarn
+  fixture, feed the returned `StepResult` through the mapper, and
+  verify the resulting `TestMessage.location` without having to reach
+  into the discovery + run-handler plumbing.
+- **`media/walkthrough/install.md`** now lists the
+  `requiresTarnVersion` hint for Phase 5 features so users installing
+  the extension know which Tarn version enables drift-free result
+  anchoring. The extension does NOT hard-gate on the version — older
+  Tarn still works, just with AST-based anchoring.
+
+### Changed
+
+- **`ResultMapper.buildFailureMessages`** now resolves the step anchor
+  via `resolveStepLocation` and, for every assertion failure that
+  carries its own `location`, prefers that per-assertion coordinate
+  over the step-level fallback. This means the red squiggle on a body
+  JSONPath assertion lands on the `body:` operator key (or the nested
+  `$.path: expected` line), not on the step's `name:` key.
+- **`assertionDetailSchema`** and **`stepResultSchema`** in
+  `src/util/schemaGuards.ts` now accept the optional `location` field
+  introduced by Tarn T55. The existing drift-tolerance rules from
+  NAZ-280 (`diff: nullish`, `passed` optional inside `failures[]`) are
+  preserved — this change is purely additive.
+- **`docs/VSCODE_EXTENSION.md` §5.1 "Mapping Results to Editor Ranges"**
+  rewritten to document the new preference order: JSON `location`
+  first, AST lookup second. Clarifies that the AST layer remains the
+  source of truth for authoring features (CodeLens, rename, hover,
+  completion) and only loses its job for runtime result anchoring.
+
+### Tests
+
+- **Unit** (`tests/unit/ResultMapper.test.ts`, +13 tests). Covers
+  `locationFromTarn` (happy path, 1->0-based conversion, lower-bound
+  clamping to 0, undefined input, URI reuse), `resolveStepLocation`
+  (JSON wins, AST fallback, neither available), and
+  `buildFailureMessages` with five location scenarios: per-assertion
+  JSON location wins over step location, step location wins over AST
+  when assertion lacks its own, explicit AST drift scenario (JSON line
+  14 vs AST line 11), older-Tarn fallback, per-failure distinct
+  locations for multi-assert steps, and generic (non-assertion)
+  failures anchored on the JSON step location.
+- **Unit** (`tests/unit/schemaGuards.test.ts`, +2 tests). Verifies
+  `parseReport` round-trips the optional `location` field on steps and
+  on both assertion detail/failure shapes, and rejects payloads with a
+  non-positive line (Tarn guarantees 1-based).
+- **Integration** (`tests/integration/suite/resultMapperLocation.test.ts`,
+  +4 tests). Spins up the demo-server on an ephemeral port, writes a
+  deterministic `tests/location-drift.tarn.yaml` fixture whose step
+  lives at line 10 and whose `status: 404` assertion lives at line 15,
+  runs Tarn, and asserts: (1) Tarn's JSON report actually carries the
+  step location `{line: 10, column: 9}` and failure location
+  `{line: 15, column: 11}`; (2) `buildFailureMessagesForStep` anchors
+  the `TestMessage` on 0-based line 14 / column 10 even when the
+  test passes a deliberately-wrong AST range at line 999; (3) after a
+  simulated mid-run edit that prepends two blank lines and shifts the
+  AST range to line 11, the diagnostic stays glued to JSON-reported
+  line 14; (4) when `location` is stripped from the report (older
+  Tarn), the AST range takes over and the diagnostic lands on line 9.
+
 ## 0.20.0 — Phase 5: Honor per-test cookie jar (NAZ-280)
 
 First Phase 5 feature: the extension can now force Tarn's per-test

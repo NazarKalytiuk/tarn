@@ -27,6 +27,20 @@ export const errorCode = z.enum([
 
 export const statusEnum = z.enum(["PASSED", "FAILED"]);
 
+// Tarn T55 (NAZ-260) added optional `location` metadata on every
+// step and assertion detail that maps back to a YAML operator key.
+// Line and column are 1-based; `file` matches the path tarn prints
+// in other report fields. The field is optional because older Tarn
+// versions omit it and because `include:`-expanded steps degrade
+// cleanly to `location: None`.
+export const locationSchema = z.object({
+  file: z.string(),
+  line: z.number().int().positive(),
+  column: z.number().int().positive(),
+});
+
+export type Location = z.infer<typeof locationSchema>;
+
 // Tarn's JSON reporter emits one shape for `assertions.details[]`
 // (both passes and failures, each with `passed: bool`) and another
 // shape for `assertions.failures[]` (failed entries only — `passed`
@@ -41,6 +55,7 @@ const assertionDetailSchema = z.object({
   actual: z.string().optional(),
   message: z.string().optional(),
   diff: z.string().nullish(),
+  location: locationSchema.optional(),
 });
 
 const assertionsSchema = z.object({
@@ -75,6 +90,7 @@ export const stepResultSchema = z.object({
   failure_category: failureCategory.optional(),
   error_code: errorCode.optional(),
   remediation_hints: z.array(z.string()).optional(),
+  location: locationSchema.optional(),
   request: requestSchema.optional(),
   response: responseSchema.optional(),
 });
