@@ -24,6 +24,17 @@
 
 use lsp_types::Position;
 
+// Re-export the token classifier + its token enum under the "interpolation"
+// naming so downstream modules (definition, references) can depend on a
+// neutral name instead of one that bakes in the original L1.3 feature.
+// The implementation still lives in [`crate::hover`] to keep the NAZ-292
+// history intact — renaming the module would be strictly cleanup and is
+// out of scope for NAZ-297, which only needs a clean public alias.
+pub use crate::hover::{
+    resolve_hover_token as resolve_interpolation_token, HoverToken as InterpolationToken,
+    HoverTokenSpan as InterpolationTokenSpan,
+};
+
 /// Convert a 0-based LSP [`Position`] into a byte offset into `source`.
 ///
 /// LSP addresses each `character` as a UTF-16 code unit. Tarn YAML is

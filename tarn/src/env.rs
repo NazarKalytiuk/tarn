@@ -1,7 +1,10 @@
 use crate::config::NamedEnvironmentConfig;
 use crate::error::TarnError;
+use crate::model::Location;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
+use yaml_rust2::parser::{Event, MarkedEventReceiver, Parser};
+use yaml_rust2::scanner::Marker;
 
 /// Origin of a resolved environment variable. Mirrors the layers applied in
 /// [`resolve_env_with_profiles`] so editors and LSP clients can surface
@@ -72,6 +75,16 @@ pub struct EnvEntry {
     pub value: String,
     /// The winning layer for this key.
     pub source: EnvSource,
+    /// Best-effort source location of the key that supplied this value,
+    /// if the layer is backed by a YAML file we could scan (inline env
+    /// block, default env file, named env file, local env file). `None`
+    /// for CLI `--var`, shell expansion, and named profile vars — those
+    /// layers do not live in a YAML file we can point an LSP jump at.
+    ///
+    /// Added in NAZ-297 so `textDocument/definition` can return the
+    /// declaration site of an env key. Existing callers (hover, etc.)
+    /// ignore this field, so it is optional and populated best-effort.
+    pub declaration_range: Option<Location>,
 }
 
 /// Resolve environment variables with the priority chain:
@@ -213,13 +226,18 @@ pub fn resolve_env_with_sources(
 ) -> Result<BTreeMap<String, EnvEntry>, TarnError> {
     let mut env: BTreeMap<String, EnvEntry> = BTreeMap::new();
 
-    // Layer 1: inline env block from the test file.
+    // Layer 1: inline env block from the test file. No file path is known
+    // at this layer — the inline map came from `TestFile::env` which
+    // `serde_yaml` produced from somewhere the caller knows about. LSP
+    // consumers enrich `declaration_range` after this call using
+    // `inline_env_locations_from_source` against the test file's own YAML.
     for (k, v) in inline_env {
         env.insert(
             k.clone(),
             EnvEntry {
                 value: v.clone(),
                 source: EnvSource::InlineEnvBlock,
+                declaration_range: None,
             },
         );
     }
@@ -227,9 +245,10 @@ pub fn resolve_env_with_sources(
     // Layer 2: default env file (tarn.env.yaml).
     let default_env_file = base_dir.join(env_file_name);
     if default_env_file.exists() {
-        let file_env = load_env_file(&default_env_file)?;
+        let loaded = load_env_file_with_locations(&default_env_file)?;
         let display = default_env_file.display().to_string();
-        for (k, v) in file_env {
+        for (k, v) in loaded.values {
+            let declaration_range = loaded.locations.get(&k).cloned();
             env.insert(
                 k,
                 EnvEntry {
@@ -237,6 +256,7 @@ pub fn resolve_env_with_sources(
                     source: EnvSource::DefaultEnvFile {
                         path: display.clone(),
                     },
+                    declaration_range,
                 },
             );
         }
@@ -249,9 +269,10 @@ pub fn resolve_env_with_sources(
             .and_then(|profile| profile.env_file.as_ref().map(|path| base_dir.join(path)))
             .unwrap_or_else(|| base_dir.join(env_variant_filename(env_file_name, name)));
         if named_env_file.exists() {
-            let file_env = load_env_file(&named_env_file)?;
+            let loaded = load_env_file_with_locations(&named_env_file)?;
             let display = named_env_file.display().to_string();
-            for (k, v) in file_env {
+            for (k, v) in loaded.values {
+                let declaration_range = loaded.locations.get(&k).cloned();
                 env.insert(
                     k,
                     EnvEntry {
@@ -260,6 +281,7 @@ pub fn resolve_env_with_sources(
                             path: display.clone(),
                             env_name: name.to_owned(),
                         },
+                        declaration_range,
                     },
                 );
             }
@@ -273,6 +295,7 @@ pub fn resolve_env_with_sources(
                         source: EnvSource::NamedProfileVars {
                             env_name: name.to_owned(),
                         },
+                        declaration_range: None,
                     },
                 );
             }
@@ -282,9 +305,10 @@ pub fn resolve_env_with_sources(
     // Layer 4: tarn.env.local.yaml (gitignored, secrets).
     let local_env_file = base_dir.join(env_variant_filename(env_file_name, "local"));
     if local_env_file.exists() {
-        let file_env = load_env_file(&local_env_file)?;
+        let loaded = load_env_file_with_locations(&local_env_file)?;
         let display = local_env_file.display().to_string();
-        for (k, v) in file_env {
+        for (k, v) in loaded.values {
+            let declaration_range = loaded.locations.get(&k).cloned();
             env.insert(
                 k,
                 EnvEntry {
@@ -292,6 +316,7 @@ pub fn resolve_env_with_sources(
                     source: EnvSource::LocalEnvFile {
                         path: display.clone(),
                     },
+                    declaration_range,
                 },
             );
         }
@@ -311,6 +336,7 @@ pub fn resolve_env_with_sources(
             EnvEntry {
                 value: v.clone(),
                 source: EnvSource::CliVar,
+                declaration_range: None,
             },
         );
     }
@@ -358,6 +384,265 @@ fn load_env_file(path: &Path) -> Result<HashMap<String, String>, TarnError> {
             (k, s)
         })
         .collect())
+}
+
+/// Loaded env file values plus the per-key source location metadata we
+/// use to populate [`EnvEntry::declaration_range`]. Split out as a
+/// named struct so the clippy `type_complexity` lint is happy and so
+/// callers can pattern-match by field.
+struct LoadedEnvFile {
+    values: HashMap<String, String>,
+    locations: HashMap<String, Location>,
+}
+
+/// Sibling of [`load_env_file`] that also returns the 1-based [`Location`]
+/// of each top-level key's scalar in the YAML document.
+///
+/// Locations are produced with a second pass using `yaml-rust2` so the
+/// LSP can resolve `textDocument/definition` jumps from `{{ env.x }}` to
+/// the declaring file. The location points at the value scalar when the
+/// key has a scalar value, otherwise at the key itself — either way the
+/// jump lands on the right line.
+///
+/// Missing or non-mapping YAML is *not* an error: the function returns
+/// an empty location map in that case. The accompanying value map is
+/// always produced from the same `load_env_file` code path, so the LSP
+/// only loses the jump target, never the value.
+fn load_env_file_with_locations(path: &Path) -> Result<LoadedEnvFile, TarnError> {
+    let values = load_env_file(path)?;
+    let content = std::fs::read_to_string(path).map_err(|e| {
+        TarnError::Config(format!("Failed to read env file {}: {}", path.display(), e))
+    })?;
+    let locations = scan_top_level_key_locations(&content, &path.display().to_string());
+    Ok(LoadedEnvFile { values, locations })
+}
+
+/// Scan the top-level keys of a YAML mapping and return a map from key
+/// name to 1-based [`Location`] of the key (or its value scalar when
+/// available).
+///
+/// Public so `tarn-lsp` can enrich inline `env:` block entries with the
+/// declaration range of the key inside the currently-open test file. The
+/// inline env path is not otherwise accessible to the env loader — it
+/// arrives as a pre-parsed `HashMap` — so callers that want a jump
+/// target call this helper separately against the test file's raw text.
+///
+/// `display_path` is stored in every returned [`Location::file`]. Pass
+/// the absolute or display path of the source file so downstream
+/// consumers can anchor on the same string they already use elsewhere.
+pub fn scan_top_level_key_locations(
+    content: &str,
+    display_path: &str,
+) -> HashMap<String, Location> {
+    let mut out = HashMap::new();
+    let mut sink = LocationSink { events: Vec::new() };
+    let mut parser = Parser::new_from_str(content);
+    if parser.load(&mut sink, true).is_err() {
+        return out;
+    }
+
+    // Walk the event stream: StreamStart, DocumentStart, MappingStart,
+    // then alternating (key, value) pairs until MappingEnd.
+    let events = &sink.events;
+    let mut i = 0usize;
+    // Skip the StreamStart/DocumentStart header.
+    while i < events.len() {
+        if matches!(events[i].0, Event::MappingStart(_, _)) {
+            i += 1;
+            break;
+        }
+        i += 1;
+    }
+    // At this point we are just past the root MappingStart.
+    while i < events.len() {
+        match &events[i].0 {
+            Event::MappingEnd => break,
+            Event::Scalar(key, _, _, _) => {
+                let key = key.clone();
+                let key_marker = events[i].1;
+                i += 1;
+                // Consume the value node, recording its location if it
+                // is a scalar. Otherwise fall back to the key marker.
+                if i < events.len() {
+                    let (value_event, value_marker) = &events[i];
+                    let (loc_line, loc_col) = match value_event {
+                        Event::Scalar(_, _, _, _) => (value_marker.line(), value_marker.col() + 1),
+                        _ => (key_marker.line(), key_marker.col() + 1),
+                    };
+                    out.insert(
+                        key,
+                        Location {
+                            file: display_path.to_owned(),
+                            line: loc_line,
+                            column: loc_col,
+                        },
+                    );
+                    // Skip the value node in a balanced way. For a bare
+                    // scalar that is one event; for nested structures we
+                    // consume up to the matching close event.
+                    i = skip_node(events, i);
+                } else {
+                    break;
+                }
+            }
+            _ => {
+                // Unexpected event while looking for a key; try to
+                // recover by scanning forward.
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// Scan the inline `env:` block at the top level of a Tarn test file and
+/// return a map from key name to its declaration [`Location`].
+///
+/// Wraps [`scan_top_level_key_locations`] with the extra step of
+/// descending from the root mapping into the `env:` sub-mapping. Returns
+/// an empty map when the file has no `env:` block, when the block is not
+/// a mapping, or when the YAML cannot be scanned at all.
+pub fn inline_env_locations_from_source(
+    content: &str,
+    display_path: &str,
+) -> HashMap<String, Location> {
+    let mut out = HashMap::new();
+    let mut sink = LocationSink { events: Vec::new() };
+    let mut parser = Parser::new_from_str(content);
+    if parser.load(&mut sink, true).is_err() {
+        return out;
+    }
+    let events = &sink.events;
+
+    // Locate the root mapping.
+    let mut i = 0usize;
+    while i < events.len() {
+        if matches!(events[i].0, Event::MappingStart(_, _)) {
+            i += 1;
+            break;
+        }
+        i += 1;
+    }
+
+    // Walk keys at the root looking for `env`. Everything else is
+    // balanced-skipped so nested mappings cannot leak their own keys
+    // into our output.
+    while i < events.len() {
+        match &events[i].0 {
+            Event::MappingEnd => break,
+            Event::Scalar(key, _, _, _) => {
+                let key = key.clone();
+                i += 1;
+                if key == "env" {
+                    // Expect a mapping value. Descend into it and emit
+                    // every inner scalar key's location.
+                    if i < events.len() {
+                        if matches!(events[i].0, Event::MappingStart(_, _)) {
+                            i += 1;
+                            while i < events.len() {
+                                match &events[i].0 {
+                                    Event::MappingEnd => {
+                                        break;
+                                    }
+                                    Event::Scalar(inner_key, _, _, _) => {
+                                        let inner_key = inner_key.clone();
+                                        let key_marker = events[i].1;
+                                        i += 1;
+                                        let (loc_line, loc_col) =
+                                            if let Some((val_event, val_marker)) = events.get(i) {
+                                                match val_event {
+                                                    Event::Scalar(_, _, _, _) => {
+                                                        (val_marker.line(), val_marker.col() + 1)
+                                                    }
+                                                    _ => (key_marker.line(), key_marker.col() + 1),
+                                                }
+                                            } else {
+                                                (key_marker.line(), key_marker.col() + 1)
+                                            };
+                                        out.insert(
+                                            inner_key,
+                                            Location {
+                                                file: display_path.to_owned(),
+                                                line: loc_line,
+                                                column: loc_col,
+                                            },
+                                        );
+                                        i = skip_node(events, i);
+                                    }
+                                    _ => {
+                                        i = skip_node(events, i);
+                                    }
+                                }
+                            }
+                            return out;
+                        } else {
+                            // `env:` without a mapping value — nothing to jump to.
+                            return out;
+                        }
+                    }
+                } else {
+                    // Non-env key at the root — skip its value balanced.
+                    i = skip_node(events, i);
+                }
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+
+    out
+}
+
+/// Advance past a balanced YAML node (scalar, sequence, or mapping),
+/// returning the index of the first event *after* the node's closing
+/// event. Used by the location scanners above so they can hop over
+/// non-scalar values without losing their place in the stream.
+fn skip_node(events: &[(Event, Marker)], mut i: usize) -> usize {
+    if i >= events.len() {
+        return i;
+    }
+    let start = &events[i].0;
+    match start {
+        Event::Scalar(_, _, _, _) | Event::Alias(_) => i + 1,
+        Event::SequenceStart(_, _) => {
+            i += 1;
+            let mut depth = 1i32;
+            while i < events.len() && depth > 0 {
+                match &events[i].0 {
+                    Event::SequenceStart(_, _) | Event::MappingStart(_, _) => depth += 1,
+                    Event::SequenceEnd | Event::MappingEnd => depth -= 1,
+                    _ => {}
+                }
+                i += 1;
+            }
+            i
+        }
+        Event::MappingStart(_, _) => {
+            i += 1;
+            let mut depth = 1i32;
+            while i < events.len() && depth > 0 {
+                match &events[i].0 {
+                    Event::MappingStart(_, _) | Event::SequenceStart(_, _) => depth += 1,
+                    Event::MappingEnd | Event::SequenceEnd => depth -= 1,
+                    _ => {}
+                }
+                i += 1;
+            }
+            i
+        }
+        _ => i + 1,
+    }
+}
+
+struct LocationSink {
+    events: Vec<(Event, Marker)>,
+}
+
+impl MarkedEventReceiver for LocationSink {
+    fn on_event(&mut self, ev: Event, mark: Marker) {
+        self.events.push((ev, mark));
+    }
 }
 
 /// Resolve ${VAR_NAME} references in a string using shell environment variables.
@@ -802,6 +1087,104 @@ mod tests {
         let entry = env.get("base_url").unwrap();
         assert_eq!(entry.value, "http://local");
         assert!(matches!(entry.source, EnvSource::LocalEnvFile { .. }));
+    }
+
+    #[test]
+    fn resolve_env_with_sources_populates_file_declaration_range() {
+        let dir = TempDir::new().unwrap();
+        setup_env_files(&dir, &[("tarn.env.yaml", "base_url: http://from-file\n")]);
+
+        let env = resolve_env_with_sources(
+            &HashMap::new(),
+            None,
+            &[],
+            dir.path(),
+            "tarn.env.yaml",
+            &HashMap::new(),
+        )
+        .unwrap();
+        let entry = env.get("base_url").unwrap();
+        let range = entry
+            .declaration_range
+            .as_ref()
+            .expect("env files must populate declaration_range");
+        assert_eq!(range.line, 1, "single-line env file -> line 1");
+        assert!(range.column >= 1);
+        assert!(range.file.ends_with("tarn.env.yaml"));
+    }
+
+    #[test]
+    fn resolve_env_with_sources_cli_var_has_no_declaration_range() {
+        let dir = TempDir::new().unwrap();
+        let cli_vars = vec![("token".into(), "abc".into())];
+        let env = resolve_env_with_sources(
+            &HashMap::new(),
+            None,
+            &cli_vars,
+            dir.path(),
+            "tarn.env.yaml",
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert!(env.get("token").unwrap().declaration_range.is_none());
+    }
+
+    #[test]
+    fn resolve_env_with_sources_inline_entries_start_with_no_declaration_range() {
+        let dir = TempDir::new().unwrap();
+        let mut inline = HashMap::new();
+        inline.insert("base_url".into(), "http://inline".into());
+        let env = resolve_env_with_sources(
+            &inline,
+            None,
+            &[],
+            dir.path(),
+            "tarn.env.yaml",
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert!(env.get("base_url").unwrap().declaration_range.is_none());
+    }
+
+    #[test]
+    fn scan_top_level_key_locations_for_bare_env_file_points_at_value_scalar() {
+        let yaml = "base_url: http://localhost\ntoken: secret\n";
+        let out = scan_top_level_key_locations(yaml, "/tmp/tarn.env.yaml");
+        let base = out.get("base_url").expect("base_url present");
+        assert_eq!(base.line, 1);
+        // Value `http://localhost` starts at column 11 (after `base_url: `).
+        assert!(base.column >= 10);
+        let token = out.get("token").expect("token present");
+        assert_eq!(token.line, 2);
+    }
+
+    #[test]
+    fn inline_env_locations_from_source_finds_keys_inside_env_block() {
+        let yaml = "\
+name: Sample
+env:
+  base_url: http://localhost
+  token: secret
+steps:
+  - name: step1
+    request:
+      method: GET
+      url: http://localhost
+";
+        let out = inline_env_locations_from_source(yaml, "/tmp/t.tarn.yaml");
+        let base = out.get("base_url").expect("base_url present");
+        assert_eq!(base.line, 3);
+        let token = out.get("token").expect("token present");
+        assert_eq!(token.line, 4);
+        // Must not leak step-name keys into the output.
+        assert!(!out.contains_key("name"));
+    }
+
+    #[test]
+    fn inline_env_locations_returns_empty_when_no_env_block() {
+        let yaml = "name: No env\nsteps:\n  - name: a\n    request: {method: GET, url: http://x}\n";
+        let out = inline_env_locations_from_source(yaml, "/tmp/t.tarn.yaml");
+        assert!(out.is_empty());
     }
 
     #[test]

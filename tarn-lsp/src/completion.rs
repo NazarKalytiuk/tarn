@@ -812,6 +812,7 @@ mod tests {
         EnvEntry {
             value: value.to_owned(),
             source,
+            declaration_range: None,
         }
     }
 

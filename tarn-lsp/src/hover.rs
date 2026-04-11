@@ -960,6 +960,7 @@ mod tests {
                 source: EnvSource::DefaultEnvFile {
                     path: "/proj/tarn.env.yaml".to_owned(),
                 },
+                declaration_range: None,
             },
         );
         let ctx = HoverContext {
@@ -985,6 +986,7 @@ mod tests {
                 source: EnvSource::LocalEnvFile {
                     path: "/proj/tarn.env.local.yaml".to_owned(),
                 },
+                declaration_range: None,
             },
         );
         let ctx = HoverContext {

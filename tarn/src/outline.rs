@@ -34,6 +34,7 @@
 //!     The only thing it assumes is that the top of the file is a YAML
 //!     mapping. Anything else gracefully produces an empty outline.
 
+use crate::model::Location;
 use std::path::Path;
 use yaml_rust2::parser::{Event, MarkedEventReceiver, Parser};
 use yaml_rust2::scanner::Marker;
@@ -505,6 +506,342 @@ impl<'a> Cursor<'a> {
     }
 }
 
+/// Identifies the section of a test file that contains a step.
+///
+/// `Setup`, `Teardown`, and `FlatSteps` apply to the top-level step
+/// sequences. `Test(name)` picks one named group from the `tests:`
+/// mapping. `Any` means "search every section" — the LSP
+/// `textDocument/definition` handler uses this when the client jumps
+/// from a step that lives outside any test (e.g. a `teardown` step
+/// referencing a capture declared by the setup phase).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CaptureScope<'a> {
+    /// Search only the top-level `setup:` sequence.
+    Setup,
+    /// Search only the top-level `teardown:` sequence.
+    Teardown,
+    /// Search only the top-level `steps:` sequence.
+    FlatSteps,
+    /// Search only the `tests.<name>.steps:` sequence.
+    Test(&'a str),
+    /// Search every sequence above. Returns every matching declaration.
+    Any,
+}
+
+/// Scan `content` for every declaration of `capture_name` that lives in
+/// a step inside `scope`, returning a 1-based [`Location`] per match.
+///
+/// `display_path` is used for [`Location::file`] so the returned points
+/// anchor on the same path the rest of the tarn pipeline already uses.
+///
+/// Captures are declared under `capture:` in a step, either as a
+/// `JSONPath` scalar (`capture: { token: $.id }`) or as an extended
+/// mapping (`capture: { token: { jsonpath: $.id } }`). This helper
+/// locates the *key* inside the `capture:` mapping and returns a
+/// location pointing at the start of that key — the LSP's
+/// `textDocument/definition` jump lands on the key the user clicks, not
+/// on the value that happens to be captured there.
+///
+/// Returns an empty vector when the capture is not declared anywhere
+/// in `scope`, when `content` cannot be scanned as YAML, or when the
+/// root is not a mapping. Never panics on malformed input — the scan
+/// is strictly best-effort so an in-progress edit still produces a
+/// definition jump for the parts that are intact.
+pub fn find_capture_declarations(
+    content: &str,
+    display_path: &str,
+    capture_name: &str,
+    scope: &CaptureScope<'_>,
+) -> Vec<Location> {
+    let mut out = Vec::new();
+    let mut sink = EventSink { events: Vec::new() };
+    let mut parser = Parser::new_from_str(content);
+    if parser.load(&mut sink, true).is_err() {
+        return out;
+    }
+    let events = &sink.events;
+
+    // Skip StreamStart, DocumentStart, and consume the root mapping
+    // opening. If the root isn't a mapping the document has nothing to
+    // search and we return empty.
+    let mut i = 0usize;
+    while i < events.len() {
+        if matches!(events[i].0, Event::MappingStart(_, _)) {
+            i += 1;
+            break;
+        }
+        i += 1;
+    }
+
+    // Walk the root mapping's keys. For each section of interest (per
+    // `scope`) we descend into its step list and collect capture-key
+    // markers.
+    while i < events.len() {
+        match &events[i].0 {
+            Event::MappingEnd => break,
+            Event::Scalar(key, _, _, _) => {
+                let key = key.clone();
+                i += 1;
+                let interested = match scope {
+                    CaptureScope::Setup => key == "setup",
+                    CaptureScope::Teardown => key == "teardown",
+                    CaptureScope::FlatSteps => key == "steps",
+                    CaptureScope::Test(_) => key == "tests",
+                    CaptureScope::Any => {
+                        key == "setup" || key == "teardown" || key == "steps" || key == "tests"
+                    }
+                };
+                if !interested {
+                    i = skip_event_node(events, i);
+                    continue;
+                }
+                if key == "tests" {
+                    let target = match scope {
+                        CaptureScope::Test(name) => Some(*name),
+                        _ => None,
+                    };
+                    i = scan_tests_for_captures(
+                        events,
+                        i,
+                        display_path,
+                        capture_name,
+                        target,
+                        &mut out,
+                    );
+                } else {
+                    i = scan_step_sequence_for_captures(
+                        events,
+                        i,
+                        display_path,
+                        capture_name,
+                        &mut out,
+                    );
+                }
+            }
+            _ => {
+                i = skip_event_node(events, i);
+            }
+        }
+    }
+
+    out
+}
+
+/// Scan a `tests:` mapping value for captures. Position must start at
+/// the `MappingStart` event of the tests mapping. `target` optionally
+/// restricts the walk to a single named test.
+fn scan_tests_for_captures(
+    events: &[(Event, Marker)],
+    mut i: usize,
+    display_path: &str,
+    capture_name: &str,
+    target: Option<&str>,
+    out: &mut Vec<Location>,
+) -> usize {
+    if !matches!(
+        events.get(i).map(|(e, _)| e),
+        Some(Event::MappingStart(_, _))
+    ) {
+        return skip_event_node(events, i);
+    }
+    i += 1;
+    while i < events.len() {
+        match &events[i].0 {
+            Event::MappingEnd => return i + 1,
+            Event::Scalar(name, _, _, _) => {
+                let name = name.clone();
+                i += 1;
+                if !matches!(
+                    events.get(i).map(|(e, _)| e),
+                    Some(Event::MappingStart(_, _))
+                ) {
+                    i = skip_event_node(events, i);
+                    continue;
+                }
+                let matches_target = target.map(|t| t == name).unwrap_or(true);
+                if !matches_target {
+                    i = skip_event_node(events, i);
+                    continue;
+                }
+                // Descend into the test group body.
+                i += 1; // consume MappingStart
+                while i < events.len() {
+                    match &events[i].0 {
+                        Event::MappingEnd => {
+                            i += 1;
+                            break;
+                        }
+                        Event::Scalar(inner_key, _, _, _) => {
+                            let inner_key = inner_key.clone();
+                            i += 1;
+                            if inner_key == "steps" {
+                                i = scan_step_sequence_for_captures(
+                                    events,
+                                    i,
+                                    display_path,
+                                    capture_name,
+                                    out,
+                                );
+                            } else {
+                                i = skip_event_node(events, i);
+                            }
+                        }
+                        _ => {
+                            i = skip_event_node(events, i);
+                        }
+                    }
+                }
+            }
+            _ => {
+                i = skip_event_node(events, i);
+            }
+        }
+    }
+    i
+}
+
+/// Scan a sequence of step mappings for captures. Position must start
+/// at the `SequenceStart` event of the step list.
+fn scan_step_sequence_for_captures(
+    events: &[(Event, Marker)],
+    mut i: usize,
+    display_path: &str,
+    capture_name: &str,
+    out: &mut Vec<Location>,
+) -> usize {
+    if !matches!(
+        events.get(i).map(|(e, _)| e),
+        Some(Event::SequenceStart(_, _))
+    ) {
+        return skip_event_node(events, i);
+    }
+    i += 1;
+    while i < events.len() {
+        match &events[i].0 {
+            Event::SequenceEnd => return i + 1,
+            Event::MappingStart(_, _) => {
+                i += 1;
+                // Walk the step's top-level keys.
+                while i < events.len() {
+                    match &events[i].0 {
+                        Event::MappingEnd => {
+                            i += 1;
+                            break;
+                        }
+                        Event::Scalar(key, _, _, _) => {
+                            let key = key.clone();
+                            i += 1;
+                            if key == "capture" {
+                                i = scan_capture_mapping(
+                                    events,
+                                    i,
+                                    display_path,
+                                    capture_name,
+                                    out,
+                                );
+                            } else {
+                                i = skip_event_node(events, i);
+                            }
+                        }
+                        _ => {
+                            i = skip_event_node(events, i);
+                        }
+                    }
+                }
+            }
+            _ => {
+                i = skip_event_node(events, i);
+            }
+        }
+    }
+    i
+}
+
+/// Scan a `capture:` mapping for a specific key, appending a
+/// [`Location`] pointing at the key's marker when found. Position must
+/// start at the `MappingStart` event of the capture mapping.
+fn scan_capture_mapping(
+    events: &[(Event, Marker)],
+    mut i: usize,
+    display_path: &str,
+    capture_name: &str,
+    out: &mut Vec<Location>,
+) -> usize {
+    if !matches!(
+        events.get(i).map(|(e, _)| e),
+        Some(Event::MappingStart(_, _))
+    ) {
+        return skip_event_node(events, i);
+    }
+    i += 1;
+    while i < events.len() {
+        match &events[i].0 {
+            Event::MappingEnd => return i + 1,
+            Event::Scalar(key, _, _, _) => {
+                let key = key.clone();
+                let marker = events[i].1;
+                i += 1;
+                if key == capture_name {
+                    out.push(Location {
+                        file: display_path.to_owned(),
+                        line: marker.line(),
+                        column: marker.col() + 1,
+                    });
+                }
+                // Skip the value regardless of match — captures values
+                // are either scalars or nested mappings.
+                i = skip_event_node(events, i);
+            }
+            _ => {
+                i = skip_event_node(events, i);
+            }
+        }
+    }
+    i
+}
+
+/// Advance past a balanced YAML event node (scalar, sequence, or
+/// mapping), returning the index immediately after the node's closing
+/// event. Used by [`find_capture_declarations`] and its helpers so they
+/// can hop over every non-target node without losing their place in
+/// the event stream.
+fn skip_event_node(events: &[(Event, Marker)], mut i: usize) -> usize {
+    if i >= events.len() {
+        return i;
+    }
+    let start = &events[i].0;
+    match start {
+        Event::Scalar(_, _, _, _) | Event::Alias(_) => i + 1,
+        Event::SequenceStart(_, _) => {
+            i += 1;
+            let mut depth = 1i32;
+            while i < events.len() && depth > 0 {
+                match &events[i].0 {
+                    Event::SequenceStart(_, _) | Event::MappingStart(_, _) => depth += 1,
+                    Event::SequenceEnd | Event::MappingEnd => depth -= 1,
+                    _ => {}
+                }
+                i += 1;
+            }
+            i
+        }
+        Event::MappingStart(_, _) => {
+            i += 1;
+            let mut depth = 1i32;
+            while i < events.len() && depth > 0 {
+                match &events[i].0 {
+                    Event::MappingStart(_, _) | Event::SequenceStart(_, _) => depth += 1,
+                    Event::MappingEnd | Event::SequenceEnd => depth -= 1,
+                    _ => {}
+                }
+                i += 1;
+            }
+            i
+        }
+        _ => i + 1,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -722,5 +1059,169 @@ steps:
         assert_eq!(span.end_line, 3);
         assert_eq!(span.start_column, 5);
         assert_eq!(span.end_column, 5);
+    }
+
+    // --- find_capture_declarations ------------------------------------
+
+    #[test]
+    fn find_capture_declarations_locates_key_in_test_scope() {
+        let yaml = "\
+name: Captures
+tests:
+  main:
+    steps:
+      - name: login
+        request:
+          method: POST
+          url: http://x/auth
+        capture:
+          token: $.id
+      - name: next
+        request:
+          method: GET
+          url: http://x/items
+";
+        let locs =
+            find_capture_declarations(yaml, "t.tarn.yaml", "token", &CaptureScope::Test("main"));
+        assert_eq!(locs.len(), 1);
+        // `token:` lives on line 10 (1-based).
+        assert_eq!(locs[0].line, 10);
+        assert_eq!(locs[0].file, "t.tarn.yaml");
+    }
+
+    #[test]
+    fn find_capture_declarations_locates_keys_in_flat_steps() {
+        let yaml = "\
+name: Flat captures
+steps:
+  - name: s1
+    request:
+      method: POST
+      url: http://x/
+    capture:
+      token: $.id
+";
+        let locs =
+            find_capture_declarations(yaml, "t.tarn.yaml", "token", &CaptureScope::FlatSteps);
+        assert_eq!(locs.len(), 1);
+        assert_eq!(locs[0].line, 8);
+    }
+
+    #[test]
+    fn find_capture_declarations_returns_empty_when_name_missing() {
+        let yaml = "\
+name: Missing
+steps:
+  - name: s1
+    request:
+      method: GET
+      url: http://x/
+    capture:
+      other: $.id
+";
+        let locs =
+            find_capture_declarations(yaml, "t.tarn.yaml", "token", &CaptureScope::FlatSteps);
+        assert!(locs.is_empty());
+    }
+
+    #[test]
+    fn find_capture_declarations_returns_all_occurrences_in_same_test() {
+        let yaml = "\
+name: Dup
+tests:
+  main:
+    steps:
+      - name: s1
+        request:
+          method: POST
+          url: http://x/a
+        capture:
+          token: $.id
+      - name: s2
+        request:
+          method: POST
+          url: http://x/b
+        capture:
+          token: $.id
+";
+        let locs =
+            find_capture_declarations(yaml, "t.tarn.yaml", "token", &CaptureScope::Test("main"));
+        assert_eq!(locs.len(), 2);
+        assert!(locs[0].line < locs[1].line);
+    }
+
+    #[test]
+    fn find_capture_declarations_any_scope_searches_every_section() {
+        let yaml = "\
+name: Any
+setup:
+  - name: login
+    request:
+      method: POST
+      url: http://x/auth
+    capture:
+      session_id: $.id
+teardown:
+  - name: cleanup
+    request:
+      method: DELETE
+      url: http://x/cleanup
+    capture:
+      deleted_id: $.id
+steps:
+  - name: main
+    request:
+      method: GET
+      url: http://x/
+    capture:
+      main_id: $.id
+";
+        let setup_locs =
+            find_capture_declarations(yaml, "t.tarn.yaml", "session_id", &CaptureScope::Any);
+        assert_eq!(setup_locs.len(), 1);
+        let teardown_locs =
+            find_capture_declarations(yaml, "t.tarn.yaml", "deleted_id", &CaptureScope::Any);
+        assert_eq!(teardown_locs.len(), 1);
+        let flat_locs =
+            find_capture_declarations(yaml, "t.tarn.yaml", "main_id", &CaptureScope::Any);
+        assert_eq!(flat_locs.len(), 1);
+    }
+
+    #[test]
+    fn find_capture_declarations_does_not_leak_across_named_tests() {
+        let yaml = "\
+name: Two
+tests:
+  first:
+    steps:
+      - name: a
+        request:
+          method: GET
+          url: http://x/a
+        capture:
+          token: $.id
+  second:
+    steps:
+      - name: b
+        request:
+          method: GET
+          url: http://x/b
+        capture:
+          token: $.id
+";
+        let first =
+            find_capture_declarations(yaml, "t.tarn.yaml", "token", &CaptureScope::Test("first"));
+        assert_eq!(first.len(), 1);
+        let second =
+            find_capture_declarations(yaml, "t.tarn.yaml", "token", &CaptureScope::Test("second"));
+        assert_eq!(second.len(), 1);
+        assert_ne!(first[0].line, second[0].line);
+    }
+
+    #[test]
+    fn find_capture_declarations_malformed_yaml_returns_empty() {
+        let yaml = "name: bad\n  - indent: [oops";
+        let locs = find_capture_declarations(yaml, "t.tarn.yaml", "x", &CaptureScope::Any);
+        assert!(locs.is_empty());
     }
 }

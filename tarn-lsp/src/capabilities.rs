@@ -17,6 +17,8 @@
 //!   with trigger characters `.` and `$`. Shipped.
 //! - L1.5 (NAZ-294): `document_symbol_provider: Some(OneOf::Left(true))` —
 //!   the final Phase L1 feature. Shipped.
+//! - L2.1 (NAZ-297): `definition_provider: Some(OneOf::Left(true))` —
+//!   go-to-definition for `{{ capture.* }}` and `{{ env.* }}`. Shipped.
 //!
 //! Nothing in this file should ever grow conditional logic — if a capability
 //! is on, it is on for every client and every workspace.
@@ -64,6 +66,13 @@ pub fn server_capabilities() -> ServerCapabilities {
         // there are no extra options to configure (we do not support
         // work-done progress for symbol requests).
         document_symbol_provider: Some(OneOf::Left(true)),
+
+        // L2.1: the server answers `textDocument/definition` requests
+        // for `{{ capture.* }}` and `{{ env.* }}` interpolation tokens.
+        // `OneOf::Left(true)` is the minimal form — we do not need
+        // `DefinitionOptions` because we neither stream partial results
+        // nor advertise any extra selectors.
+        definition_provider: Some(OneOf::Left(true)),
 
         // All other capabilities are intentionally left unset. See the module
         // docs for the ticket that turns each one on.

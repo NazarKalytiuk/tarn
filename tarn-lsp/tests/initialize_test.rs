@@ -19,9 +19,10 @@ use lsp_types::{
     TextDocumentSyncCapability, TextDocumentSyncKind, Url, VersionedTextDocumentIdentifier,
 };
 
-/// Sanity check: `server_capabilities()` is the single source of truth for
-/// what the current phase advertises. Phase L1 is now complete — every
-/// feature capability L1.1 through L1.5 added must be present.
+/// Sanity check: `server_capabilities()` is the single source of truth
+/// for what the current phase advertises. Phase L1 is now complete and
+/// Phase L2 has started shipping — every feature capability L1.1
+/// through L1.5 must be present, plus any L2 ticket that has landed.
 #[test]
 fn server_capabilities_advertises_every_phase_l1_feature() {
     let caps = tarn_lsp::server_capabilities();
@@ -64,10 +65,14 @@ fn server_capabilities_advertises_every_phase_l1_feature() {
         "L1.5 must advertise document_symbol_provider as OneOf::Left(true)"
     );
 
-    // Phase L2 capabilities remain unset — if one of them is already
-    // present, capabilities.rs has drifted from the roadmap and needs a
-    // compensating update to the doc + tests.
-    assert!(caps.definition_provider.is_none(), "L2: go-to-definition");
+    // L2.1 (NAZ-297): go-to-definition is on.
+    assert_eq!(
+        caps.definition_provider,
+        Some(lsp_types::OneOf::Left(true)),
+        "L2.1 must advertise definition_provider as OneOf::Left(true)"
+    );
+
+    // Phase L2/L3 capabilities that have not shipped yet remain unset.
     assert!(caps.references_provider.is_none(), "L2: find references");
     assert!(caps.rename_provider.is_none(), "L2: rename symbol");
     assert!(caps.code_action_provider.is_none(), "L3: code actions");

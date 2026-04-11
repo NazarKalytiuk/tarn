@@ -30,12 +30,18 @@ use lsp_types::notification::{
     DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, DidSaveTextDocument,
     Notification as _,
 };
-use lsp_types::request::{Completion, DocumentSymbolRequest, HoverRequest, Request as _};
-use lsp_types::{CompletionParams, DocumentSymbolParams, HoverParams, InitializeParams, Url};
+use lsp_types::request::{
+    Completion, DocumentSymbolRequest, GotoDefinition, HoverRequest, Request as _,
+};
+use lsp_types::{
+    CompletionParams, DocumentSymbolParams, GotoDefinitionParams, HoverParams, InitializeParams,
+    Url,
+};
 
 use crate::capabilities::server_capabilities;
 use crate::completion;
 use crate::debounce::DebounceTracker;
+use crate::definition;
 use crate::diagnostics;
 use crate::hover;
 use crate::symbols;
@@ -233,8 +239,8 @@ fn is_timeout(err: &crossbeam_channel::RecvTimeoutError) -> bool {
 /// L1.4 adds `textDocument/completion` via
 /// [`completion::text_document_completion`]; L1.5 adds
 /// `textDocument/documentSymbol` via
-/// [`symbols::text_document_document_symbol`]. Phase L2 will add more
-/// request methods on top.
+/// [`symbols::text_document_document_symbol`]. L2.1 adds
+/// `textDocument/definition` via [`definition::text_document_definition`].
 fn dispatch_request(req: Request, store: &DocumentStore) -> Response {
     // Capture the id up-front: `Request::extract` takes `self` by value
     // so we can't read `req.id` after a failed extract.
@@ -275,6 +281,20 @@ fn dispatch_request(req: Request, store: &DocumentStore) -> Response {
                 Err(ExtractError::JsonError { method, error }) => invalid_params(id, method, error),
             }
         }
+        GotoDefinition::METHOD => match req.extract::<GotoDefinitionParams>(GotoDefinition::METHOD)
+        {
+            Ok((req_id, params)) => {
+                let uri = params.text_document_position_params.text_document.uri;
+                let position = params.text_document_position_params.position;
+                let result = definition::text_document_definition(store, &uri, position);
+                // LSP spec: definition may return `null`. The handler
+                // returns `None` for unknown URIs, non-navigable tokens,
+                // and empty lookups.
+                serialize_response(req_id, &result, "definition")
+            }
+            Err(ExtractError::MethodMismatch(r)) => method_not_found(r),
+            Err(ExtractError::JsonError { method, error }) => invalid_params(id, method, error),
+        },
         _ => method_not_found(req),
     }
 }

@@ -260,9 +260,9 @@ Each item also adds its own golden or integration test so the new surface is cov
 
 ## Phase L: LSP for Claude Code
 
-Epic **NAZ-289** — `tarn-lsp` Language Server for Claude Code and non-VS-Code editors. Delivered as five tickets (L1.1 through L1.5) that each flip on exactly one LSP capability. Canonical spec lives in [`docs/TARN_LSP.md`](./TARN_LSP.md).
+Epic **NAZ-289** — `tarn-lsp` Language Server for Claude Code and non-VS-Code editors. Phase L1 (MVP) delivered as five tickets (L1.1 through L1.5) and Phase L2 (navigation) continues under Epic **NAZ-296**. Each ticket flips on exactly one LSP capability. Canonical spec lives in [`docs/TARN_LSP.md`](./TARN_LSP.md).
 
-**Phase L1 COMPLETE** — every ticket below is shipped. The MVP is live in the current workspace build. Phase L2 (navigation / refactor) and Phase L3 (formatting / code actions) are tracked as future work under the same epic or its successor — see the roadmap footer in [`docs/TARN_LSP.md`](./TARN_LSP.md) for the full list.
+**Phase L1 COMPLETE** — every L1 ticket below is shipped. Phase L2 is in progress: go-to-definition (L2.1) is shipped; references (L2.2), rename (L2.3), and code lens (L2.4) are still queued.
 
 | ID | Task | Impact | Effort | Depends | Files |
 |---|---|---:|---:|---|---|
@@ -271,6 +271,7 @@ Epic **NAZ-289** — `tarn-lsp` Language Server for Claude Code and non-VS-Code 
 | L1.3 | Hover provider for env / capture / builtin / schema-key tokens **[shipped — NAZ-292]** | 7 | M | L1.2 | `tarn-lsp/src/hover.rs`, `tarn-lsp/src/server.rs`, `tarn-lsp/src/capabilities.rs`, `tarn/src/env.rs` |
 | L1.4 | Completion provider for interpolation tokens (env, capture, builtin) and top-level schema keys **[shipped — NAZ-293]** | 8 | M | L1.2 | `tarn-lsp/src/completion.rs`, `tarn-lsp/src/token.rs`, `tarn-lsp/src/schema.rs`, `tarn-lsp/src/capabilities.rs`, `tarn-lsp/src/server.rs` |
 | L1.5 | Document symbol provider for test/step tree plus finalised MVP docs (Claude Code config, smoke test, roadmap) **[shipped — NAZ-294]** | 7 | S | L1.1-L1.4 | `tarn/src/outline.rs`, `tarn-lsp/src/symbols.rs`, `tarn-lsp/src/server.rs`, `tarn-lsp/src/capabilities.rs`, `docs/TARN_LSP.md`, `README.md` |
+| L2.1 | Go-to-definition (`textDocument/definition`) for `{{ capture.* }}` and `{{ env.* }}` interpolation tokens **[shipped — NAZ-297]** | 8 | M | L1.3-L1.5 | `tarn-lsp/src/definition.rs`, `tarn-lsp/src/server.rs`, `tarn-lsp/src/capabilities.rs`, `tarn-lsp/src/token.rs`, `tarn/src/env.rs`, `tarn/src/outline.rs`, `docs/TARN_LSP.md` |
 
 ### L1.1 scope (shipped)
 

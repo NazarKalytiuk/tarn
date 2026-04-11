@@ -30,7 +30,13 @@ Phase L1 is delivered as five tickets under Epic NAZ-289. Each ticket flips on e
 - [x] **L1.4 — completion (NAZ-293)**: `textDocument/completion` offers env keys, visible captures, built-in functions, and schema-valid YAML keys with trigger characters `.` and `$`.
 - [x] **L1.5 — document symbols + MVP docs (NAZ-294)**: `textDocument/documentSymbol` returns a hierarchical outline — file root (`Namespace`) → named tests (`Module`) → steps (`Function`), with setup/teardown/flat-step siblings. These docs are the MVP release artefact.
 
-**Phase L1 MVP: complete.** The roadmap footer at the bottom of this document lists Phase L2 and L3 work that is deliberately out of scope for this release.
+**Phase L1 MVP: complete.**
+
+## Phase L2 status
+
+Phase L2 layers navigation features onto the L1 MVP. Each ticket is a thin wrapper around the existing `tarn` crate primitives (`tarn::outline`, `tarn::env`) so jumps stay consistent with what the runner, hover, and diagnostics already see.
+
+- [x] **L2.1 — go-to-definition (NAZ-297)**: `textDocument/definition` jumps from `{{ capture.* }}` / `{{ env.* }}` interpolation tokens to their declaration sites.
 
 ## Installation
 
@@ -156,6 +162,14 @@ teardown:
     request: { method: POST, url: http://localhost/cleanup }
 ```
 
+### 5. Go-to-definition (`textDocument/definition`) — new in L2.1
+
+Invoking "Go to definition" on a `{{ capture.NAME }}` token jumps to the declaring `capture:` entry inside the same test (setup captures are always visible; named-test captures are only visible from steps in that test). If several steps declare the same capture name, every declaration is returned so the client can show a picker. If no step declares the name, the handler returns no result and the client suppresses its UI.
+
+Invoking "Go to definition" on a `{{ env.KEY }}` token walks the env resolution chain (`--var` > `tarn.env.local.yaml` > named env file > `tarn.env.yaml` > inline `env:` block) and jumps to the winning layer's declaration site. Layers that do not live in a YAML file we can point at — `--var` overrides, shell-variable expansion, and named profile vars from `tarn.config.yaml` — intentionally return no result. Built-in functions (`$uuid`, `$random_hex`, …) and top-level schema keys (`status`, `body`, `request`, …) are explicitly non-navigable; L2.1 only covers interpolation tokens.
+
+Ranges come from the same `yaml-rust2` second-pass scanner that powers `documentSymbol`, so jump targets stay in lockstep with the outline pane and the diagnostics gutter.
+
 ## Client configuration
 
 The binary speaks stdio LSP 3.17 — any client that can spawn an LSP server and speak JSON-RPC over stdio will work. Below are the three most common configurations.
@@ -277,7 +291,7 @@ The second-most common cause: the client only starts the server once a matching 
 
 ### Diagnostics do not show up
 
-Save the file — some clients only publish diagnostics on save regardless of the server advertising change events. If diagnostics still do not appear, open the client's "language server" output channel and look for a `tarn-lsp 0.5.4 initialized` banner. If that banner is missing, the client never successfully spawned the binary; see the "binary not found" section above.
+Save the file — some clients only publish diagnostics on save regardless of the server advertising change events. If diagnostics still do not appear, open the client's "language server" output channel and look for a `tarn-lsp 0.5.5 initialized` banner. If that banner is missing, the client never successfully spawned the binary; see the "binary not found" section above.
 
 If the banner is present but diagnostics are empty, run `tarn validate path/to/file.tarn.yaml` from a terminal in the same directory. If the CLI reports errors but the LSP does not, file an issue with the file path and expected diagnostics — that is a real bug, not a configuration problem.
 
@@ -291,9 +305,9 @@ If the pane is still empty, the file may not parse as YAML at all — the scanne
 
 Phase L1 is the MVP. Phase L2 and L3 pick up the long tail of LSP features and are deliberately out of scope for this release. They will land as new Linear tickets under Epic NAZ-289 (or a successor epic if L2 grows large enough to warrant its own).
 
-### Phase L2 — navigation and refactor (future)
+### Phase L2 — navigation and refactor (in progress)
 
-- **`textDocument/definition`** — jump from `{{ env.x }}` / `{{ capture.y }}` to where the variable is declared.
+- [x] **`textDocument/definition`** (NAZ-297) — jump from `{{ env.x }}` / `{{ capture.y }}` to where the variable is declared.
 - **`textDocument/references`** — find every use of a capture or env key from its declaration site.
 - **`textDocument/rename`** — rename a capture or env key across the file safely.
 - **`textDocument/codeLens`** — inline "Run this test" / "Run this step" affordances that invoke the CLI.

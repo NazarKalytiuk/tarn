@@ -11,6 +11,7 @@
 pub mod capabilities;
 pub mod completion;
 pub mod debounce;
+pub mod definition;
 pub mod diagnostics;
 pub mod hover;
 pub mod schema;
