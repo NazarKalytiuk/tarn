@@ -118,7 +118,7 @@ jobs:
           echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }} -p tarn -p tarn-mcp
+        run: cargo build --release --target ${{ matrix.target }} -p tarn -p tarn-mcp -p tarn-lsp
 
       - name: Package unix archives
         if: runner.os != 'Windows'
@@ -127,8 +127,9 @@ jobs:
           mkdir package
           cp target/${{ matrix.target }}/release/tarn package/tarn
           cp target/${{ matrix.target }}/release/tarn-mcp package/tarn-mcp
-          chmod +x package/tarn package/tarn-mcp
-          tar czf ${{ matrix.artifact }}.tar.gz -C package tarn tarn-mcp
+          cp target/${{ matrix.target }}/release/tarn-lsp package/tarn-lsp
+          chmod +x package/tarn package/tarn-mcp package/tarn-lsp
+          tar czf ${{ matrix.artifact }}.tar.gz -C package tarn tarn-mcp tarn-lsp
 
       - name: Package windows archives
         if: runner.os == 'Windows'
@@ -137,7 +138,8 @@ jobs:
           New-Item -ItemType Directory -Force -Path package | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/tarn.exe" "package/tarn.exe"
           Copy-Item "target/${{ matrix.target }}/release/tarn-mcp.exe" "package/tarn-mcp.exe"
-          Compress-Archive -Path package/tarn.exe,package/tarn-mcp.exe -DestinationPath "${{ matrix.artifact }}.zip" -Force
+          Copy-Item "target/${{ matrix.target }}/release/tarn-lsp.exe" "package/tarn-lsp.exe"
+          Compress-Archive -Path package/tarn.exe,package/tarn-mcp.exe,package/tarn-lsp.exe -DestinationPath "${{ matrix.artifact }}.zip" -Force
 
       - uses: actions/upload-artifact@v4
         with:
@@ -219,13 +221,21 @@ jobs:
         if: env.CARGO_REGISTRY_TOKEN != ''
         run: cargo publish -p tarn
 
-      - name: Wait for crates.io index
+      - name: Wait for crates.io index (after tarn)
         if: env.CARGO_REGISTRY_TOKEN != ''
         run: sleep 30
 
       - name: Publish tarn-mcp
         if: env.CARGO_REGISTRY_TOKEN != ''
         run: cargo publish -p tarn-mcp
+
+      - name: Wait for crates.io index (after tarn-mcp)
+        if: env.CARGO_REGISTRY_TOKEN != ''
+        run: sleep 30
+
+      - name: Publish tarn-lsp
+        if: env.CARGO_REGISTRY_TOKEN != ''
+        run: cargo publish -p tarn-lsp
 
   docker:
     name: Publish Docker image
