@@ -26,11 +26,35 @@ async function main(): Promise<void> {
       );
     }
 
+    // Phase V1 (NAZ-309): if the `tarn-lsp` debug binary is also
+    // available, the integration test for the experimental LSP
+    // client can point at it via a workspace setting. Missing
+    // binary is not fatal — the lspClient.test.ts suite skips
+    // its assertions gracefully in that case. This mirrors the
+    // advisory-not-fatal behavior of the runtime resolver.
+    const tarnLspDebugBinary = path.resolve(
+      __dirname,
+      "../../../../../target/debug/tarn-lsp",
+    );
+    const hasLspBinary = fs.existsSync(tarnLspDebugBinary);
+
     const vscodeDir = path.join(fixtureWorkspace, ".vscode");
     fs.mkdirSync(vscodeDir, { recursive: true });
+    const workspaceSettings: Record<string, unknown> = {
+      "tarn.binaryPath": tarnDebugBinary,
+      // Default the experimental LSP client OFF for every suite
+      // except `lspClient.test.ts`, which flips it on for its
+      // own scope and turns it back off in `afterEach`. Keeps
+      // the other 19 integration suites from spawning an LSP
+      // server they do not exercise.
+      "tarn.experimentalLspClient": false,
+    };
+    if (hasLspBinary) {
+      workspaceSettings["tarn.lspBinaryPath"] = tarnLspDebugBinary;
+    }
     fs.writeFileSync(
       path.join(vscodeDir, "settings.json"),
-      JSON.stringify({ "tarn.binaryPath": tarnDebugBinary }, null, 2),
+      JSON.stringify(workspaceSettings, null, 2),
     );
 
     const vscodeExecutablePath = await downloadAndUnzipVSCode();

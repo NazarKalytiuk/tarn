@@ -12,3 +12,16 @@ vitest.config.ts
 !media/**
 .gitignore
 .github/**
+# Phase V1 (NAZ-309): vscode-languageclient and its transitive
+# LSP protocol stack are externalized from the esbuild bundle and
+# loaded from node_modules at runtime. Re-include only the runtime
+# packages the language client depends on so the VSIX stays small
+# (everything else under node_modules/** is still excluded).
+!node_modules/vscode-languageclient/**
+!node_modules/vscode-languageserver-protocol/**
+!node_modules/vscode-languageserver-types/**
+!node_modules/vscode-jsonrpc/**
+!node_modules/semver/**
+!node_modules/minimatch/**
+!node_modules/brace-expansion/**
+!node_modules/balanced-match/**

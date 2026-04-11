@@ -166,6 +166,29 @@ export interface TarnExtensionTestingApi {
    * via `fs.writeFile` during a test run.
    */
   readonly refreshSingleFile: (uri: vscode.Uri) => Promise<void>;
+  /**
+   * Phase V1 (NAZ-309) test hook: boots the experimental
+   * `tarn-lsp` language client on demand and returns a tiny probe
+   * into its lifecycle. Exposed so the integration test can
+   * verify that the `tarn.experimentalLspClient = true` code path
+   * reaches `State.Running` and disposes cleanly without having
+   * to reload the extension host mid-test.
+   *
+   * Resolves to `undefined` if the experimental feature is not
+   * enabled or if the `tarn-lsp` binary cannot be spawned — the
+   * integration test skips gracefully in those cases. Calling
+   * `dispose()` on the returned probe stops the client and
+   * removes it from the module-scoped handle so `deactivate()`
+   * is a no-op afterwards.
+   */
+  readonly startExperimentalLspClient: () => Promise<
+    | {
+        readonly running: boolean;
+        readonly state: number;
+        readonly dispose: () => Promise<void>;
+      }
+    | undefined
+  >;
 }
 
 /**

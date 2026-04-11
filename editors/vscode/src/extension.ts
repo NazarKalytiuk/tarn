@@ -19,7 +19,10 @@ import { registerCommands } from "./commands";
 import { TarnProcessRunner } from "./backend/TarnProcessRunner";
 import { promptInstallIfMissing } from "./backend/binaryResolver";
 import { getOutputChannel, disposeOutputChannel } from "./outputChannel";
-import { readConfig } from "./config";
+import { getExperimentalLspClient, readConfig } from "./config";
+import { resolveTarnLspBinary } from "./lsp/tarnLspResolver";
+import { startTarnLspClient } from "./lsp/client";
+import type { LanguageClient } from "vscode-languageclient/node";
 import { warnIfTarnOutdated } from "./version";
 import {
   RunHistoryStore,
@@ -37,6 +40,22 @@ import { buildFailureMessages as buildFailureMessagesImpl } from "./testing/Resu
 import type { TarnExtensionApi } from "./api";
 
 export type { TarnExtensionApi } from "./api";
+
+/**
+ * Module-scoped handle on the experimental `tarn-lsp` language
+ * client. Kept outside `activate()` so `deactivate()` can dispose
+ * it without relying on a `context.subscriptions` round trip —
+ * VS Code's `deactivate` contract is allowed to be async and
+ * awaiting `client.stop()` here is the only way to guarantee the
+ * `shutdown` / `exit` handshake drains before the extension host
+ * tears down the child process.
+ *
+ * Intentionally not exposed on `TarnExtensionApi`: the NAZ-285
+ * stable API surface promise locks `src/api.ts`, and the LSP
+ * client is an internal implementation detail of the Phase V
+ * dual-host migration.
+ */
+let tarnLspClient: LanguageClient | undefined;
 
 export async function activate(
   context: vscode.ExtensionContext,
@@ -212,6 +231,34 @@ export async function activate(
     }),
   );
 
+  // Phase V1 (NAZ-309): experimental side-by-side `tarn-lsp` host.
+  // The flag is off by default; turning it on spawns the LSP in
+  // parallel with the direct providers. Any failure here is
+  // advisory — the direct providers already cover every feature,
+  // so we log, show a single warning, and continue.
+  if (getExperimentalLspClient()) {
+    try {
+      const resolvedLsp = await resolveTarnLspBinary();
+      tarnLspClient = await startTarnLspClient(context, resolvedLsp.path);
+      // l10n-ignore: debug log with tarn-lsp prefix.
+      output.appendLine(
+        `[tarn-lsp] experimental client started (binary=${resolvedLsp.path})`,
+      );
+    } catch (err) {
+      // l10n-ignore: debug log with tarn-lsp prefix.
+      output.appendLine(
+        `[tarn-lsp] experimental client failed to start: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      void vscode.window.showWarningMessage(
+        vscode.l10n.t(
+          "Tarn experimental LSP client failed to start. Direct providers are still active. See the Tarn output channel for details.",
+        ),
+      );
+    }
+  }
+
   // l10n-ignore: debug log with tarn prefix; engineers read this in the output channel.
   output.appendLine(
     `[tarn] ready (${index.all.length} test file(s) indexed)`,
@@ -322,6 +369,61 @@ export async function activate(
           fromScopedList: parsed.fromScopedList === true,
         })),
       refreshSingleFile: (uri) => index.refreshSingleFile(uri),
+      startExperimentalLspClient: async () => {
+        // Integration-test only. Start the experimental LSP
+        // client on demand regardless of the current
+        // `tarn.experimentalLspClient` flag, so the integration
+        // suite can drive the flag-enabled code path without
+        // reloading the extension host mid-test.
+        //
+        // Skip if the scaffold is already running (prevents a
+        // second child process from fighting the first over the
+        // same document selector) OR if the binary cannot be
+        // resolved. Both states resolve to `undefined` so the
+        // test can skip gracefully.
+        if (tarnLspClient) {
+          return undefined;
+        }
+        let resolvedPath: string;
+        try {
+          const resolvedLspForTest = await resolveTarnLspBinary();
+          resolvedPath = resolvedLspForTest.path;
+        } catch {
+          return undefined;
+        }
+        try {
+          tarnLspClient = await startTarnLspClient(context, resolvedPath);
+        } catch {
+          tarnLspClient = undefined;
+          return undefined;
+        }
+        if (!tarnLspClient) {
+          return undefined;
+        }
+        const clientHandle = tarnLspClient;
+        // `State.Running = 2` in `vscode-languageclient/node` —
+        // pinned here as a numeric literal so the integration
+        // test does not have to import the full language-client
+        // module just to read one enum value. The unit test in
+        // `tests/unit/lspClient.test.ts` pins the numeric value
+        // against the live enum and fails loudly if upstream
+        // ever renumbers it.
+        const numericState = clientHandle.state as unknown as number;
+        return {
+          running: numericState === 2,
+          state: numericState,
+          dispose: async () => {
+            try {
+              await clientHandle.stop();
+            } catch {
+              /* ignore */
+            }
+            if (tarnLspClient === clientHandle) {
+              tarnLspClient = undefined;
+            }
+          },
+        };
+      },
       buildFailureMessagesForStep: (step, fileUri, astFallback) => {
         // Synthesize a minimal ParsedFile. We deliberately do not pull
         // the real WorkspaceIndex entry so the test can feed in a
@@ -351,6 +453,19 @@ export async function activate(
   };
 }
 
-export function deactivate(): void {
+export async function deactivate(): Promise<void> {
+  // Drain the `tarn-lsp` stdio handshake before the extension
+  // host tears down the child process. `client.stop()` is a
+  // best-effort shutdown — if the server is already dead we
+  // swallow the error rather than blocking deactivate.
+  if (tarnLspClient) {
+    try {
+      await tarnLspClient.stop();
+    } catch {
+      /* ignore: client was already stopped or failed to stop */
+    } finally {
+      tarnLspClient = undefined;
+    }
+  }
   disposeOutputChannel();
 }

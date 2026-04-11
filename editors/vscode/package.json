@@ -2,7 +2,7 @@
   "name": "tarn-vscode",
   "displayName": "%extension.displayName%",
   "description": "%extension.description%",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "tarn": {
     "minVersion": "0.5.0"
   },
@@ -483,6 +483,18 @@
           "description": "%configuration.tarn.binaryPath.description%",
           "scope": "machine-overridable"
         },
+        "tarn.lspBinaryPath": {
+          "type": "string",
+          "default": "tarn-lsp",
+          "description": "%configuration.tarn.lspBinaryPath.description%",
+          "scope": "machine-overridable"
+        },
+        "tarn.experimentalLspClient": {
+          "type": "boolean",
+          "default": false,
+          "description": "%configuration.tarn.experimentalLspClient.description%",
+          "scope": "window"
+        },
         "tarn.testFileGlob": {
           "type": "string",
           "default": "**/*.tarn.yaml",
@@ -643,6 +655,7 @@
     "vitest": "^1.3.0"
   },
   "dependencies": {
+    "vscode-languageclient": "^9.0.1",
     "yaml": "^2.4.0",
     "zod": "^3.22.0"
   }

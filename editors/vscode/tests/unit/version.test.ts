@@ -185,15 +185,40 @@ describe("version alignment: editors/vscode and tarn must match", () => {
     return versionLine[1];
   }
 
-  it("editors/vscode/package.json version matches tarn/Cargo.toml version", () => {
+  it("editors/vscode/package.json major.minor matches tarn/Cargo.toml major.minor", () => {
+    // The NAZ-288 coordinated-release policy (documented in the
+    // extension CHANGELOG under "Version alignment policy") states:
+    //
+    //   "Extension X.Y.* tracks Tarn X.Y.*: the minor number is
+    //    always identical, so a user on extension 0.5.x knows
+    //    they can run any Tarn 0.5.x. Patch numbers may diverge
+    //    for bug-fix releases on one side without a matching
+    //    release on the other."
+    //
+    // Earlier iterations of this lint compared the full version
+    // triple, which was stricter than the documented policy and
+    // broke the moment an L-phase ticket patch-bumped `tarn` for
+    // a `tarn-lsp`-only fix without a matching extension release.
+    // We relax the comparison to major.minor to match the stated
+    // policy exactly: a minor mismatch still fails the build, a
+    // patch drift does not.
     const extensionVersion = readExtensionVersion();
     const cargoVersion = readCargoVersion();
+    const extParsed = parseSemver(extensionVersion);
+    const cargoParsed = parseSemver(cargoVersion);
+    expect(extParsed, `editors/vscode/package.json version (${extensionVersion}) is not valid semver`)
+      .not.toBeNull();
+    expect(cargoParsed, `tarn/Cargo.toml version (${cargoVersion}) is not valid semver`)
+      .not.toBeNull();
+    const [extMajor, extMinor] = extParsed!;
+    const [cargoMajor, cargoMinor] = cargoParsed!;
     expect(
-      extensionVersion,
-      `editors/vscode/package.json version (${extensionVersion}) must equal ` +
-        `tarn/Cargo.toml [package] version (${cargoVersion}). Bump both in ` +
-        `the same commit per the NAZ-288 coordinated-release policy.`,
-    ).toBe(cargoVersion);
+      `${extMajor}.${extMinor}`,
+      `editors/vscode/package.json major.minor (${extMajor}.${extMinor}) must equal ` +
+        `tarn/Cargo.toml [package] major.minor (${cargoMajor}.${cargoMinor}). ` +
+        `Bump both in the same commit per the NAZ-288 coordinated-release policy. ` +
+        `Patch numbers may diverge.`,
+    ).toBe(`${cargoMajor}.${cargoMinor}`);
   });
 
   it("tarn.minVersion is declared and parseable", () => {

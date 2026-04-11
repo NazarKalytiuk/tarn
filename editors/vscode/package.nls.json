@@ -64,6 +64,8 @@
 
   "configuration.title": "Tarn",
   "configuration.tarn.binaryPath.description": "Path to the tarn CLI binary. Use an absolute path if it is not on PATH.",
+  "configuration.tarn.lspBinaryPath.description": "Path to the tarn-lsp binary used by the experimental vscode-languageclient integration. Use an absolute path if it is not on PATH.",
+  "configuration.tarn.experimentalLspClient.description": "Experimental: start tarn-lsp as a side-by-side LSP client. Direct providers remain active until Phase V2 migrates each feature individually. Requires the tarn-lsp binary to be installed. Default: false.",
   "configuration.tarn.testFileGlob.description": "Glob pattern used to discover Tarn test files.",
   "configuration.tarn.excludeGlobs.description": "Globs excluded from discovery.",
   "configuration.tarn.defaultEnvironment.description": "Default Tarn environment passed as --env. Overridden by the active environment selection.",

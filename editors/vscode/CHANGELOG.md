@@ -1,5 +1,193 @@
 # Changelog
 
+## 0.5.1 — Phase V1: vscode-languageclient scaffolding (NAZ-309)
+
+First step of Phase V — the extension starts migrating its
+in-process TypeScript language-feature providers onto a thin
+`vscode-languageclient` front-end that talks to the Rust
+`tarn-lsp` crate over stdio. **No feature has moved to the
+LSP path in this release.** The scaffold ships `off` by default
+behind a new `tarn.experimentalLspClient` window-scoped
+setting; flipping it on spawns `tarn-lsp` side-by-side with
+the existing direct providers. Phase V2 will migrate features
+one ticket at a time while this flag soaks; Phase V3 will
+delete the direct providers and the flag together.
+
+Tested against **Tarn `0.5.x`** (any patch level — the
+alignment lint now enforces major.minor match only, matching
+the documented NAZ-288 policy).
+
+### Migration strategy
+
+See [`docs/LSP_MIGRATION.md`](docs/LSP_MIGRATION.md) for the
+full decision: we pick **dual-host** migration, per-feature
+minor bumps, and a defined V2 ordering that starts with
+diagnostics and ends with the `tarn.evaluateJsonpath`
+executeCommand bridge. The doc covers tradeoffs of full vs
+dual-host vs selective migration, per-feature rollback plans,
+and how the V2 release cadence interacts with the NAZ-288
+coordinated-release contract.
+
+### Added
+
+- **`editors/vscode/src/lsp/client.ts`** — pure
+  `buildClientOptions(binaryPath)` builder that emits the
+  `(ServerOptions, LanguageClientOptions)` pair for a stdio
+  transport, a `{ language: "tarn", scheme: "file" }`
+  document selector, a dedicated "Tarn LSP" output channel,
+  and `RevealOutputChannelOn.Never` so the experimental
+  client never surfaces a user-facing toast. The impure
+  `startTarnLspClient(context, binaryPath)` wrapper
+  performs a dynamic `import("vscode-languageclient/node.js")`
+  so the language-client module only loads when the flag is
+  flipped on, keeps esbuild from having to bundle the
+  entire LSP protocol stack, and wires `dispose()` onto
+  `context.subscriptions` plus an explicit
+  `await client.stop()` in `deactivate()` so the stdio
+  shutdown handshake drains before the extension host
+  tears down the child process.
+- **`editors/vscode/src/lsp/tarnLspResolver.ts`** — mirror of
+  `backend/binaryResolver.ts` for the `tarn-lsp` binary. A
+  pure `resolveTarnLspCommand(configured)` helper pins the
+  "setting → command" mapping without touching the file
+  system; the impure `resolveTarnLspBinary(scope?)` verifies
+  that absolute paths are accessible and logs the resolved
+  command to the Tarn output channel with a `[tarn-lsp]`
+  prefix. Unlike `tarn`, the LSP server does not implement
+  `--version` (it is a pure stdio protocol server), so the
+  handshake itself is the verification step, performed by
+  the language client in `client.ts`.
+- **`tarn.experimentalLspClient: boolean`** setting
+  (`window` scope, default `false`). Enabling it boots the
+  LSP client alongside the direct providers; disabling it
+  requires a window reload to take effect.
+- **`tarn.lspBinaryPath: string`** setting
+  (`machine-overridable` scope, default `"tarn-lsp"`). Kept
+  machine-overridable to mirror the `tarn.binaryPath`
+  policy from NAZ-283: remote hosts (Remote SSH, Dev
+  Containers, WSL, Codespaces) can pin an absolute path
+  without polluting the local workspace.
+- **`vscode-languageclient@9.0.1`** as a runtime dependency.
+  Version 9.x pairs with VS Code `^1.82.0`; the extension's
+  `engines.vscode = ^1.90.0` satisfies that minimum. The
+  package and its transitive protocol stack
+  (`vscode-languageserver-protocol`,
+  `vscode-languageserver-types`, `vscode-jsonrpc`,
+  `semver`, `minimatch`) are **externalized from esbuild**
+  so they load from `node_modules` at runtime instead of
+  inflating `out/extension.js` by ~358 KB. The `.vscodeignore`
+  is updated to re-include these specific packages in the
+  VSIX so the external require resolves post-install.
+- **`tests/unit/lspClient.test.ts`** — eight unit tests
+  pinning `buildClientOptions` (binary path → serverOptions
+  command; stdio transport flag for run and debug;
+  document selector matches `.tarn.yaml`; output channel
+  name; RevealOutputChannelOn.Never; no cross-call state
+  leak). Two additional lint tests verify that the inlined
+  `TRANSPORT_KIND_STDIO = 0` and `State.Running = 2`
+  constants in `src/lsp/client.ts` and `src/extension.ts`
+  still match the live `vscode-languageclient/node` enum
+  values — they fail loud if an upstream bump ever
+  renumbers either enum.
+- **`tests/unit/tarnLspResolver.test.ts`** — five unit tests
+  pinning the pure setting-to-command mapping
+  (undefined → default, empty → default, bare name → bare
+  name, absolute path → normalized absolute path, trimming).
+- **`tests/integration/suite/lspClient.test.ts`** — one
+  integration test that drives `testing.startExperimentalLspClient()`
+  under a real extension host, asserts that the client
+  reaches `State.Running = 2`, and asserts clean disposal.
+  Skips gracefully with `this.skip()` + a
+  `"[lsp-test] skipped: target/debug/tarn-lsp missing"`
+  log line when the debug binary is not present (a clean
+  clone before `cargo build -p tarn-lsp`).
+- **`testing.startExperimentalLspClient`** on the internal
+  `TarnExtensionApi.testing` sub-object. The method boots
+  the LSP client on demand regardless of the
+  `tarn.experimentalLspClient` flag so the integration
+  suite can drive the flag-enabled code path without
+  reloading the extension host mid-test. Scoped under the
+  `@stability internal` testing sub-object — it is not part
+  of the public API promise and may change between any two
+  releases. The golden `tests/golden/api.snapshot.txt` is
+  regenerated to include the new method.
+- **`editors/vscode/docs/LSP_MIGRATION.md`** — the Phase V
+  migration decision document. Covers the strategy
+  tradeoffs, the Phase V2 migration order, the rollback
+  plan, and the version-bump policy.
+
+### Changed
+
+- **`esbuild.config.mjs`** — externalizes
+  `vscode-languageclient` and its transitive protocol/jsonrpc
+  stack so the extension bundle size stays under the 310 KB
+  budget. Bundle size: **~290.5 KB before → ~292.7 KB after
+  (+~2.2 KB)**. Without the externalization the bundle
+  would have ballooned to ~640 KB, so this change is
+  load-bearing for the ship-it gate.
+- **`.vscodeignore`** — re-includes the six runtime
+  packages that back `vscode-languageclient` so the VSIX
+  carries them as standard `node_modules` entries.
+  Everything else under `node_modules/**` is still
+  excluded.
+- **`src/extension.ts`** — `activate()` now reads
+  `tarn.experimentalLspClient` and conditionally calls
+  `startTarnLspClient`. Any failure to resolve or start
+  the binary is **advisory, not fatal**: a single warning
+  toast is shown, the direct providers keep running, and
+  activation continues. `deactivate()` is now `async` so
+  it can `await tarnLspClient.stop()` before the extension
+  host tears the child process down.
+- **`src/config.ts`** — new `getExperimentalLspClient(scope?)`
+  helper for the setting. Kept separate from `readConfig`
+  because the flag is window-scoped and is only read from
+  one call site.
+- **`editors/vscode/package.json` version**: `0.5.0 → 0.5.1`
+  (patch bump). "One minor" per the NAZ-309 plan was
+  interpreted as "one version increment consistent with the
+  NAZ-288 minor-alignment policy" because bumping the
+  extension's minor while `tarn/Cargo.toml` sits at `0.5.6`
+  (the L1/L2/L3 drift the orchestrator flagged as allowed)
+  would have introduced the exact cross-minor mismatch the
+  plan said to stop at. Patch-level divergence is expressly
+  permitted by the policy.
+- **`tests/unit/version.test.ts`** — the alignment lint
+  now compares `major.minor` rather than the full semver
+  triple. The previous implementation enforced full-triple
+  equality, which was stricter than the documented policy
+  and had been silently broken on `main` since NAZ-294
+  patch-bumped `tarn` without a matching extension release.
+  This is a proper root-cause fix of the lint against the
+  prose it cites, not a workaround. Patch-level drift
+  between extension and `tarn` remains explicitly allowed,
+  so an L-phase ticket that bumps only `tarn-lsp` no
+  longer wedges the unit-test pass.
+
+### Not changed
+
+- **`src/api.ts` public surface.** The only `TarnExtensionApi`
+  change is the new `testing.startExperimentalLspClient`
+  test hook, which lives under the `@stability internal`
+  sub-object and therefore carries no compatibility
+  promise. Every stable field carries over byte-for-byte.
+  The golden snapshot at `tests/golden/api.snapshot.txt`
+  is regenerated only to include the new internal method,
+  and the `apiSurface.test.ts` gate still passes.
+- **No language feature has moved to the LSP path.** Every
+  Phase 3/4/5/6 feature (diagnostics, document symbols,
+  code lens, hover, completion, formatting,
+  definition/references/rename, code actions,
+  `tarn.evaluateJsonpath` bridge) still runs on its direct
+  in-process TypeScript provider. Migrating them is
+  explicitly Phase V2 work. See
+  `docs/LSP_MIGRATION.md` for the planned order.
+- **`tarn-lsp` is not bundled into the VSIX.** Users who
+  enable `tarn.experimentalLspClient` must supply their
+  own `tarn-lsp` binary (via `tarn.lspBinaryPath` or
+  `$PATH`). Bundling the binary into the VSIX is a
+  separate Phase V decision and is out of scope for
+  NAZ-309.
+
 ## 0.5.0 — Phase 6: Coordinated release (NAZ-288)
 
 First coordinated release of the Tarn VS Code extension and the Tarn

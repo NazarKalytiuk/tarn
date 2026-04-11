@@ -138,6 +138,14 @@ readonly stepCount: number;
 readonly fromScopedList: boolean;
 }>;
 readonly refreshSingleFile: (uri: vscode.Uri) => Promise<void>;
+readonly startExperimentalLspClient: () => Promise<
+| {
+readonly running: boolean;
+readonly state: number;
+readonly dispose: () => Promise<void>;
+}
+| undefined
+>;
 }
 /**
 * Public API returned by `activate()`.

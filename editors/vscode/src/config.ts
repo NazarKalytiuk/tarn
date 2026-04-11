@@ -47,6 +47,26 @@ export function readConfig(scope?: vscode.Uri): TarnConfig {
 }
 
 /**
+ * Read the `tarn.experimentalLspClient` feature flag.
+ *
+ * Phase V1 (NAZ-309) introduces a side-by-side `vscode-languageclient`
+ * host that talks to the `tarn-lsp` Rust binary. The direct providers
+ * continue to run regardless of this flag; the flag only controls
+ * whether the extension additionally spawns `tarn-lsp` and registers
+ * its language features. Default is `false` — Phase V2 feature
+ * tickets flip it via workspace settings in their own integration
+ * tests, and Phase V3 deletes the flag when migration is complete.
+ *
+ * `window` scope (not `resource`) because spawning or killing an LSP
+ * server per-folder is both unnecessary and expensive for a feature
+ * that is inherently per-VS-Code-window.
+ */
+export function getExperimentalLspClient(scope?: vscode.Uri): boolean {
+  const cfg = vscode.workspace.getConfiguration("tarn", scope);
+  return cfg.get<boolean>("experimentalLspClient", false);
+}
+
+/**
  * Narrow a raw `tarn.cookieJarMode` value to a known mode. Unknown or
  * malformed values fall back to `"default"` so a typo in user settings
  * never breaks the runner — the worst case is honoring the file's
