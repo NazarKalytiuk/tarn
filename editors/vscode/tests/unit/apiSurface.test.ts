@@ -43,10 +43,15 @@ const goldenFilePath = path.resolve(
 );
 
 function normalizeApiDeclaration(source: string): string {
+  // Normalize line endings first so a Windows checkout (CRLF) produces
+  // the same normalized output as a Linux/macOS checkout (LF). Without
+  // this, the trailing \r on every line survives split("\n") and trips
+  // the snapshot comparison on windows-latest in CI.
+  const lfSource = source.replace(/\r\n/g, "\n");
   // Strip block comments that do NOT mention @stability. A multi-line
   // block comment either keeps every line (if any line mentions
   // @stability) or is stripped entirely.
-  const withoutBlockComments = source.replace(
+  const withoutBlockComments = lfSource.replace(
     /\/\*[\s\S]*?\*\//g,
     (match) => (match.includes("@stability") ? match : ""),
   );
@@ -68,7 +73,13 @@ function normalizeApiDeclaration(source: string): string {
 describe("TarnExtensionApi surface", () => {
   it("matches the golden snapshot (src/api.ts has not drifted)", () => {
     const apiSource = fs.readFileSync(apiFilePath, "utf8");
-    const golden = fs.readFileSync(goldenFilePath, "utf8");
+    // Normalize the golden's line endings too, for the same reason we
+    // strip \r from the api source: Windows git checkouts may rewrite
+    // text files to CRLF on checkout even though the committed file is
+    // LF-only. The test must agree with itself regardless of platform.
+    const golden = fs
+      .readFileSync(goldenFilePath, "utf8")
+      .replace(/\r\n/g, "\n");
 
     const normalized = normalizeApiDeclaration(apiSource);
 
