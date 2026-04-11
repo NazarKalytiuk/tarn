@@ -9,6 +9,7 @@
 //! the `tarn-lsp` binary, not this library.
 
 pub mod capabilities;
+pub mod code_lens;
 pub mod completion;
 pub mod debounce;
 pub mod definition;

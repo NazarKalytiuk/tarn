@@ -26,13 +26,17 @@
 //!   `textDocument/rename` + `textDocument/prepareRename` for capture
 //!   and env interpolation tokens, with identifier validation and
 //!   per-scope collision detection. Shipped.
+//! - L2.4 (NAZ-300): `code_lens_provider: Some(CodeLensOptions { resolve_provider: Some(false) })` —
+//!   `textDocument/codeLens` emitting `Run test` / `Run step` actions
+//!   with stable `tarn.runTest` / `tarn.runStep` command IDs. Shipped.
+//!   This is the last Phase L2 capability — Phase L2 is now complete.
 //!
 //! Nothing in this file should ever grow conditional logic — if a capability
 //! is on, it is on for every client and every workspace.
 
 use lsp_types::{
-    CompletionOptions, HoverProviderCapability, OneOf, RenameOptions, ServerCapabilities,
-    TextDocumentSyncCapability, TextDocumentSyncKind, WorkDoneProgressOptions,
+    CodeLensOptions, CompletionOptions, HoverProviderCapability, OneOf, RenameOptions,
+    ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind, WorkDoneProgressOptions,
 };
 
 /// Return the `ServerCapabilities` this server currently advertises.
@@ -99,6 +103,17 @@ pub fn server_capabilities() -> ServerCapabilities {
             prepare_provider: Some(true),
             work_done_progress_options: WorkDoneProgressOptions::default(),
         })),
+
+        // L2.4: the server answers `textDocument/codeLens` requests for
+        // `.tarn.yaml` buffers with one `Run test` lens per named test
+        // and one `Run step` lens per step. `resolve_provider: false`
+        // — every lens carries its command and arguments up-front so
+        // clients never need to issue a `codeLens/resolve` round-trip.
+        // Command IDs are `tarn.runTest` / `tarn.runStep`; the server
+        // does not execute them, clients handle dispatch themselves.
+        code_lens_provider: Some(CodeLensOptions {
+            resolve_provider: Some(false),
+        }),
 
         // All other capabilities are intentionally left unset. See the module
         // docs for the ticket that turns each one on.

@@ -31,15 +31,16 @@ use lsp_types::notification::{
     Notification as _,
 };
 use lsp_types::request::{
-    Completion, DocumentSymbolRequest, GotoDefinition, HoverRequest, PrepareRenameRequest,
-    References, Rename, Request as _,
+    CodeLensRequest, Completion, DocumentSymbolRequest, GotoDefinition, HoverRequest,
+    PrepareRenameRequest, References, Rename, Request as _,
 };
 use lsp_types::{
-    CompletionParams, DocumentSymbolParams, GotoDefinitionParams, HoverParams, InitializeParams,
-    ReferenceParams, RenameParams, TextDocumentPositionParams, Url,
+    CodeLensParams, CompletionParams, DocumentSymbolParams, GotoDefinitionParams, HoverParams,
+    InitializeParams, ReferenceParams, RenameParams, TextDocumentPositionParams, Url,
 };
 
 use crate::capabilities::server_capabilities;
+use crate::code_lens;
 use crate::completion;
 use crate::debounce::DebounceTracker;
 use crate::definition;
@@ -298,7 +299,10 @@ fn is_timeout(err: &crossbeam_channel::RecvTimeoutError) -> bool {
 /// [`symbols::text_document_document_symbol`]. L2.1 adds
 /// `textDocument/definition` via [`definition::text_document_definition`].
 /// L2.2 adds `textDocument/references` via
-/// [`references::text_document_references`].
+/// [`references::text_document_references`]. L2.3 adds
+/// `textDocument/rename` + `prepareRename` via [`rename`]. L2.4 adds
+/// `textDocument/codeLens` via [`code_lens::text_document_code_lens`],
+/// which completes Phase L2.
 fn dispatch_request(req: Request, state: &mut ServerState) -> Response {
     // Capture the id up-front: `Request::extract` takes `self` by value
     // so we can't read `req.id` after a failed extract.
@@ -382,6 +386,19 @@ fn dispatch_request(req: Request, state: &mut ServerState) -> Response {
                     error: Some(err),
                 },
             },
+            Err(ExtractError::MethodMismatch(r)) => method_not_found(r),
+            Err(ExtractError::JsonError { method, error }) => invalid_params(id, method, error),
+        },
+        CodeLensRequest::METHOD => match req.extract::<CodeLensParams>(CodeLensRequest::METHOD) {
+            Ok((req_id, params)) => {
+                let uri = params.text_document.uri;
+                let result = code_lens::text_document_code_lens(&state.documents, &uri);
+                // LSP spec: codeLens returns an array (possibly empty).
+                // The handler short-circuits to `Vec::new()` for
+                // non-`*.tarn.yaml` URIs and unknown buffers, so clients
+                // always get a well-formed JSON array.
+                serialize_response(req_id, &result, "codeLens")
+            }
             Err(ExtractError::MethodMismatch(r)) => method_not_found(r),
             Err(ExtractError::JsonError { method, error }) => invalid_params(id, method, error),
         },

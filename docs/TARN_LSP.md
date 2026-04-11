@@ -34,11 +34,14 @@ Phase L1 is delivered as five tickets under Epic NAZ-289. Each ticket flips on e
 
 ## Phase L2 status
 
-Phase L2 layers navigation features onto the L1 MVP. Each ticket is a thin wrapper around the existing `tarn` crate primitives (`tarn::outline`, `tarn::env`) so jumps stay consistent with what the runner, hover, and diagnostics already see.
+Phase L2 layers navigation features onto the L1 MVP. Each ticket is a thin wrapper around the existing `tarn` crate primitives (`tarn::outline`, `tarn::env`, `tarn::selector`) so jumps stay consistent with what the runner, hover, and diagnostics already see.
 
 - [x] **L2.1 — go-to-definition (NAZ-297)**: `textDocument/definition` jumps from `{{ capture.* }}` / `{{ env.* }}` interpolation tokens to their declaration sites.
 - [x] **L2.2 — references (NAZ-298)**: `textDocument/references` lists every use site of a capture (per test, current file) or env key (every `.tarn.yaml` under the workspace root, bounded at 5000 files).
 - [x] **L2.3 — rename (NAZ-299)**: `textDocument/rename` + `textDocument/prepareRename` rewrite a capture (per test, current file) or env key (every env source file that declares it, plus every `.tarn.yaml` in the workspace) in a single `WorkspaceEdit`, with identifier validation and per-scope collision detection.
+- [x] **L2.4 — code lens (NAZ-300)**: `textDocument/codeLens` emits inline `Run test` and `Run step` actions with stable `tarn.runTest` / `tarn.runStep` command IDs. The server does not execute the commands — clients handle dispatch themselves.
+
+**Phase L2 COMPLETE.** Every navigation and refactor capability listed under Epic NAZ-296 is now shipped.
 
 ## Installation
 
@@ -190,6 +193,40 @@ Invoking "Rename symbol" on a `{{ capture.NAME }}` or `{{ env.KEY }}` token — 
 
 **Identifier validation.** Both capture and env keys must match the Tarn identifier grammar `^[A-Za-z_][A-Za-z0-9_]*$`. The validator is ASCII only — Unicode letters are intentionally rejected so the YAML key, the interpolation token, and the `${VAR}` shell-expansion placeholder all agree on what is a valid identifier. An invalid new name surfaces as an `InvalidParams` response error with a human-readable message the client can show in a toast. Built-ins and schema keys surface as `RequestFailed` so clients can tell the difference between "bad name" and "this token is not renamable".
 
+### 8. Code lens (`textDocument/codeLens`) — new in L2.4
+
+Every named test in a `.tarn.yaml` file gets a **`Run test`** code lens anchored on its `name:` line, and every step inside a named test gets a **`Run step`** lens on its own `name:` line. The lenses are only emitted for named-test groups; setup, teardown, and top-level flat `steps:` intentionally do not receive lenses — they match the behavioural scope of the VS Code extension's `TestCodeLensProvider.ts` so switching between the extension and plain LSP shows the same affordances.
+
+Each lens carries a `Command` whose `command` field is one of two stable, well-known constants:
+
+- `tarn.runTest` — emitted for test-level lenses
+- `tarn.runStep` — emitted for step-level lenses
+
+These strings are part of the server's public contract and must not change. The `arguments` field carries a single JSON object with the fields the client needs to spawn `tarn run --select <selector>` itself:
+
+```jsonc
+// Run test
+{
+  "file": "file:///abs/path/tests/users.tarn.yaml",
+  "test": "create_user",
+  "selector": "/abs/path/tests/users.tarn.yaml::create_user"
+}
+
+// Run step
+{
+  "file": "file:///abs/path/tests/users.tarn.yaml",
+  "test": "create_user",
+  "step": "POST /users",
+  "selector": "/abs/path/tests/users.tarn.yaml::create_user::0"
+}
+```
+
+The `selector` string is the exact argument to pass to `tarn run --select`. It is composed by the shared [`tarn::selector::format_test_selector`] / [`tarn::selector::format_step_selector`] helpers — the same source of truth the VS Code extension uses via `editors/vscode/src/testing/runHandler.ts`, so both producers emit byte-identical strings. The step component is the **zero-based step index**, not the step name, because indices are unique per test and never require escaping.
+
+`codeLens/resolve` is **not** implemented — every lens is fully populated in the initial response. Clients that send a resolve request will get a JSON-RPC `MethodNotFound` error; well-behaved clients will never send one because the server advertises `resolveProvider: false` in its capabilities.
+
+**The server does not execute `tarn.runTest` / `tarn.runStep`.** These commands are handled by the client, which is expected to shell out to `tarn run --select <selector>` on its own side. Streaming NDJSON progress back through LSP notifications is deliberately deferred — a Phase L3 follow-up can revisit it if we decide the server should own execution as well.
+
 ## Client configuration
 
 The binary speaks stdio LSP 3.17 — any client that can spawn an LSP server and speak JSON-RPC over stdio will work. Below are the three most common configurations.
@@ -327,12 +364,15 @@ If the pane is still empty, the file may not parse as YAML at all — the scanne
 
 Phase L1 is the MVP. Phase L2 and L3 pick up the long tail of LSP features and are deliberately out of scope for this release. They will land as new Linear tickets under Epic NAZ-289 (or a successor epic if L2 grows large enough to warrant its own).
 
-### Phase L2 — navigation and refactor (in progress)
+### Phase L2 — navigation and refactor (complete)
 
 - [x] **`textDocument/definition`** (NAZ-297) — jump from `{{ env.x }}` / `{{ capture.y }}` to where the variable is declared.
 - [x] **`textDocument/references`** (NAZ-298) — find every use of a capture (per-test, current file) or env key (every `.tarn.yaml` under the workspace root, bounded at 5000 files).
 - [x] **`textDocument/rename`** (NAZ-299) — rename a capture (per-test, current file) or env key (every env source file that declares it + every workspace use site) in a single `WorkspaceEdit`, with identifier validation and per-scope collision detection.
-- **`textDocument/codeLens`** — inline "Run this test" / "Run this step" affordances that invoke the CLI.
+- [x] **`textDocument/codeLens`** (NAZ-300) — `Run test` / `Run step` inline actions with stable `tarn.runTest` / `tarn.runStep` command IDs; clients dispatch the commands themselves by shelling out to `tarn run --select <selector>`.
+
+**Phase L2 COMPLETE.** Epic NAZ-296 is closed. The follow-ups below were previously bundled with L2 and remain open as general housekeeping:
+
 - **Claude Code config integration** — finalise the Claude Code LSP config snippet once the harness schema is public.
 - **VS Code extension migration** — migrate `editors/vscode/` off its direct providers onto `tarn-lsp`, so there is one implementation of every language feature.
 

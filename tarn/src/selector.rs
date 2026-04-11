@@ -9,6 +9,18 @@
 //! The STEP component accepts either a step name (exact match) or a
 //! zero-based integer index. File matching is path-suffix based so users
 //! can pass either a workspace-relative or absolute path.
+//!
+//! ## Composing selectors
+//!
+//! The [`format_file_selector`], [`format_test_selector`], and
+//! [`format_step_selector`] helpers build the string representation that
+//! `tarn run --select` consumes. They are the **single source of truth**
+//! for selector shape: every producer in the tree (the VS Code extension's
+//! test controller, the `tarn-lsp` code lens provider, `tarn fix plan`,
+//! and anything we add later) should go through these helpers instead of
+//! hand-rolling `format!("{}::{}", …)`. Centralising the format here also
+//! means a future grammar change only needs to update one place and re-run
+//! the unit tests below.
 
 use std::path::Path;
 
@@ -167,6 +179,40 @@ pub fn has_step_level_filter(selectors: &[Selector], file_path: &str, test_name:
     selectors
         .iter()
         .any(|s| s.matches_file(file_path) && s.matches_test(test_name) && s.step.is_some())
+}
+
+/// Compose a file-only selector (`FILE`).
+///
+/// This is the shape `tarn run --select` expects for "run every test in
+/// this file". Whitespace is trimmed from the file path so callers can
+/// feed it directly from a `Url` or display path without pre-cleaning.
+///
+/// The returned string always round-trips through [`Selector::parse`] —
+/// the unit tests below cover this invariant explicitly.
+pub fn format_file_selector(file: &str) -> String {
+    file.trim().to_owned()
+}
+
+/// Compose a test selector (`FILE::TEST`).
+///
+/// Use this for "run every step in the given test". The test name is
+/// written literally — Tarn's selector grammar treats `::` in the step
+/// component as part of the name (see
+/// [`Selector::parse`]'s `preserves_double_colon_inside_step_name`
+/// case), so name components do not need to be escaped.
+pub fn format_test_selector(file: &str, test: &str) -> String {
+    format!("{}::{}", file.trim(), test)
+}
+
+/// Compose a step selector (`FILE::TEST::STEP_INDEX`).
+///
+/// Uses the zero-based step index rather than the step's `name:` value,
+/// matching what the VS Code extension's test controller emits today
+/// (`editors/vscode/src/testing/runHandler.ts`). Indices are unique per
+/// test and never require escaping, which makes them the robust default
+/// for programmatic selector builders.
+pub fn format_step_selector(file: &str, test: &str, step_index: usize) -> String {
+    format!("{}::{}::{}", file.trim(), test, step_index)
 }
 
 fn ensure_non_empty(part: &str, name: &str) -> Result<(), String> {
@@ -368,5 +414,62 @@ mod tests {
         let inputs = vec!["good.tarn.yaml".into(), "::bad".into(), "".into()];
         let err = parse_all(&inputs).unwrap_err();
         assert_eq!(err.len(), 2);
+    }
+
+    // ---- format_*_selector helpers ----
+
+    #[test]
+    fn format_file_selector_trims_whitespace() {
+        assert_eq!(
+            format_file_selector("  tests/users.tarn.yaml  "),
+            "tests/users.tarn.yaml"
+        );
+    }
+
+    #[test]
+    fn format_test_selector_joins_with_double_colon() {
+        assert_eq!(
+            format_test_selector("tests/users.tarn.yaml", "create_user"),
+            "tests/users.tarn.yaml::create_user"
+        );
+    }
+
+    #[test]
+    fn format_step_selector_uses_zero_based_index() {
+        assert_eq!(
+            format_step_selector("tests/users.tarn.yaml", "create_user", 0),
+            "tests/users.tarn.yaml::create_user::0"
+        );
+        assert_eq!(
+            format_step_selector("tests/users.tarn.yaml", "create_user", 3),
+            "tests/users.tarn.yaml::create_user::3"
+        );
+    }
+
+    #[test]
+    fn format_test_selector_roundtrips_through_parse() {
+        let composed = format_test_selector("tests/users.tarn.yaml", "create user");
+        let parsed = Selector::parse(&composed).unwrap();
+        assert_eq!(parsed.file, "tests/users.tarn.yaml");
+        assert_eq!(parsed.test.as_deref(), Some("create user"));
+        assert!(parsed.step.is_none());
+    }
+
+    #[test]
+    fn format_step_selector_roundtrips_to_index_step() {
+        let composed = format_step_selector("tests/users.tarn.yaml", "create_user", 2);
+        let parsed = Selector::parse(&composed).unwrap();
+        assert_eq!(parsed.step, Some(StepSelector::Index(2)));
+    }
+
+    #[test]
+    fn format_helpers_handle_names_with_special_characters() {
+        // Test names may carry hyphens, spaces, punctuation. The grammar
+        // does not require escaping — the test name is written verbatim
+        // and the parser splits on the first `::` boundaries only.
+        let composed = format_test_selector("f.tarn.yaml", "GET /users/{id} flow");
+        assert_eq!(composed, "f.tarn.yaml::GET /users/{id} flow");
+        let parsed = Selector::parse(&composed).unwrap();
+        assert_eq!(parsed.test.as_deref(), Some("GET /users/{id} flow"));
     }
 }
