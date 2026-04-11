@@ -257,3 +257,26 @@ cargo test
 ```
 
 Each item also adds its own golden or integration test so the new surface is covered from day one.
+
+## Phase L: LSP for Claude Code
+
+Epic **NAZ-289** — `tarn-lsp` Language Server for Claude Code and non-VS-Code editors. Delivered as five tickets (L1.1 through L1.5) that each flip on exactly one LSP capability. Canonical spec lives in [`docs/TARN_LSP.md`](./TARN_LSP.md).
+
+| ID | Task | Impact | Effort | Depends | Files |
+|---|---|---:|---:|---|---|
+| L1.1 | Bootstrap `tarn-lsp` workspace crate with stdio lifecycle, full text document sync, and `DocumentStore` **[shipped — NAZ-290]** | 8 | M | - | `tarn-lsp/`, `Cargo.toml`, `docs/TARN_LSP.md` |
+| L1.2 | Wire `tarn::parser` diagnostics through `textDocument/publishDiagnostics` on open/change/save | 9 | M | L1.1 | `tarn-lsp/src/server.rs`, `tarn-lsp/src/capabilities.rs` |
+| L1.3 | Hover provider for env / capture references and assertion keywords | 7 | M | L1.2 | `tarn-lsp/src/server.rs`, `tarn-lsp/src/capabilities.rs` |
+| L1.4 | Completion provider for snippets, assertions, env / capture identifiers, HTTP methods | 8 | M | L1.2 | `tarn-lsp/src/server.rs`, `tarn-lsp/src/capabilities.rs` |
+| L1.5 | Document symbol provider for test/step tree plus finalised Claude Code docs and release pipeline entry | 7 | S | L1.1-L1.4 | `tarn-lsp/src/server.rs`, `docs/TARN_LSP.md`, release workflow |
+
+### L1.1 scope (shipped)
+
+- New workspace member `tarn-lsp/` with path-dep on `tarn = 0.5.0`.
+- `lsp-server = "0.7"` + `lsp-types = "0.95"` — no `tokio`, no `tower-lsp`, no async runtime.
+- `cargo build -p tarn-lsp` produces a single binary `target/debug/tarn-lsp`.
+- Handles the full LSP lifecycle: `initialize` (responds with `ServerCapabilities { text_document_sync: Full }` and `serverInfo { name, version }`), `initialized`, `shutdown`, `exit`.
+- `DocumentStore: HashMap<Url, String>` populated by `didOpen`/`didChange` and cleared by `didClose`. `didSave` is accepted as a no-op.
+- `eprintln!` server-info banner on initialize so clients can confirm the handshake in their output pane.
+- Integration tests in `tarn-lsp/tests/initialize_test.rs` drive the full handshake over `lsp_server::Connection::memory()`, assert the capability set, and cover the "unknown request → MethodNotFound" fallthrough.
+- No language intelligence yet — diagnostics, hover, completion, and symbols are owned by L1.2 through L1.5.

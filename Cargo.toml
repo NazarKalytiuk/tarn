@@ -1,3 +1,3 @@
 [workspace]
-members = ["tarn", "demo-server", "tarn-mcp"]
+members = ["tarn", "demo-server", "tarn-mcp", "tarn-lsp"]
 resolver = "2"
