@@ -1,6 +1,6 @@
 [package]
 name = "tarn"
-version = "0.5.3"
+version = "0.5.4"
 edition = "2021"
 description = "CLI-first API testing tool"
 license = "MIT"

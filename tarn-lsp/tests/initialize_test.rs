@@ -92,8 +92,28 @@ fn server_capabilities_advertises_every_phase_l1_feature() {
         other => panic!("L2.3 must advertise rename_provider with options, got {other:?}"),
     }
 
-    // Phase L2/L3 capabilities that have not shipped yet remain unset.
-    assert!(caps.code_action_provider.is_none(), "L3: code actions");
+    // L3.2 (NAZ-303): code actions is on, with the stable kind list
+    // (`refactor.extract`, `refactor`, `quickfix`) and
+    // `resolve_provider: Some(false)`.
+    match &caps.code_action_provider {
+        Some(lsp_types::CodeActionProviderCapability::Options(opts)) => {
+            assert_eq!(
+                opts.resolve_provider,
+                Some(false),
+                "L3.2 must advertise resolve_provider = Some(false)"
+            );
+            let kinds = opts
+                .code_action_kinds
+                .as_ref()
+                .expect("L3.2 must advertise explicit code_action_kinds");
+            assert!(kinds.contains(&lsp_types::CodeActionKind::REFACTOR_EXTRACT));
+            assert!(kinds.contains(&lsp_types::CodeActionKind::REFACTOR));
+            assert!(kinds.contains(&lsp_types::CodeActionKind::QUICKFIX));
+        }
+        other => panic!("L3.2 must advertise code_action_provider with options, got {other:?}"),
+    }
+
+    // Phase L3 capabilities that have not shipped yet remain unset.
     assert!(
         caps.execute_command_provider.is_none(),
         "L3: execute command"

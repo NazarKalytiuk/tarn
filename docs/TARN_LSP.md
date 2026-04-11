@@ -48,8 +48,9 @@ Phase L2 layers navigation features onto the L1 MVP. Each ticket is a thin wrapp
 Phase L3 layers editing features onto the L1/L2 surface. Each ticket is a thin wrapper around an existing `tarn` crate primitive so edits stay consistent with the canonical format, the runner, and the validator.
 
 - [x] **L3.1 — formatting (NAZ-302)**: `textDocument/formatting` reformats the whole document in-process via `tarn::format::format_document` — the same library function the `tarn fmt` CLI calls. Range formatting (`textDocument/rangeFormatting`) is deliberately **not** advertised; the Tarn formatter re-renders the whole buffer so a range-only edit cannot be produced without touching surrounding YAML.
+- [x] **L3.2 — code actions + extract env var (NAZ-303)**: `textDocument/codeAction` wires up a pure dispatcher over a flat list of provider functions. The first provider is **extract env var** (`refactor.extract`), which lifts a selected string literal inside a request field into a new env key and rewrites the original site as a `{{ env.<name> }}` interpolation. Collision detection against the full env chain (inline block + `tarn.env.yaml` + `tarn.env.local.yaml` + `tarn.env.{name}.yaml`) suffixes the coined name with a counter (`new_env_key`, `new_env_key_2`, …). Capability advertises `refactor.extract`, `refactor`, and `quickfix` now so later L3 tickets (capture-field refactor, fix-plan quick fix) can plug into the same dispatcher without shipping a capability regression.
 
-Remaining L3 tickets (L3.2 code actions, L3.3 capture-field / scaffold-assert, L3.4 fix-plan quick fix, L3.5 nested completion, L3.6 JSONPath evaluator) are tracked under Epic NAZ-301.
+Remaining L3 tickets (L3.3 capture-field / scaffold-assert, L3.4 fix-plan quick fix, L3.5 nested completion, L3.6 JSONPath evaluator) are tracked under Epic NAZ-301.
 
 ## Installation
 
@@ -247,6 +248,40 @@ The server always responds with one of two shapes:
 **Range formatting is not supported.** `textDocument/rangeFormatting` is deliberately left off the server capabilities, and the corresponding dispatch handler is absent. The Tarn formatter's contract is "normalise the whole document to canonical field order", which has no sensible subset-of-range interpretation — the `serde_yaml` round-trip produces bytes that differ from the input at arbitrary offsets, not just inside the selection. Clients that ask for range formatting will get a `MethodNotFound` response; well-behaved clients will never ask because the capability is not advertised.
 
 **CLI parity.** `tarn fmt file.tarn.yaml` and "Format Document" in the editor produce byte-identical output for the same input, because both paths call `tarn::format::format_document`. If a formatted buffer surprises you, run `tarn fmt --check file.tarn.yaml` from the terminal — the same canonical layout will surface there.
+
+### 10. Code actions (`textDocument/codeAction`) — new in L3.2
+
+`tarn-lsp` answers `textDocument/codeAction` with a **pure dispatcher** that walks a flat list of provider functions and concatenates their results. Each provider returns a fully-resolved `CodeAction` with the `edit: WorkspaceEdit` already populated, so there is no `codeAction/resolve` round trip — clients apply the edit in one step.
+
+The capability advertises three stable action kinds from this ticket forward:
+
+| Kind                 | Provider                         | Status                    |
+| -------------------- | -------------------------------- | ------------------------- |
+| `refactor.extract`   | **Extract env var** (this ticket) | shipped in L3.2 (NAZ-303) |
+| `refactor`           | Capture field, scaffold assert    | reserved for L3.3         |
+| `quickfix`           | Fix-plan quick fix                | reserved for L3.4         |
+
+Declaring the latter two kinds now means later tickets plug new providers into the same dispatcher without regressing the capability advertisement. `resolve_provider: false` is pinned for the whole dispatcher — every provider must return a fully resolved action.
+
+#### Extract env var (`refactor.extract`)
+
+**Trigger.** Place the cursor (or make a selection inside) a string literal that lives in a request field — `request.url`, `request.headers.*`, a `request.body.*` field value, `request.query.*`, `request.form.*`, `request.multipart.*`, or the step-level `url:` alias — **and** the literal is not already an interpolation. Clients see the action as `"Extract to env var…"` in their refactor menu.
+
+**Edit shape.** A single `WorkspaceEdit` on the current file with two `TextEdit`s:
+
+1. The literal is replaced with `"{{ env.<chosen_name> }}"` (quoted so the YAML parse shape stays a string).
+2. The original value is inserted into the file's inline `env:` block as a new key named `<chosen_name>`. If the file has no inline `env:` block, a fresh one is created at the top of the file (above any `setup:` / `tests:` / `steps:`). The original value is escaped via a small `yaml_scalar_literal` helper so simple words stay bare scalars (`new_env_key: hello`) while anything containing quotes, special YAML characters, newlines, or that would parse as a bool / number / null gets a double-quoted form (`new_env_key: "hello \"world\""`).
+
+**Placeholder naming.** The coined env key defaults to `new_env_key`. The name is then checked against the **full env chain** the file sees (inline `env:` block ∪ `tarn.env.yaml` ∪ `tarn.env.local.yaml` ∪ `tarn.env.{name}.yaml`). When the default name is already taken, the server suffixes with a counter until a free slot is found: `new_env_key`, `new_env_key_2`, `new_env_key_3`, … The chosen name is logged to stderr (`tarn-lsp: extract env var chose name …`) so users can see what was picked.
+
+**Excluded scalars.** The action declines on:
+
+- scalars already classified as interpolations (`{{ env.foo }}`, `{{ capture.bar }}`, `{{ $uuid }}`),
+- YAML bool / null / numeric literals (`true`, `3`, `3.14`, `null`, `~`),
+- scalars that are not inside a request field (step `name:`, `tags:`, `capture:`, `assert:`, `defaults:`),
+- selections that span more than one YAML node.
+
+After shipping L3.2, Phase L3 is half-complete — L3.3 through L3.6 (capture-field refactor, fix-plan quick fix, nested completion, JSONPath evaluator) are still pending under Epic NAZ-301.
 
 ## Client configuration
 

@@ -842,6 +842,402 @@ fn skip_event_node(events: &[(Event, Marker)], mut i: usize) -> usize {
     }
 }
 
+// --- position-based scalar lookup --------------------------------------
+//
+// NAZ-303 (tarn-lsp code actions) needs "what scalar is under the
+// cursor, and what is its field path?". The outline walker owns every
+// other YAML walk in the crate, so the helper lives here alongside it.
+//
+// The returned [`ScalarAtPosition`] carries:
+//
+//   * the unquoted string value of the scalar,
+//   * the YAML scalar style (plain, single-quoted, double-quoted, …),
+//   * an inclusive 1-based line/column span that covers the scalar
+//     **including any surrounding quotes**, so an LSP client can
+//     replace the whole literal in one edit,
+//   * a path of [`PathSegment`]s from the document root to the scalar,
+//     so consumers can decide whether the scalar is inside a request
+//     field, an env value, a header, a name, etc.
+//
+// The walker is best-effort: malformed YAML returns `None` and any
+// unrecognised event ends the walk gracefully.
+
+/// One segment of the path from the document root to a YAML node.
+///
+/// Mapping keys become [`PathSegment::Key`] entries and sequence indices
+/// become [`PathSegment::Index`] entries. Zero-based indices match the
+/// way every other Tarn walker reports sequence positions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PathSegment {
+    /// A mapping key (e.g. the `"request"` in `request.url`).
+    Key(String),
+    /// A sequence index (zero-based, e.g. the `0` in `steps[0]`).
+    Index(usize),
+}
+
+/// YAML scalar style reported by [`find_scalar_at_position`].
+///
+/// Mirrors the subset of `yaml_rust2::scanner::TScalarStyle` that Tarn
+/// buffers realistically contain. The distinction matters because an
+/// extract-env code action needs to replace the **entire literal**,
+/// which for a quoted scalar includes the surrounding `"..."` or
+/// `'...'`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScalarStyle {
+    /// Plain unquoted scalar: `url: http://example.com`.
+    Plain,
+    /// Single-quoted scalar: `url: 'http://example.com'`.
+    SingleQuoted,
+    /// Double-quoted scalar: `url: "http://example.com"`.
+    DoubleQuoted,
+    /// Literal block (`|`) — single-line fallback only; multi-line
+    /// block scalars are not targeted by the current consumers.
+    Literal,
+    /// Folded block (`>`) — same caveat as `Literal`.
+    Folded,
+}
+
+/// Information about a scalar node located by [`find_scalar_at_position`].
+///
+/// Line and column numbers are **1-based** to match every other
+/// [`Location`]-style Tarn emission. The span is inclusive on the start
+/// (`start_line`, `start_column`) and inclusive on the end byte
+/// (`end_line`, `end_column`), where `end_column` points at the column
+/// immediately past the last character of the scalar text (quotes
+/// included when present). Consumers that need 0-based positions
+/// subtract one, the same way diagnostics do.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScalarAtPosition {
+    /// Unquoted string value of the scalar, as emitted by `yaml-rust2`.
+    pub value: String,
+    /// YAML scalar style — plain / quoted / block.
+    pub style: ScalarStyle,
+    /// Path from the document root to this scalar.
+    pub path: Vec<PathSegment>,
+    /// 1-based line of the first character of the literal (quotes
+    /// included when the scalar is quoted).
+    pub start_line: usize,
+    /// 1-based column of the first character of the literal.
+    pub start_column: usize,
+    /// 1-based line of the character immediately past the last
+    /// character of the literal.
+    pub end_line: usize,
+    /// 1-based column of the character immediately past the last
+    /// character of the literal.
+    pub end_column: usize,
+    /// Absolute byte offset of the first character of the literal.
+    pub start_byte: usize,
+    /// Absolute byte offset of the first byte **after** the literal.
+    pub end_byte: usize,
+}
+
+/// Find the innermost scalar node in `content` whose source span
+/// contains the 1-based `(line, column)` position.
+///
+/// Returns `None` for positions that land on a mapping / sequence
+/// opening, on whitespace, on a comment, or on anything that fails to
+/// parse through `yaml-rust2`. The walker is strictly best-effort:
+/// malformed YAML degrades to `None` so an in-progress edit never
+/// crashes the caller.
+pub fn find_scalar_at_position(
+    content: &str,
+    line_one_based: usize,
+    column_one_based: usize,
+) -> Option<ScalarAtPosition> {
+    let mut sink = EventSink { events: Vec::new() };
+    let mut parser = Parser::new_from_str(content);
+    parser.load(&mut sink, true).ok()?;
+
+    let events = &sink.events;
+    if events.is_empty() {
+        return None;
+    }
+
+    // Walk until we are past StreamStart / DocumentStart. Each
+    // subsequent event is either the document's root node or a child
+    // of something we already descended into.
+    let mut i = 0usize;
+    while i < events.len() {
+        match events[i].0 {
+            Event::StreamStart | Event::DocumentStart => i += 1,
+            _ => break,
+        }
+    }
+
+    let mut walker = ScalarWalker {
+        events,
+        source: content,
+        target_line: line_one_based,
+        target_col: column_one_based,
+        path: Vec::new(),
+        best: None,
+    };
+    walker.walk_node(&mut i);
+    walker.best
+}
+
+/// Internal state for [`find_scalar_at_position`].
+struct ScalarWalker<'a> {
+    events: &'a [(Event, Marker)],
+    source: &'a str,
+    target_line: usize,
+    target_col: usize,
+    path: Vec<PathSegment>,
+    best: Option<ScalarAtPosition>,
+}
+
+impl<'a> ScalarWalker<'a> {
+    /// Walk the node at `events[*i]`. Advances `*i` past the node's
+    /// closing event. Recurses for mappings and sequences; records the
+    /// scalar as a candidate when `position` falls inside its span.
+    fn walk_node(&mut self, i: &mut usize) {
+        if *i >= self.events.len() {
+            return;
+        }
+        let (event, mark) = &self.events[*i];
+        match event {
+            Event::Scalar(value, style, _, _) => {
+                let scalar_start_index = mark.index();
+                let scalar_start_line = mark.line();
+                let scalar_start_col = mark.col() + 1;
+                // Compute the scalar's end byte from the raw source so
+                // the span covers any surrounding quotes as well as the
+                // unquoted text.
+                let (end_byte, end_line, end_col) =
+                    scalar_end_position(self.source, scalar_start_index, value, *style);
+                if position_in_span(
+                    self.target_line,
+                    self.target_col,
+                    scalar_start_line,
+                    scalar_start_col,
+                    end_line,
+                    end_col,
+                ) {
+                    self.best = Some(ScalarAtPosition {
+                        value: value.clone(),
+                        style: tscalar_style_to_local(*style),
+                        path: self.path.clone(),
+                        start_line: scalar_start_line,
+                        start_column: scalar_start_col,
+                        end_line,
+                        end_column: end_col,
+                        start_byte: scalar_start_index,
+                        end_byte,
+                    });
+                }
+                *i += 1;
+            }
+            Event::MappingStart(_, _) => {
+                *i += 1;
+                loop {
+                    match self.events.get(*i).map(|(e, _)| e) {
+                        Some(Event::MappingEnd) => {
+                            *i += 1;
+                            break;
+                        }
+                        None => break,
+                        _ => {
+                            // Read key scalar without descending into it
+                            // (the key itself is rarely a useful extract
+                            // target — we still advance past it balanced).
+                            let key_event = &self.events[*i];
+                            let key = match &key_event.0 {
+                                Event::Scalar(k, _, _, _) => Some(k.clone()),
+                                _ => None,
+                            };
+                            self.walk_node(i);
+                            if let Some(key) = key {
+                                self.path.push(PathSegment::Key(key));
+                                self.walk_node(i);
+                                self.path.pop();
+                            } else {
+                                // Non-scalar key — skip balanced so the
+                                // walker stays aligned.
+                                self.walk_node(i);
+                            }
+                        }
+                    }
+                }
+            }
+            Event::SequenceStart(_, _) => {
+                *i += 1;
+                let mut idx = 0usize;
+                loop {
+                    match self.events.get(*i).map(|(e, _)| e) {
+                        Some(Event::SequenceEnd) => {
+                            *i += 1;
+                            break;
+                        }
+                        None => break,
+                        _ => {
+                            self.path.push(PathSegment::Index(idx));
+                            self.walk_node(i);
+                            self.path.pop();
+                            idx += 1;
+                        }
+                    }
+                }
+            }
+            Event::Alias(_) | Event::StreamEnd | Event::DocumentEnd => {
+                *i += 1;
+            }
+            _ => {
+                *i += 1;
+            }
+        }
+    }
+}
+
+/// Compute `(end_byte, end_line, end_col)` for a scalar starting at
+/// `start_byte`. For plain scalars this scans to the first newline,
+/// comment, or structural punctuation. For quoted scalars it walks
+/// until the matching closing quote, accounting for the simple escape
+/// rules (double-quoted `\"` and single-quoted `''`). Block scalars
+/// (`|`, `>`) fall back to "single-line" behaviour — the current
+/// consumers only care about single-line literals, and the walker is
+/// strictly best-effort.
+fn scalar_end_position(
+    source: &str,
+    start_byte: usize,
+    value: &str,
+    style: yaml_rust2::scanner::TScalarStyle,
+) -> (usize, usize, usize) {
+    use yaml_rust2::scanner::TScalarStyle;
+    let bytes = source.as_bytes();
+    let len = bytes.len();
+    if start_byte >= len {
+        let (line, col) = line_col_for_byte(source, start_byte.min(len));
+        return (start_byte.min(len), line, col);
+    }
+    let end_byte = match style {
+        TScalarStyle::DoubleQuoted => {
+            // Walk forward, skipping `\x` escape sequences, until the
+            // matching `"`.
+            if bytes[start_byte] != b'"' {
+                plain_scalar_end(bytes, start_byte, value)
+            } else {
+                let mut j = start_byte + 1;
+                while j < len {
+                    let b = bytes[j];
+                    if b == b'\\' && j + 1 < len {
+                        j += 2;
+                        continue;
+                    }
+                    if b == b'"' {
+                        j += 1;
+                        break;
+                    }
+                    j += 1;
+                }
+                j
+            }
+        }
+        TScalarStyle::SingleQuoted => {
+            if bytes[start_byte] != b'\'' {
+                plain_scalar_end(bytes, start_byte, value)
+            } else {
+                let mut j = start_byte + 1;
+                while j < len {
+                    let b = bytes[j];
+                    if b == b'\'' {
+                        if j + 1 < len && bytes[j + 1] == b'\'' {
+                            j += 2;
+                            continue;
+                        }
+                        j += 1;
+                        break;
+                    }
+                    j += 1;
+                }
+                j
+            }
+        }
+        _ => plain_scalar_end(bytes, start_byte, value),
+    };
+    let clamped = end_byte.min(len);
+    let (line, col) = line_col_for_byte(source, clamped);
+    (clamped, line, col)
+}
+
+/// Walk a plain (unquoted) scalar from `start_byte` forward until the
+/// first terminating character. Fall back to "start + value.len()"
+/// when the value matches the raw source — YAML plain scalars do not
+/// re-quote their bytes so that fast path is usually correct.
+fn plain_scalar_end(bytes: &[u8], start_byte: usize, value: &str) -> usize {
+    let len = bytes.len();
+    // Fast path: the raw source at `start_byte` starts with `value`
+    // verbatim. Plain scalars almost always do.
+    let vbytes = value.as_bytes();
+    if start_byte + vbytes.len() <= len && &bytes[start_byte..start_byte + vbytes.len()] == vbytes {
+        return start_byte + vbytes.len();
+    }
+    // Slow path: scan to the first `\n`, `#`, or structural separator.
+    let mut j = start_byte;
+    while j < len {
+        let b = bytes[j];
+        if b == b'\n' || b == b'#' {
+            break;
+        }
+        j += 1;
+    }
+    j
+}
+
+/// Map a yaml-rust2 `TScalarStyle` onto the crate-local [`ScalarStyle`].
+fn tscalar_style_to_local(style: yaml_rust2::scanner::TScalarStyle) -> ScalarStyle {
+    use yaml_rust2::scanner::TScalarStyle;
+    match style {
+        TScalarStyle::Plain => ScalarStyle::Plain,
+        TScalarStyle::SingleQuoted => ScalarStyle::SingleQuoted,
+        TScalarStyle::DoubleQuoted => ScalarStyle::DoubleQuoted,
+        TScalarStyle::Literal => ScalarStyle::Literal,
+        TScalarStyle::Folded => ScalarStyle::Folded,
+    }
+}
+
+/// Compute the 1-based `(line, column)` of a byte offset inside `source`.
+fn line_col_for_byte(source: &str, byte: usize) -> (usize, usize) {
+    let clamped = byte.min(source.len());
+    let mut line = 1usize;
+    let mut col = 1usize;
+    for (i, c) in source.char_indices() {
+        if i >= clamped {
+            break;
+        }
+        if c == '\n' {
+            line += 1;
+            col = 1;
+        } else {
+            col += 1;
+        }
+    }
+    (line, col)
+}
+
+/// True when the 1-based `(target_line, target_col)` falls inside the
+/// 1-based span `(start_line, start_col)..(end_line, end_col)`, with
+/// the start inclusive and the end inclusive of the final character's
+/// position (i.e. the cursor *on* the closing quote still counts).
+fn position_in_span(
+    target_line: usize,
+    target_col: usize,
+    start_line: usize,
+    start_col: usize,
+    end_line: usize,
+    end_col: usize,
+) -> bool {
+    if target_line < start_line || target_line > end_line {
+        return false;
+    }
+    if target_line == start_line && target_col < start_col {
+        return false;
+    }
+    if target_line == end_line && target_col > end_col {
+        return false;
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1223,5 +1619,79 @@ tests:
         let yaml = "name: bad\n  - indent: [oops";
         let locs = find_capture_declarations(yaml, "t.tarn.yaml", "x", &CaptureScope::Any);
         assert!(locs.is_empty());
+    }
+
+    // --- find_scalar_at_position -------------------------------------
+
+    #[test]
+    fn find_scalar_at_position_returns_plain_url_with_path() {
+        let yaml = "\
+steps:
+  - name: s
+    request:
+      method: GET
+      url: http://example.com/items
+";
+        // Cursor somewhere inside `http://example.com/items` on line 5.
+        let scalar = find_scalar_at_position(yaml, 5, 15).expect("scalar");
+        assert_eq!(scalar.value, "http://example.com/items");
+        assert_eq!(scalar.style, ScalarStyle::Plain);
+        assert_eq!(
+            scalar.path,
+            vec![
+                PathSegment::Key("steps".into()),
+                PathSegment::Index(0),
+                PathSegment::Key("request".into()),
+                PathSegment::Key("url".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn find_scalar_at_position_returns_quoted_url_with_quotes_in_span() {
+        let yaml = "\
+steps:
+  - name: s
+    request:
+      method: GET
+      url: \"http://example.com/items\"
+";
+        let scalar = find_scalar_at_position(yaml, 5, 20).expect("scalar");
+        assert_eq!(scalar.value, "http://example.com/items");
+        assert_eq!(scalar.style, ScalarStyle::DoubleQuoted);
+        // Verify the byte span covers the surrounding quotes.
+        let literal = &yaml[scalar.start_byte..scalar.end_byte];
+        assert_eq!(literal, "\"http://example.com/items\"");
+    }
+
+    #[test]
+    fn find_scalar_at_position_returns_none_on_whitespace() {
+        let yaml = "steps:\n  - name: first\n    request:\n      url: http://x/\n";
+        // Column 1 on line 1 is on the `s` of `steps` (a key scalar).
+        // Column 7 on line 1 is just past the colon, on whitespace —
+        // no scalar value lives there.
+        assert!(find_scalar_at_position(yaml, 1, 50).is_none());
+    }
+
+    #[test]
+    fn find_scalar_at_position_reports_name_path_when_cursor_on_step_name() {
+        let yaml = "steps:\n  - name: first\n    request:\n      url: http://x/\n";
+        // Cursor on the `first` scalar of the step's `name:` field.
+        let scalar = find_scalar_at_position(yaml, 2, 12).expect("scalar");
+        assert_eq!(scalar.value, "first");
+        assert_eq!(
+            scalar.path,
+            vec![
+                PathSegment::Key("steps".into()),
+                PathSegment::Index(0),
+                PathSegment::Key("name".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn find_scalar_at_position_returns_none_for_malformed_yaml() {
+        let yaml = "steps: [oops\n  bad";
+        assert!(find_scalar_at_position(yaml, 1, 5).is_none());
     }
 }

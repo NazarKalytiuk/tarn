@@ -2420,7 +2420,7 @@ dependencies = [
 
 [[package]]
 name = "tarn"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -2463,7 +2463,7 @@ dependencies = [
 
 [[package]]
 name = "tarn-lsp"
-version = "0.5.9"
+version = "0.5.10"
 dependencies = [
  "crossbeam-channel",
  "lsp-server",

@@ -31,16 +31,17 @@ use lsp_types::notification::{
     Notification as _,
 };
 use lsp_types::request::{
-    CodeLensRequest, Completion, DocumentSymbolRequest, Formatting, GotoDefinition, HoverRequest,
-    PrepareRenameRequest, References, Rename, Request as _,
+    CodeActionRequest, CodeLensRequest, Completion, DocumentSymbolRequest, Formatting,
+    GotoDefinition, HoverRequest, PrepareRenameRequest, References, Rename, Request as _,
 };
 use lsp_types::{
-    CodeLensParams, CompletionParams, DocumentFormattingParams, DocumentSymbolParams,
-    GotoDefinitionParams, HoverParams, InitializeParams, ReferenceParams, RenameParams,
-    TextDocumentPositionParams, Url,
+    CodeActionParams, CodeLensParams, CompletionParams, DocumentFormattingParams,
+    DocumentSymbolParams, GotoDefinitionParams, HoverParams, InitializeParams, ReferenceParams,
+    RenameParams, TextDocumentPositionParams, Url,
 };
 
 use crate::capabilities::server_capabilities;
+use crate::code_actions;
 use crate::code_lens;
 use crate::completion;
 use crate::debounce::DebounceTracker;
@@ -422,6 +423,21 @@ fn dispatch_request(req: Request, state: &mut ServerState) -> Response {
             Err(ExtractError::MethodMismatch(r)) => method_not_found(r),
             Err(ExtractError::JsonError { method, error }) => invalid_params(id, method, error),
         },
+        CodeActionRequest::METHOD => {
+            match req.extract::<CodeActionParams>(CodeActionRequest::METHOD) {
+                Ok((req_id, params)) => {
+                    // L3.2: `textDocument/codeAction` walks the pure
+                    // dispatcher in `crate::code_actions` and returns
+                    // fully-resolved actions. Unknown URIs and
+                    // un-parseable buffers collapse to an empty array,
+                    // the same way formatting does.
+                    let result = code_actions::text_document_code_action(state, params);
+                    serialize_response(req_id, &result, "codeAction")
+                }
+                Err(ExtractError::MethodMismatch(r)) => method_not_found(r),
+                Err(ExtractError::JsonError { method, error }) => invalid_params(id, method, error),
+            }
+        }
         _ => method_not_found(req),
     }
 }

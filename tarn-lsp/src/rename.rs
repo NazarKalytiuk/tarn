@@ -162,23 +162,10 @@ impl From<RenameError> for ResponseError {
     }
 }
 
-/// True when `s` matches the Tarn identifier grammar.
-///
-/// Grammar: `^[A-Za-z_][A-Za-z0-9_]*$`. ASCII only — Unicode letters
-/// are rejected so the YAML key, the interpolation token, and the
-/// `${VAR}` shell-expansion placeholder all agree on the same
-/// identifier rule. A hand-rolled char walk rather than a regex to
-/// avoid pulling `regex` into `tarn-lsp` for one predicate.
-pub fn is_valid_identifier(s: &str) -> bool {
-    let mut chars = s.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !(first.is_ascii_alphabetic() || first == '_') {
-        return false;
-    }
-    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
-}
+// Identifier grammar helper lives in [`crate::identifier`] — NAZ-303
+// promoted it to a shared module so both the rename renderer and the
+// extract-env code action agree on what counts as a valid Tarn name.
+pub use crate::identifier::is_valid_identifier;
 
 /// One env source file the rename renderer consults.
 ///
@@ -1046,33 +1033,9 @@ mod tests {
             .expect("token span present in source")
     }
 
-    // ---------- is_valid_identifier ----------
-
-    #[test]
-    fn is_valid_identifier_accepts_ascii_letters_and_underscore() {
-        assert!(is_valid_identifier("name"));
-        assert!(is_valid_identifier("_name"));
-        assert!(is_valid_identifier("name_2"));
-        assert!(is_valid_identifier("CONST_CASE"));
-        assert!(is_valid_identifier("x"));
-    }
-
-    #[test]
-    fn is_valid_identifier_rejects_leading_digit_or_hyphen() {
-        assert!(!is_valid_identifier("2fast"));
-        assert!(!is_valid_identifier("-name"));
-        assert!(!is_valid_identifier("my-name"));
-    }
-
-    #[test]
-    fn is_valid_identifier_rejects_empty_whitespace_and_unicode() {
-        assert!(!is_valid_identifier(""));
-        assert!(!is_valid_identifier(" "));
-        assert!(!is_valid_identifier("has space"));
-        // Unicode letter — intentionally rejected. Tarn identifiers are
-        // ASCII to match shell-expansion and YAML key conventions.
-        assert!(!is_valid_identifier("café"));
-    }
+    // `is_valid_identifier` is unit-tested in `crate::identifier` —
+    // NAZ-303 moved the helper there so the rename renderer and the
+    // extract-env code action share the exact same grammar check.
 
     // ---------- prepare_rename_range ----------
 

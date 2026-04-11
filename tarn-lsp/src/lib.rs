@@ -9,6 +9,7 @@
 //! the `tarn-lsp` binary, not this library.
 
 pub mod capabilities;
+pub mod code_actions;
 pub mod code_lens;
 pub mod completion;
 pub mod debounce;
@@ -16,6 +17,7 @@ pub mod definition;
 pub mod diagnostics;
 pub mod formatting;
 pub mod hover;
+pub mod identifier;
 pub mod references;
 pub mod rename;
 pub mod schema;

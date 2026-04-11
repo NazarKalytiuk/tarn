@@ -35,13 +35,22 @@
 //!   Range formatting is deliberately **not** advertised; the parser
 //!   re-renders the whole buffer so a range-only edit cannot be produced
 //!   without touching the surrounding YAML. Shipped.
+//! - L3.2 (NAZ-303): `code_action_provider: CodeActionOptions` —
+//!   `textDocument/codeAction` dispatcher with the first provider
+//!   (**extract env var**) wired in. Advertises `refactor.extract`
+//!   now plus `refactor` and `quickfix` reserved for L3.3 / L3.4 so
+//!   the capability struct is stable from this ticket forward.
+//!   `resolve_provider: false` — actions come back fully resolved
+//!   with their `WorkspaceEdit` already populated so there is no
+//!   `codeAction/resolve` round trip. Shipped.
 //!
 //! Nothing in this file should ever grow conditional logic — if a capability
 //! is on, it is on for every client and every workspace.
 
 use lsp_types::{
-    CodeLensOptions, CompletionOptions, HoverProviderCapability, OneOf, RenameOptions,
-    ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind, WorkDoneProgressOptions,
+    CodeActionKind, CodeActionOptions, CodeActionProviderCapability, CodeLensOptions,
+    CompletionOptions, HoverProviderCapability, OneOf, RenameOptions, ServerCapabilities,
+    TextDocumentSyncCapability, TextDocumentSyncKind, WorkDoneProgressOptions,
 };
 
 /// Return the `ServerCapabilities` this server currently advertises.
@@ -129,6 +138,27 @@ pub fn server_capabilities() -> ServerCapabilities {
         // cannot be produced without touching surrounding YAML.
         // `document_range_formatting_provider` therefore stays unset.
         document_formatting_provider: Some(OneOf::Left(true)),
+
+        // L3.2: the server answers `textDocument/codeAction` requests
+        // with a dispatcher that walks a list of providers. The only
+        // provider shipped right now is **extract env var**
+        // (`refactor.extract`); L3.3 (capture-field refactor) will
+        // plug into `refactor` and L3.4 (fix-plan quick fix) will
+        // plug into `quickfix`. Declaring all three kinds now keeps
+        // the capability struct stable from this ticket forward so a
+        // client never sees a "new kind appeared" regression.
+        // `resolve_provider: false` — the dispatcher returns fully
+        // resolved actions (WorkspaceEdit already populated), so no
+        // `codeAction/resolve` round trip is needed for the MVP.
+        code_action_provider: Some(CodeActionProviderCapability::Options(CodeActionOptions {
+            code_action_kinds: Some(vec![
+                CodeActionKind::REFACTOR_EXTRACT,
+                CodeActionKind::REFACTOR,
+                CodeActionKind::QUICKFIX,
+            ]),
+            resolve_provider: Some(false),
+            work_done_progress_options: WorkDoneProgressOptions::default(),
+        })),
 
         // All other capabilities are intentionally left unset. See the module
         // docs for the ticket that turns each one on.
