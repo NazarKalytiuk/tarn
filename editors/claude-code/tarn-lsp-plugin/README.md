@@ -69,7 +69,7 @@ The plugin is installed but Claude Code can't find the `tarn-lsp` binary. Check:
 
 ### LSP server not responding
 
-Run Claude Code with `claude --debug` and look for `tarn-lsp` loading errors in the log. The server writes a startup banner (`tarn-lsp 0.5.6 initialized`) to stderr on successful `initialize`, visible in the debug log.
+Run Claude Code with `claude --debug` and look for `tarn-lsp` loading errors in the log. The server writes a startup banner (`tarn-lsp 0.6.0 initialized`) to stderr on successful `initialize`, visible in the debug log.
 
 ### Diagnostics / hover / completion missing on some `.yaml` files
 

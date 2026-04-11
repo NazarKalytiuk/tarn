@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.6.0 — Coordinated release with Tarn 0.6.0 (tarn-lsp + Claude Code plugin)
+
+Version-only bump to keep the extension in lockstep with the
+first-ever **tarn-lsp** release at Tarn `0.6.0`. No user-visible
+extension behavior change over `0.5.1` — the content of this
+release is the Rust-side tarn-lsp crate, a Claude Code plugin, and
+the `vscode-languageclient` scaffolding that shipped in `0.5.1`.
+
+See [`CHANGELOG.md`](../../CHANGELOG.md) at the repo root for the
+Tarn-side release notes covering:
+
+- **tarn-lsp** Phase L1 (diagnostics, hover, completion, document
+  symbols), Phase L2 (go-to-definition, references, rename, code
+  lens), and Phase L3 (formatter, code actions, quick-fix, nested
+  completion, JSONPath evaluator).
+- **Claude Code plugin** at `editors/claude-code/tarn-lsp-plugin/`
+  that registers `tarn-lsp` for `.yaml` files in Tarn-focused
+  projects.
+- Public API growth on the `tarn` crate (new `tarn::validation`,
+  `tarn::outline`, `tarn::format`, `tarn::fix_plan`,
+  `tarn::selector`, `tarn::jsonpath` modules) and the release
+  pipeline updates that ship tarn-lsp alongside tarn and tarn-mcp.
+
+Tested against **Tarn `0.6.x`** — the NAZ-288 alignment lint
+enforces major.minor match.
+
+### Changed
+
+- **Version + `tarn.minVersion` bumped to `0.6.0`** so the
+  activation-time compatibility check warns users whose installed
+  Tarn CLI is still on `0.5.x`.
+- **CHANGELOG cross-linked** with the top-level Tarn changelog so
+  users reading the Marketplace listing can follow the full release
+  story without jumping between repos.
+
+### Not in this release
+
+No feature moved from the direct-provider path to the
+`tarn-lsp` LSP client path. `tarn.experimentalLspClient` stays
+`false` by default. Phase V2 tickets will start migrating features
+one at a time in follow-up releases.
+
 ## 0.5.1 — Phase V1: vscode-languageclient scaffolding (NAZ-309)
 
 First step of Phase V — the extension starts migrating its
