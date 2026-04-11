@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.1 — Coordinated release with Tarn 0.6.1 (Dockerfile hotfix)
+
+Version-only bump to stay in lockstep with the Tarn 0.6.1 hotfix
+release, which ships a Dockerfile fix so the `ghcr.io/nazarkalytiuk/tarn`
+image actually contains `tarn-lsp` alongside `tarn` and `tarn-mcp`.
+
+No extension code changes. `tarn.minVersion` stays at `0.6.0`
+because no new Tarn CLI features are required — users running
+Tarn `0.6.0` can still use extension `0.6.1` without any
+activation-time compatibility warnings.
+
+See the top-level [`CHANGELOG.md`](../../CHANGELOG.md) for the
+Tarn-side release notes covering NAZ-313.
+
 ## 0.6.0 — Coordinated release with Tarn 0.6.0 (tarn-lsp + Claude Code plugin)
 
 Version-only bump to keep the extension in lockstep with the

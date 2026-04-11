@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.6.1 — Dockerfile hotfix: ship tarn-lsp in the image (NAZ-313)
+
+Patch release. The v0.6.0 `Publish Docker image` release job failed
+because the Dockerfile was still on the pre-tarn-lsp workspace shape
+— it didn't copy `tarn-lsp/` or the workspace-level `schemas/`
+directory that `tarn-lsp/src/schema.rs` includes at compile time,
+and it didn't pass `-p tarn-lsp` to `cargo build`. The fix:
+
+- Copy `tarn-lsp/` alongside `tarn/`, `tarn-mcp/`, `demo-server/`.
+- Copy `schemas/` so the compile-time `include_str!("../../schemas/v1/testfile.json")` resolves.
+- `cargo build --release -p tarn -p tarn-mcp -p tarn-lsp`.
+- Final stage `COPY` includes `/usr/local/bin/tarn-lsp` so the
+  runtime image ships all three binaries.
+
+Also caught in the process: `tarn-lsp/src/schema.rs`'s
+`include_str!` pattern reaches out of the crate directory, which
+would also block `cargo publish -p tarn-lsp` if a `CRATES_IO_TOKEN`
+were set. Documented in NAZ-313 as a latent follow-up to resolve
+before the first crates.io publish. Not user-visible for this
+release since the publish job silently skips without a token.
+
+No other changes. Paired with **Tarn VS Code extension 0.6.1** —
+version-only bump to stay aligned with the NAZ-288 policy that
+requires identical tag, `tarn/Cargo.toml`, and
+`editors/vscode/package.json` versions at release time.
+
 ## 0.6.0 — Phase L: tarn-lsp shipped + Claude Code plugin + VS Code LSP scaffolding
 
 First coordinated release of the **tarn-lsp** language server, plus a

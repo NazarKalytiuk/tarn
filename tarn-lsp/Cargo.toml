@@ -1,6 +1,6 @@
 [package]
 name = "tarn-lsp"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2021"
 description = "Language Server Protocol implementation for Tarn .tarn.yaml test files"
 license = "MIT"
@@ -20,7 +20,7 @@ name = "tarn-lsp"
 path = "src/main.rs"
 
 [dependencies]
-tarn = { version = "0.6.0", path = "../tarn" }
+tarn = { version = "0.6.1", path = "../tarn" }
 lsp-server = "0.7"
 lsp-types = "0.95"
 # lsp-server uses crossbeam-channel under the hood. We depend on it
