@@ -15,6 +15,7 @@ pub mod diagnostics;
 pub mod hover;
 pub mod schema;
 pub mod server;
+pub mod symbols;
 pub mod token;
 
 pub use capabilities::server_capabilities;

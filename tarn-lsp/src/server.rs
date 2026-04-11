@@ -30,14 +30,15 @@ use lsp_types::notification::{
     DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, DidSaveTextDocument,
     Notification as _,
 };
-use lsp_types::request::{Completion, HoverRequest, Request as _};
-use lsp_types::{CompletionParams, HoverParams, InitializeParams, Url};
+use lsp_types::request::{Completion, DocumentSymbolRequest, HoverRequest, Request as _};
+use lsp_types::{CompletionParams, DocumentSymbolParams, HoverParams, InitializeParams, Url};
 
 use crate::capabilities::server_capabilities;
 use crate::completion;
 use crate::debounce::DebounceTracker;
 use crate::diagnostics;
 use crate::hover;
+use crate::symbols;
 
 /// Short tag used in the `eprintln!` server-info log. Tests grep for this.
 pub const SERVER_NAME: &str = "tarn-lsp";
@@ -181,10 +182,10 @@ fn main_loop(connection: &Connection) -> Result<(), Box<dyn Error + Sync + Send>
                     // the connection is closed and the receiver loop ends.
                     return Ok(());
                 }
-                // Dispatch typed LSP requests. L1.3 added `textDocument/hover`,
-                // L1.4 adds `textDocument/completion`. Anything else falls
-                // through to a JSON-RPC "method not found" response until
-                // L1.5 adds the document-symbol handler.
+                // Dispatch typed LSP requests. Phase L1 handles hover
+                // (L1.3), completion (L1.4), and documentSymbol (L1.5).
+                // Anything else falls through to a JSON-RPC "method not
+                // found" response until Phase L2 adds more handlers.
                 let resp = dispatch_request(req, &store);
                 connection.sender.send(Message::Response(resp))?;
             }
@@ -230,8 +231,10 @@ fn is_timeout(err: &crossbeam_channel::RecvTimeoutError) -> bool {
 ///
 /// L1.3 dispatches `textDocument/hover` through [`hover::text_document_hover`];
 /// L1.4 adds `textDocument/completion` via
-/// [`completion::text_document_completion`]. The remaining request methods
-/// are added in L1.5.
+/// [`completion::text_document_completion`]; L1.5 adds
+/// `textDocument/documentSymbol` via
+/// [`symbols::text_document_document_symbol`]. Phase L2 will add more
+/// request methods on top.
 fn dispatch_request(req: Request, store: &DocumentStore) -> Response {
     // Capture the id up-front: `Request::extract` takes `self` by value
     // so we can't read `req.id` after a failed extract.
@@ -261,6 +264,17 @@ fn dispatch_request(req: Request, store: &DocumentStore) -> Response {
             Err(ExtractError::MethodMismatch(r)) => method_not_found(r),
             Err(ExtractError::JsonError { method, error }) => invalid_params(id, method, error),
         },
+        DocumentSymbolRequest::METHOD => {
+            match req.extract::<DocumentSymbolParams>(DocumentSymbolRequest::METHOD) {
+                Ok((req_id, params)) => {
+                    let uri = params.text_document.uri;
+                    let result = symbols::text_document_document_symbol(store, &uri);
+                    serialize_response(req_id, &result, "documentSymbol")
+                }
+                Err(ExtractError::MethodMismatch(r)) => method_not_found(r),
+                Err(ExtractError::JsonError { method, error }) => invalid_params(id, method, error),
+            }
+        }
         _ => method_not_found(req),
     }
 }

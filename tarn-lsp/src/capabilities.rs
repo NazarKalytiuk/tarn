@@ -15,15 +15,15 @@
 //! - L1.3 (NAZ-292): `hover_provider: Simple(true)`. Shipped.
 //! - L1.4 (NAZ-293): `completion_provider: Some(CompletionOptions { .. })`
 //!   with trigger characters `.` and `$`. Shipped.
-//! - L1.5 (NAZ-294): set `document_symbol_provider: Some(OneOf::Left(true))`
-//!   and publish the final Claude Code configuration snippet.
+//! - L1.5 (NAZ-294): `document_symbol_provider: Some(OneOf::Left(true))` —
+//!   the final Phase L1 feature. Shipped.
 //!
 //! Nothing in this file should ever grow conditional logic — if a capability
 //! is on, it is on for every client and every workspace.
 
 use lsp_types::{
-    CompletionOptions, HoverProviderCapability, ServerCapabilities, TextDocumentSyncCapability,
-    TextDocumentSyncKind,
+    CompletionOptions, HoverProviderCapability, OneOf, ServerCapabilities,
+    TextDocumentSyncCapability, TextDocumentSyncKind,
 };
 
 /// Return the `ServerCapabilities` this server currently advertises.
@@ -56,6 +56,14 @@ pub fn server_capabilities() -> ServerCapabilities {
             resolve_provider: Some(false),
             ..Default::default()
         }),
+
+        // L1.5: the server answers `textDocument/documentSymbol` requests
+        // with a hierarchical tree: file root (Namespace) → named tests
+        // (Module) → steps (Function), plus setup / teardown / flat steps
+        // as Function siblings. `OneOf::Left(true)` is the minimal form —
+        // there are no extra options to configure (we do not support
+        // work-done progress for symbol requests).
+        document_symbol_provider: Some(OneOf::Left(true)),
 
         // All other capabilities are intentionally left unset. See the module
         // docs for the ticket that turns each one on.

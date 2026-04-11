@@ -20,10 +20,10 @@ use lsp_types::{
 };
 
 /// Sanity check: `server_capabilities()` is the single source of truth for
-/// what the current phase advertises. L1.3 adds hover; completion and
-/// symbols remain unset until L1.4 / L1.5.
+/// what the current phase advertises. Phase L1 is now complete — every
+/// feature capability L1.1 through L1.5 added must be present.
 #[test]
-fn server_capabilities_advertises_full_text_sync_and_hover() {
+fn server_capabilities_advertises_every_phase_l1_feature() {
     let caps = tarn_lsp::server_capabilities();
 
     assert_eq!(
@@ -55,19 +55,26 @@ fn server_capabilities_advertises_full_text_sync_and_hover() {
         "L1.4 does not implement completionItem/resolve"
     );
 
-    // Every other feature capability must still be unset. These flip on
-    // in later L1 tickets — if one of them is already set, capabilities.rs
-    // has drifted from the roadmap and needs a compensating update to the
-    // doc + tests.
-    assert!(
-        caps.document_symbol_provider.is_none(),
-        "symbols are NAZ-294"
+    // L1.5 (NAZ-294): documentSymbol is on. We accept either variant of
+    // `OneOf<bool, DocumentSymbolOptions>` since both advertise the same
+    // server-side capability in Phase L1.
+    assert_eq!(
+        caps.document_symbol_provider,
+        Some(lsp_types::OneOf::Left(true)),
+        "L1.5 must advertise document_symbol_provider as OneOf::Left(true)"
     );
-    assert!(caps.definition_provider.is_none());
-    assert!(caps.references_provider.is_none());
-    assert!(caps.rename_provider.is_none());
-    assert!(caps.code_action_provider.is_none());
-    assert!(caps.execute_command_provider.is_none());
+
+    // Phase L2 capabilities remain unset — if one of them is already
+    // present, capabilities.rs has drifted from the roadmap and needs a
+    // compensating update to the doc + tests.
+    assert!(caps.definition_provider.is_none(), "L2: go-to-definition");
+    assert!(caps.references_provider.is_none(), "L2: find references");
+    assert!(caps.rename_provider.is_none(), "L2: rename symbol");
+    assert!(caps.code_action_provider.is_none(), "L3: code actions");
+    assert!(
+        caps.execute_command_provider.is_none(),
+        "L3: execute command"
+    );
 }
 
 /// End-to-end handshake test over an in-memory transport.

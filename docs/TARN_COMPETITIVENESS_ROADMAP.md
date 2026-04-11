@@ -262,13 +262,15 @@ Each item also adds its own golden or integration test so the new surface is cov
 
 Epic **NAZ-289** — `tarn-lsp` Language Server for Claude Code and non-VS-Code editors. Delivered as five tickets (L1.1 through L1.5) that each flip on exactly one LSP capability. Canonical spec lives in [`docs/TARN_LSP.md`](./TARN_LSP.md).
 
+**Phase L1 COMPLETE** — every ticket below is shipped. The MVP is live in the current workspace build. Phase L2 (navigation / refactor) and Phase L3 (formatting / code actions) are tracked as future work under the same epic or its successor — see the roadmap footer in [`docs/TARN_LSP.md`](./TARN_LSP.md) for the full list.
+
 | ID | Task | Impact | Effort | Depends | Files |
 |---|---|---:|---:|---|---|
 | L1.1 | Bootstrap `tarn-lsp` workspace crate with stdio lifecycle, full text document sync, and `DocumentStore` **[shipped — NAZ-290]** | 8 | M | - | `tarn-lsp/`, `Cargo.toml`, `docs/TARN_LSP.md` |
 | L1.2 | Wire `tarn::parser` diagnostics through `textDocument/publishDiagnostics` on open/change/save **[shipped — NAZ-291]** | 9 | M | L1.1 | `tarn-lsp/src/server.rs`, `tarn-lsp/src/diagnostics.rs`, `tarn-lsp/src/debounce.rs`, `tarn/src/validation.rs` |
 | L1.3 | Hover provider for env / capture / builtin / schema-key tokens **[shipped — NAZ-292]** | 7 | M | L1.2 | `tarn-lsp/src/hover.rs`, `tarn-lsp/src/server.rs`, `tarn-lsp/src/capabilities.rs`, `tarn/src/env.rs` |
 | L1.4 | Completion provider for interpolation tokens (env, capture, builtin) and top-level schema keys **[shipped — NAZ-293]** | 8 | M | L1.2 | `tarn-lsp/src/completion.rs`, `tarn-lsp/src/token.rs`, `tarn-lsp/src/schema.rs`, `tarn-lsp/src/capabilities.rs`, `tarn-lsp/src/server.rs` |
-| L1.5 | Document symbol provider for test/step tree plus finalised Claude Code docs and release pipeline entry | 7 | S | L1.1-L1.4 | `tarn-lsp/src/server.rs`, `docs/TARN_LSP.md`, release workflow |
+| L1.5 | Document symbol provider for test/step tree plus finalised MVP docs (Claude Code config, smoke test, roadmap) **[shipped — NAZ-294]** | 7 | S | L1.1-L1.4 | `tarn/src/outline.rs`, `tarn-lsp/src/symbols.rs`, `tarn-lsp/src/server.rs`, `tarn-lsp/src/capabilities.rs`, `docs/TARN_LSP.md`, `README.md` |
 
 ### L1.1 scope (shipped)
 

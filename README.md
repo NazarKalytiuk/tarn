@@ -142,6 +142,10 @@ For AI-assisted workflows, see also:
 - [Claude Code Skill](#claude-code-skill) &mdash; structured knowledge for AI agents
 - [`docs/MCP_WORKFLOW.md`](./docs/MCP_WORKFLOW.md) &mdash; MCP server usage patterns
 
+For editor integrations:
+- [`docs/TARN_LSP.md`](./docs/TARN_LSP.md) &mdash; `tarn-lsp` Language Server for Claude Code, Neovim, Helix, Zed, and other LSP 3.17 clients. Delivers diagnostics, hover, completion, and document symbols for `.tarn.yaml` files.
+- [`docs/VSCODE_EXTENSION.md`](./docs/VSCODE_EXTENSION.md) &mdash; the VS Code extension in [`editors/vscode`](./editors/vscode).
+
 A lightweight static docs site now lives in [`docs/site/index.html`](./docs/site/index.html) and is deployable via GitHub Pages from `.github/workflows/docs-site.yml`.
 
 ## Test File Format

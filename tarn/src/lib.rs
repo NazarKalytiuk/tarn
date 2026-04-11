@@ -10,6 +10,7 @@ pub mod http;
 pub mod hurl_import;
 pub mod interpolation;
 pub mod model;
+pub mod outline;
 pub mod parser;
 pub(crate) mod parser_locations;
 pub mod regex_cache;
