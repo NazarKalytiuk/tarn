@@ -18,4 +18,5 @@ pub mod runner;
 pub mod scripting;
 pub mod selector;
 pub mod update;
+pub mod validation;
 pub mod watch;

@@ -9,6 +9,8 @@
 //! the `tarn-lsp` binary, not this library.
 
 pub mod capabilities;
+pub mod debounce;
+pub mod diagnostics;
 pub mod server;
 
 pub use capabilities::server_capabilities;

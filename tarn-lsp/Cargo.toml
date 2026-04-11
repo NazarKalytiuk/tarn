@@ -1,6 +1,6 @@
 [package]
 name = "tarn-lsp"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 description = "Language Server Protocol implementation for Tarn .tarn.yaml test files"
 license = "MIT"
@@ -23,5 +23,9 @@ path = "src/main.rs"
 tarn = { version = "0.5.0", path = "../tarn" }
 lsp-server = "0.7"
 lsp-types = "0.95"
+# lsp-server uses crossbeam-channel under the hood. We depend on it
+# explicitly so the main loop can call `recv_timeout` and distinguish
+# Timeout from Disconnected without reaching into lsp-server internals.
+crossbeam-channel = "0.5"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

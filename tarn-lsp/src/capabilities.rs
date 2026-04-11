@@ -8,10 +8,10 @@
 //! Keep this block in sync with `docs/TARN_LSP.md` as each feature ticket
 //! lands. Each later ticket turns on one additional field below:
 //!
-//! - L1.1 (NAZ-290, this ticket): `text_document_sync: Full`. Nothing else.
-//! - L1.2 (NAZ-291): diagnostics. No new capability field — diagnostics are
-//!   pushed via `textDocument/publishDiagnostics`, so the only change will be
-//!   handling `didOpen`/`didChange`/`didSave` with a real parse+validate path.
+//! - L1.1 (NAZ-290): `text_document_sync: Full`. Shipped.
+//! - L1.2 (NAZ-291): diagnostics on open/change/save. Shipped. No new
+//!   capability field — `textDocument/publishDiagnostics` is a
+//!   server-pushed notification and does not require a capability flag.
 //! - L1.3 (NAZ-292): set `hover_provider: Some(HoverProviderCapability::Simple(true))`.
 //! - L1.4 (NAZ-293): set `completion_provider: Some(CompletionOptions { .. })`
 //!   with trigger characters for `{`, `.`, `"`.
@@ -26,7 +26,7 @@ use lsp_types::{ServerCapabilities, TextDocumentSyncCapability, TextDocumentSync
 /// Return the `ServerCapabilities` this server currently advertises.
 ///
 /// The contents of this function are the entire public surface area of the
-/// server at phase L1.1. Tests should assert against the output of this
+/// server as of phase L1.2. Tests should assert against the output of this
 /// function directly rather than spinning up a full stdio round-trip.
 pub fn server_capabilities() -> ServerCapabilities {
     ServerCapabilities {

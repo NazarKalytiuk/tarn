@@ -25,7 +25,7 @@ The language ID and file pattern intentionally match what the VS Code extension 
 Phase L1 is delivered as five tickets under Epic NAZ-289. Each ticket flips on exactly one capability in `tarn-lsp/src/capabilities.rs`.
 
 - [x] **L1.1 — bootstrap (NAZ-290)**: workspace crate, stdio lifecycle (`initialize` / `initialized` / `shutdown` / `exit`), in-memory `DocumentStore`, full text document sync, integration tests over `Connection::memory()`. This ticket ships the skeleton only — no language intelligence yet.
-- [ ] **L1.2 — diagnostics (NAZ-291)**: parse every open document through `tarn::parser` on `didOpen`/`didChange`/`didSave` and publish YAML + schema diagnostics via `textDocument/publishDiagnostics`.
+- [x] **L1.2 — diagnostics (NAZ-291)**: parse every open document through `tarn::parser` on `didOpen`/`didChange`/`didSave` and publish YAML + schema diagnostics via `textDocument/publishDiagnostics`. Debounced at 300ms on `didChange`; flushes immediately on open and save; clears on close.
 - [ ] **L1.3 — hover (NAZ-292)**: `textDocument/hover` resolves `{{ env.x }}` and `{{ capture.x }}` references, assertion keywords, and step fields to their documentation.
 - [ ] **L1.4 — completion (NAZ-293)**: `textDocument/completion` offers snippet expansions, assertion keywords, env/capture identifiers, and HTTP method names with trigger characters `{`, `.`, `"`.
 - [ ] **L1.5 — symbols + docs (NAZ-294)**: `textDocument/documentSymbol` returns the test/step tree; README and Claude Code docs are finalised and `tarn-lsp` is added to the release pipeline.
@@ -47,6 +47,28 @@ See NAZ-294 for the finalized Claude Code snippet — pending Phase L1 completio
 ```
 
 The configuration block above is intentionally a placeholder. Per the rule in `CLAUDE.md` ("never reference URLs, domains, or external resources without verifying they exist"), the real snippet will only be added once `tarn-lsp` ships in the release pipeline and the full feature surface is live. Until then, do not fabricate a configuration and do not copy-paste the contents of this placeholder block into Claude Code.
+
+## Diagnostics
+
+`tarn-lsp` publishes diagnostics via `textDocument/publishDiagnostics` on three triggers:
+
+- **`didOpen`** — immediately, so opening a `.tarn.yaml` surfaces problems before the first keystroke.
+- **`didSave`** — immediately, matching the "save to recheck" muscle memory most clients already teach.
+- **`didChange`** — debounced at 300ms. A burst of keystrokes collapses into a single publish once the buffer has been quiet for 300ms. The main loop uses `recv_timeout` against `lsp-server`'s crossbeam channel — no threads, no runtime.
+
+On `didClose` the server publishes a `publishDiagnostics` with an empty `diagnostics` array for the closed URI so stale problems disappear from the client.
+
+Each diagnostic is produced by [`tarn::validation::validate_document`](../tarn/src/validation.rs) — the same parser + schema + semantic validation path `tarn validate` uses from `tarn/src/main.rs`. Nothing is shelled out; Tarn's library surface is called in-process. Every diagnostic carries:
+
+| Field        | Value                                                                                     |
+| ------------ | ----------------------------------------------------------------------------------------- |
+| `range`      | Derived from NAZ-260 `Location` metadata (1-based line/column → 0-based LSP `Position`). When the underlying error has no location, falls back to a zero-width range at `(0, 0)`. |
+| `severity`   | `Error` for YAML-syntax, shape, parse, and cross-field semantic failures. `Warning` is reserved for future soft checks (no checks emit it today). |
+| `source`     | Always `"tarn"`.                                                                           |
+| `code`       | One of `yaml_syntax`, `tarn_parse`, `tarn_validation`.                                     |
+| `message`    | Human-readable text stripped of the `thiserror` prefix and the redundant file path prefix. |
+
+See `tarn-lsp/src/diagnostics.rs` for the conversion and `tarn-lsp/src/debounce.rs` for the pure debounce helper. End-to-end coverage lives in `tarn-lsp/tests/diagnostics_test.rs`.
 
 ## Design choices
 
