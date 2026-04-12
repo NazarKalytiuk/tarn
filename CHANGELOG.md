@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.2 — Fix crates.io publish blocker, configure release channels (NAZ-314)
+
+- **Fix `cargo publish -p tarn-lsp`**: the compile-time `include_str!`
+  for `testfile.json` reached outside the crate directory, which
+  `cargo publish` rejects. Bundled a copy of the schema inside
+  `tarn-lsp/schemas/v1/` with a sync-verification test to catch drift.
+- **Simplified Dockerfile**: removed the separate `COPY schemas`
+  directive now that the schema is embedded in the `tarn-lsp` crate.
+- **Release secrets configured**: `CRATES_IO_TOKEN`, `VSCE_PAT`,
+  `OVSX_PAT`, `HOMEBREW_TAP_TOKEN`/`HOMEBREW_TAP_REPO`, and
+  `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` are now set under GitHub
+  Actions repository secrets. First fully automated multi-channel
+  release.
+
 ## 0.6.1 — Dockerfile hotfix: ship tarn-lsp in the image (NAZ-313)
 
 Patch release. The v0.6.0 `Publish Docker image` release job failed
