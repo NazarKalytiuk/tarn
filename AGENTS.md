@@ -141,14 +141,16 @@ Add to your project's `.claude/settings.json`:
 - **`tarn_run`** — Run tests, returns structured JSON results
 - **`tarn_validate`** — Validate YAML syntax without executing
 - **`tarn_list`** — List all available tests and their steps
+- **`tarn_fix_plan`** — Takes a failed `tarn_run` report and returns a structured remediation plan (prioritized next actions per failed step). Backed by the shared `tarn::fix_plan` library that also powers `tarn-lsp`'s quick-fix code action.
 
 ### Recommended Agent Loop
 
 1. Call `tarn_validate` after generating or editing YAML.
 2. Call `tarn_run` and inspect `failure_category` first.
-3. If `response` exists, fix assertions/captures against the real payload.
-4. If `request.url` still contains `{{ ... }}`, fix env/capture interpolation before retrying.
-5. Rerun until summary status is `PASSED`.
+3. Optionally call `tarn_fix_plan` with the failed report for structured remediation (prioritized next actions per failed step — useful when multiple steps failed and you need to order the fixes).
+4. If `response` exists, fix assertions/captures against the real payload.
+5. If `request.url` still contains `{{ ... }}`, fix env/capture interpolation before retrying.
+6. Rerun until summary status is `PASSED`.
 
 ### Common Failure Categories
 
@@ -162,6 +164,40 @@ Add to your project's `.claude/settings.json`:
 
 - Plain text / HTML responses are preserved as JSON strings in structured output.
 - To assert a whole string response body, use `body: { "$": "expected text" }`.
+
+## Editor Integration (tarn-lsp)
+
+`tarn-lsp` is a standalone LSP 3.17 stdio binary shipped alongside `tarn` and `tarn-mcp` in the same releases (every Tarn release since 0.6.0). It is designed for agents running inside an editor client — Claude Code, VS Code, Neovim, Helix, Zed — so language features come from the same Tarn core the CLI uses, with no feature drift.
+
+### Agent-Relevant Capabilities
+
+- Diagnostics via `textDocument/publishDiagnostics` on open / save / debounced change — YAML and schema errors with precise ranges.
+- Hover with inline JSONPath evaluation against the step's last recorded response.
+- Schema-aware completion: env keys, captures in scope, builtins, nested schema keys.
+- Go-to-definition / references / rename for env keys (workspace-wide) and captures (per-test).
+- Code lens above every test and step emitting stable `tarn.runTest` / `tarn.runStep` commands. The server emits the commands; the client is responsible for dispatching `tarn run --select FILE::TEST::STEP_INDEX`.
+- Whole-document formatting, shared with the `tarn fmt` CLI via `tarn::format::format_document`.
+- Code actions: **extract env var**, **capture this field**, **scaffold assert from recorded response**.
+- **Quick fix** (`CodeActionKind::QUICKFIX`) backed by the same `tarn::fix_plan` engine the MCP `tarn_fix_plan` tool uses.
+- `workspace/executeCommand` handler for `tarn.evaluateJsonpath` — agents can evaluate a JSONPath against either an inline response payload or a step reference without re-parsing the `.tarn.yaml`.
+
+### Recorded-Response Sidecar Convention
+
+`tarn-lsp` reads last responses from `<file>.tarn.yaml.last-run/<test-slug>/<step-slug>.response.json`. Writes are the client's responsibility — if an agent wants hover-JSONPath and scaffold-assert to light up, drop recorded responses at that path.
+
+### Claude Code Install
+
+```
+/plugin marketplace add /absolute/path/to/hive-api-test/editors/claude-code
+/plugin install tarn-lsp@tarn-lsp --scope project
+/reload-plugins
+```
+
+Compound-extension caveat: the plugin claims all `.yaml` / `.yml` files, so install `--scope project` in Tarn-focused repos only. See `editors/claude-code/tarn-lsp-plugin/README.md` for the full spec.
+
+### Other Clients
+
+For Neovim / Helix / Zed / any LSP 3.17 client, see `docs/TARN_LSP.md` for client-specific setup.
 
 ## Cookies
 

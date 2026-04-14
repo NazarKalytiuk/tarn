@@ -4,6 +4,25 @@ Tarn ships with `tarn-mcp`, an MCP (Model Context Protocol) server that lets AI 
 
 ## Setup
 
+### Project-level `.mcp.json` (preferred)
+
+The portable way to wire `tarn-mcp` into any MCP-compatible tool is a single `.mcp.json` at the repo root:
+
+```json
+{
+  "mcpServers": {
+    "tarn": {
+      "command": "tarn-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+Claude Code, Cursor, Windsurf, and any other MCP-compatible client pick this file up out of the box — no editor-specific settings file needed. Commit it to the repo and every contributor gets Tarn tooling on clone.
+
+If you prefer an editor-specific file, the per-editor alternatives below still work.
+
 ### Claude Code
 
 Add to `.claude/settings.json` in the project root:
@@ -92,6 +111,8 @@ Generate a fix plan for failed test results.
 
 **Returns:** Structured remediation plan with suggested fixes per failed step.
 
+The same `tarn::fix_plan` library that backs this MCP tool also powers the `tarn-lsp` quick-fix code action (`CodeActionKind::QUICKFIX`). Agents working inside Claude Code with the tarn-lsp plugin installed will see the same remediation surfaced as a one-click code action on the diagnostic — the MCP tool is the report-driven path, the LSP quick-fix is the diagnostic-driven path, and the engine is the same. See `docs/MCP_WORKFLOW.md` for the cross-reference.
+
 ## Recommended Agent Loop
 
 ```
@@ -131,3 +152,51 @@ When processing `tarn_run` results, prioritize these fields:
 4. `files[].tests[].steps[].request.url` — check for unresolved templates
 5. `files[].tests[].steps[].response.body` — actual server response
 6. `files[].tests[].steps[].remediation_hints` — suggested fixes
+
+## JSONPath Evaluation via tarn-lsp
+
+`tarn-lsp` exposes a `workspace/executeCommand` handler for command `tarn.evaluateJsonpath`. It evaluates a JSONPath expression against either an inline response payload or a recorded step response resolved via the sidecar convention. An agent can use it to verify an `assert.body.*` expression against a real response before committing it to the YAML, without re-parsing the `.tarn.yaml` or round-tripping through `tarn run`.
+
+Two call shapes are supported.
+
+Inline response:
+
+```json
+{
+  "path": "$.data[0].id",
+  "response": { "data": [{ "id": "u_123", "name": "Jane" }] }
+}
+```
+
+Recorded step reference:
+
+```json
+{
+  "path": "$.data[0].id",
+  "step": {
+    "file": "tests/users.tarn.yaml",
+    "test": "create-user",
+    "step": 2
+  }
+}
+```
+
+Both shapes return:
+
+```json
+{ "matches": ["u_123"] }
+```
+
+See `docs/TARN_LSP.md` for the full handler spec.
+
+## Recorded Response Sidecar
+
+Several `tarn-lsp` features (hover JSONPath evaluation, `scaffold assert from response`, step-reference `tarn.evaluateJsonpath` calls) read the last recorded response for a given step from a sidecar directory next to the test file:
+
+```
+tests/users.tarn.yaml.last-run/<test-slug>/<step-slug>.response.json
+```
+
+- Each step's last response is stored independently, keyed by slugified test name and step name.
+- The server only reads this directory. Writing it is the client's responsibility — typically the editor integration that runs `tarn run` captures the response per step and drops it here.
+- Agents that want hover-driven JSONPath results and the scaffold-assert code action to light up should make sure the client is populating the sidecar after each run.

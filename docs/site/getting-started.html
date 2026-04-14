@@ -74,10 +74,14 @@
               </div>
               <pre><span class="prompt">$</span> tarn fmt tests/ <span class="flag">--check</span>
 <span class="prompt">$</span> tarn validate
+<span class="prompt">$</span> tarn validate <span class="flag">--format</span> <span class="value">json</span>
 <span class="prompt">$</span> tarn run <span class="flag">--format</span> <span class="value">human</span>
 <span class="prompt">$</span> tarn run <span class="flag">--format</span> <span class="value">json</span> <span class="flag">--json-mode</span> <span class="value">compact</span>
+<span class="prompt">$</span> tarn run <span class="flag">--ndjson</span> <span class="flag">--select</span> <span class="value">tests/smoke.tarn.yaml</span>
+<span class="prompt">$</span> tarn run <span class="flag">--only-failed</span>
 <span class="prompt">$</span> tarn run <span class="flag">--watch</span></pre>
             </div>
+            <p>Use <code class="ic">tarn validate --format json</code> to get machine-readable parse diagnostics, <code class="ic">tarn run --ndjson</code> to stream one event per line (<code class="ic">file_started</code>, <code class="ic">step_finished</code>, <code class="ic">test_finished</code>, <code class="ic">file_finished</code>, <code class="ic">done</code>), and <code class="ic">tarn run --select FILE[::TEST[::STEP]]</code> (repeatable, ANDs with <code class="ic">--tag</code>) to scope a single run. <code class="ic">tarn run --only-failed</code> replays the last run's failures. <code class="ic">tarn env --json</code> dumps the resolved environment for inspection.</p>
 
             <h2>Run the local demo path</h2>
             <div class="code-block">
@@ -98,6 +102,17 @@
               <li>Use <code class="ic">tarn validate</code> before the first live run if you generated the file with an LLM.</li>
               <li>Switch to <code class="ic">--format json --json-mode compact</code> when the output is for automation, not humans.</li>
             </ul>
+
+            <h2>Editor intelligence</h2>
+            <div class="code-block">
+              <div class="code-block__header">
+                <span class="code-block__dot code-block__dot--red"></span>
+                <span class="code-block__dot code-block__dot--yellow"></span>
+                <span class="code-block__dot code-block__dot--green"></span>
+              </div>
+              <pre><span class="prompt">$</span> cargo install tarn-lsp</pre>
+            </div>
+            <p><code class="ic">tarn-lsp</code> is a standalone LSP 3.17 language server for <code class="ic">.tarn.yaml</code> files. It provides schema-aware diagnostics, hover with inline JSONPath evaluation, nested completion, document symbols, go-to-definition, references, rename, code lens (Run test / Run step), whole-document formatting, and quick-fix code actions backed by the same engine as <code class="ic">tarn_fix_plan</code>. Install it once and wire it into VS Code, Claude Code, Neovim, Helix, Zed, or Emacs. See the full spec at <a href="https://github.com/NazarKalytiuk/hive/blob/main/docs/TARN_LSP.md" target="_blank" rel="noopener">docs/TARN_LSP.md</a>.</p>
           </article>
 
           <aside class="page__sidebar">
@@ -114,6 +129,10 @@
               <a class="sidebar-link" href="./examples.html">
                 <strong>Example Corpus</strong>
                 <span>Runnable suites and templates</span>
+              </a>
+              <a class="sidebar-link" href="https://github.com/NazarKalytiuk/hive/blob/main/docs/TARN_LSP.md" target="_blank" rel="noopener">
+                <strong>tarn-lsp Spec</strong>
+                <span>Editor language server</span>
               </a>
             </div>
           </aside>

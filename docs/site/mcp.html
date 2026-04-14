@@ -41,7 +41,8 @@
 
         <div class="page__layout">
           <article class="page__content">
-            <h2>Claude Code setup</h2>
+            <h2>Portable project setup</h2>
+            <p>Drop a <code class="ic">.mcp.json</code> at the repository root. This is the preferred setup because it is portable across every MCP-compatible client &mdash; Claude Code, Cursor, Windsurf, and anything else that reads the standard project-level file &mdash; without an editor-specific settings file.</p>
             <div class="code-block">
               <div class="code-block__header">
                 <span class="code-block__dot code-block__dot--red"></span>
@@ -57,14 +58,18 @@
   }
 }</pre>
             </div>
+            <p>Commit this file and every contributor on the project picks up the same tool surface automatically.</p>
 
             <h2>Available tools</h2>
             <ul>
               <li><code class="ic">tarn_list</code>: enumerate files and steps.</li>
               <li><code class="ic">tarn_validate</code>: catch syntax and config issues before execution.</li>
               <li><code class="ic">tarn_run</code>: execute tests and return structured report JSON.</li>
-              <li><code class="ic">tarn_fix_plan</code>: prioritize failed steps and suggest next actions from the report.</li>
+              <li><code class="ic">tarn_fix_plan</code>: prioritize failed steps and suggest next actions from the report. Shares its engine with the quick-fix code action in <a href="./ai-workflows.html">tarn-lsp</a>, so CLI agents and editor agents get the same remediation graph.</li>
             </ul>
+
+            <h2>Editor-specific fallbacks</h2>
+            <p>Prefer the portable <code class="ic">.mcp.json</code> above. If a client does not yet pick up project-level MCP files, each one ships its own JSON settings format &mdash; use the same <code class="ic">mcpServers</code> block inside the client's settings file (Claude Code's user-level <code class="ic">mcp.json</code>, Cursor's <code class="ic">~/.cursor/mcp.json</code>, Windsurf's MCP config) as a fallback.</p>
 
             <h2>Recommended loop</h2>
             <ol>
@@ -93,6 +98,14 @@
               <a class="sidebar-link" href="https://github.com/NazarKalytiuk/hive/tree/main/tarn-mcp/src" target="_blank" rel="noopener">
                 <strong>tarn-mcp Source</strong>
                 <span>Implementation surface</span>
+              </a>
+              <a class="sidebar-link" href="https://github.com/NazarKalytiuk/hive/blob/main/docs/TARN_LSP.md" target="_blank" rel="noopener">
+                <strong>tarn-lsp Spec</strong>
+                <span>Shared fix_plan engine</span>
+              </a>
+              <a class="sidebar-link" href="./ai-workflows.html">
+                <strong>Editor Integrations</strong>
+                <span>LSP, VS Code, Claude Code plugin</span>
               </a>
             </div>
           </aside>

@@ -40,18 +40,28 @@ This index lists the canonical repository markdown after the roadmap cleanup.
   - Claude Code plugin metadata (name, version, description, repository)
 - `.claude-plugin/marketplace.json`
   - marketplace listing with owner info and plugin registry
-- `skills/tarn-api-testing/SKILL.md`
+- `plugin/skills/tarn-api-testing/SKILL.md`
   - Claude Code skill: teaches AI agents Tarn's workflow, commands, file format, and diagnosis loop
-- `skills/tarn-api-testing/references/yaml-format.md`
+- `plugin/skills/tarn-api-testing/references/yaml-format.md`
   - complete `.tarn.yaml` schema reference
-- `skills/tarn-api-testing/references/assertion-reference.md`
+- `plugin/skills/tarn-api-testing/references/assertion-reference.md`
   - every assertion operator with examples
-- `skills/tarn-api-testing/references/json-output.md`
+- `plugin/skills/tarn-api-testing/references/json-output.md`
   - structured JSON report schema and diagnosis algorithm
-- `skills/tarn-api-testing/references/mcp-integration.md`
+- `plugin/skills/tarn-api-testing/references/mcp-integration.md`
   - MCP server setup and tool reference for Claude Code, Cursor, and Windsurf
 - `.mcp.json`
   - project-level MCP server configuration (portable across MCP-compatible tools)
+- `docs/TARN_LSP.md`
+  - canonical spec for `tarn-lsp`, the LSP 3.17 language server
+  - Phase L1 (diagnostics, hover, completion, document symbols)
+  - Phase L2 (go-to-definition, references, rename, code lens)
+  - Phase L3 (formatting, code actions, quick-fix, nested completion, JSONPath evaluator)
+  - editor install paths for Claude Code, Neovim, Helix, Zed, and others
+- `editors/claude-code/tarn-lsp-plugin/README.md`
+  - Claude Code plugin that wires `tarn-lsp` into Claude Code via its plugin/LSP system
+  - separate from the top-level `.claude-plugin/` Tarn plugin (MCP + skill)
+  - installs via `/plugin marketplace add editors/claude-code` + `/plugin install tarn-lsp@tarn-lsp --scope project`
 
 ### Workflow and Operations
 
@@ -61,8 +71,14 @@ This index lists the canonical repository markdown after the roadmap cleanup.
 - `docs/RELEASE_VERIFICATION.md`
 - `editors/vscode/README.md`
 - `docs/VSCODE_EXTENSION.md`
-  - canonical spec for the Tarn VS Code extension
-  - architecture, features, Tarn-side contract (§6.1–§6.7), phased roadmap
+  - Tarn VS Code extension architecture and Phase V migration plan
+- `editors/vscode/docs/LSP_MIGRATION.md`
+  - Phase V migration plan (direct-provider → `vscode-languageclient` → `tarn-lsp`)
+  - dual-host migration, per-feature minor bumps, V2 ordering
+  - rationale for `tarn.experimentalLspClient` being off by default in 0.6.x
+- `editors/vscode/docs/API.md`
+  - `TarnExtensionApi` public surface consumable via `vscode.extensions.getExtension('nazarkalytiuk.tarn-vscode').exports`
+  - stability tiers and semver policy
 - `README.md`
   - primary user-facing product and CLI guide
 - `docs/site/index.html`

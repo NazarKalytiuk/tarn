@@ -143,7 +143,7 @@ For AI-assisted workflows, see also:
 - [`docs/MCP_WORKFLOW.md`](./docs/MCP_WORKFLOW.md) &mdash; MCP server usage patterns
 
 For editor integrations:
-- [`docs/TARN_LSP.md`](./docs/TARN_LSP.md) &mdash; `tarn-lsp` Language Server for Claude Code, Neovim, Helix, Zed, and other LSP 3.17 clients. Delivers diagnostics, hover, completion, and document symbols for `.tarn.yaml` files.
+- [`docs/TARN_LSP.md`](./docs/TARN_LSP.md) &mdash; `tarn-lsp` Language Server (LSP 3.17) for Claude Code, Neovim, Helix, Zed, and other compatible clients. Ships diagnostics, hover, nested schema-aware completion, document symbols, go-to-definition, references, rename, code lens (run test / run step), formatting, code actions (extract env var, capture this field, scaffold assert from last response), quick fix via `tarn::fix_plan`, and a JSONPath evaluator (`tarn.evaluateJsonpath` executeCommand).
 - [`docs/VSCODE_EXTENSION.md`](./docs/VSCODE_EXTENSION.md) &mdash; the VS Code extension in [`editors/vscode`](./editors/vscode).
 
 A lightweight static docs site now lives in [`docs/site/index.html`](./docs/site/index.html) and is deployable via GitHub Pages from `.github/workflows/docs-site.yml`.
@@ -1178,11 +1178,14 @@ See [docs/MCP_WORKFLOW.md](./docs/MCP_WORKFLOW.md), [docs/AI_WORKFLOW_DEMO.md](.
 
 ## Claude Code Plugin
 
-Tarn is available as a Claude Code plugin. The plugin bundles the MCP server and the Tarn skill, so installing it gives your agent structured API testing capabilities out of the box.
+Tarn ships **two** separate Claude Code plugins. They solve different problems and can be installed independently or together:
 
-### Install the plugin
+1. **`tarn`** (top-level `.claude-plugin/`) &mdash; bundles the `tarn-mcp` MCP server and the `tarn-api-testing` skill. Gives your agent structured API testing capabilities: `tarn_run`, `tarn_validate`, `tarn_list`, `tarn_fix_plan`.
+2. **`tarn-lsp`** ([`editors/claude-code/tarn-lsp-plugin/`](./editors/claude-code/tarn-lsp-plugin/)) &mdash; registers the `tarn-lsp` language server with Claude Code's LSP plugin system so you get full `.tarn.yaml` language intelligence (diagnostics, hover, completion, code lens, code actions, quick fix, rename, go-to-definition, and the JSONPath evaluator) while editing in Claude Code.
 
-Tarn is published as a Claude Code **marketplace** (a registry that can contain multiple plugins). Installation is two steps:
+### `tarn` &mdash; MCP + skill plugin
+
+Published as a Claude Code **marketplace** (a registry that can contain multiple plugins). Installation is two steps:
 
 ```bash
 # 1. Register the marketplace
@@ -1192,9 +1195,9 @@ claude plugin marketplace add NazarKalytiuk/hive
 claude plugin install tarn@tarn
 ```
 
-After installing, Claude Code can write, run, and debug `.tarn.yaml` tests directly via the bundled MCP server and skill.
+After installing, Claude Code can write, run, and debug `.tarn.yaml` tests directly via the bundled MCP server and skill. See [MCP Server](#mcp-server) and [Claude Code Skill](#claude-code-skill) for what each component provides.
 
-### Manual setup
+#### Manual setup
 
 If you prefer manual configuration, add the MCP server to a project-level `.mcp.json` in the repo root:
 
@@ -1211,12 +1214,35 @@ If you prefer manual configuration, add the MCP server to a project-level `.mcp.
 
 This is equivalent to configuring the MCP server in `.claude/settings.json` but is portable across editors and tools that support MCP.
 
-### Plugin metadata
+#### Plugin metadata
 
-The plugin configuration lives in `.claude-plugin/`:
+The `tarn` plugin configuration lives in `.claude-plugin/`:
 
 - **`plugin.json`** &mdash; name, version, description, author, and repository URL
 - **`marketplace.json`** &mdash; marketplace listing with owner info and plugin registry
+
+### `tarn-lsp` &mdash; language server plugin
+
+Separate from the MCP plugin above. This one registers `tarn-lsp` for `.tarn.yaml` / `.yaml` / `.yml` via Claude Code's LSP plugin system so every feature documented in [`docs/TARN_LSP.md`](./docs/TARN_LSP.md) is available while you edit in Claude Code.
+
+**Prerequisites:**
+
+- Claude Code **2.0.74+**
+- `tarn-lsp` binary available on `$PATH` &mdash; install with `cargo install --path tarn-lsp` from this repo, or symlink a workspace build (`ln -s $(pwd)/target/release/tarn-lsp /usr/local/bin/tarn-lsp`)
+
+**Install:**
+
+This plugin is published through a *different* marketplace than the `tarn` plugin &mdash; the marketplace root is the `editors/claude-code/` directory in this repo. Use Claude Code's slash commands:
+
+```
+/plugin marketplace add /absolute/path/to/repo/editors/claude-code
+/plugin install tarn-lsp@tarn-lsp --scope project
+/reload-plugins
+```
+
+**Compound-extension caveat:** Claude Code's LSP plugin system only supports simple file extensions, so the `tarn-lsp` plugin claims **all** `.yaml` and `.yml` files in any project it is installed in (not just `.tarn.yaml`). Always install with `--scope project` in Tarn-focused repos only &mdash; do not install it globally if you also edit unrelated YAML in Claude Code.
+
+See [`editors/claude-code/tarn-lsp-plugin/README.md`](./editors/claude-code/tarn-lsp-plugin/README.md) for the full spec, troubleshooting, and the list of supported LSP features.
 
 ## Claude Code Skill
 
@@ -1374,13 +1400,51 @@ The structured report schema is bundled at `schemas/v1/report.json`.
 
 ## VS Code Extension
 
-An editor extension now lives in [`editors/vscode`](./editors/vscode). It provides:
+A full-featured Tarn extension lives in [`editors/vscode`](./editors/vscode) and is published from tagged releases to both the **VS Marketplace** (`nazarkalytiuk.tarn-vscode`) and **Open VSX** via [`.github/workflows/vscode-extension-release.yml`](./.github/workflows/vscode-extension-release.yml). Current version: **0.6.1**.
 
-- Tarn file association for `*.tarn.yaml` and `*.tarn.yml`
-- schema defaults for Tarn test files and `tarn-report.json`
-- snippets for test skeletons, polling, multipart, GraphQL, form requests, and includes
+### Running tests from the editor
 
-Local install is documented in [`editors/vscode/README.md`](./editors/vscode/README.md).
+- **Test Explorer discovery** &mdash; `.tarn.yaml` files are indexed into a file &rarr; test &rarr; step tree. Run and Dry Run profiles, cancellable runs, and live streaming via `tarn run --ndjson` keep the UI in sync with long runs.
+- **CodeLens** above every test and step for Run, Dry Run, and Run step &mdash; no Test Explorer navigation required.
+- **Rich failure peek view** &mdash; on failure you get a unified diff of expected vs actual, plus the full request, response, remediation hints, `failure_category`, and `error_code` pulled straight from Tarn's JSON report.
+- **Tag filter** command and an **"Install / Update Tarn"** helper command, both surfaced in the command palette.
+- **Output channel** streams `tarn` stdout/stderr for each run.
+
+### Environment management
+
+- **Environment picker** with a status-bar entry, persisted per workspace.
+- `tarn.defaultEnvironment` setting for the initial pick.
+- Status bar entries summarize active environment, tag filter, and last-run status.
+
+### Language features
+
+- Tarn file association for `*.tarn.yaml` and `*.tarn.yml`.
+- Full JSON schema validation for both test files and `tarn-report.json` via the [`redhat.vscode-yaml`](https://marketplace.visualstudio.com/items?itemName=redhat.vscode-yaml) extension dependency.
+- Snippet library for test skeletons, polling, multipart, GraphQL, form requests, and includes. Prefix and coverage details live in [`editors/vscode/README.md`](./editors/vscode/README.md).
+- **Experimental LSP client** (off by default) &mdash; the window-scoped `tarn.experimentalLspClient` setting spawns the `tarn-lsp` server alongside the extension's in-process providers. This is Phase V scaffolding; no feature has migrated to the LSP path yet, so leave it disabled unless you are testing the handoff.
+
+### Workspace trust and remote development
+
+- **Trusted / Untrusted workspace** aware. In untrusted workspaces, Tarn features run in a read-only mode &mdash; discovery and schema validation still work, but commands that would execute `tarn` are disabled.
+- **Remote Development** audited end-to-end: Dev Container, GitHub Codespaces, WSL, and Remote SSH all work without additional configuration. See [`docs/VSCODE_REMOTE.md`](./docs/VSCODE_REMOTE.md).
+
+### Public API
+
+The extension exports a `TarnExtensionApi` for other extensions to consume:
+
+```ts
+const tarn = vscode.extensions
+  .getExtension('nazarkalytiuk.tarn-vscode')
+  ?.exports as TarnExtensionApi | undefined;
+```
+
+See [`editors/vscode/docs/API.md`](./editors/vscode/docs/API.md) for the surface and stability guarantees.
+
+### Reference
+
+- Canonical user docs: [`editors/vscode/README.md`](./editors/vscode/README.md)
+- Design / internals: [`docs/VSCODE_EXTENSION.md`](./docs/VSCODE_EXTENSION.md)
+- Changelog: [`editors/vscode/CHANGELOG.md`](./editors/vscode/CHANGELOG.md)
 
 ## Shell Completions
 

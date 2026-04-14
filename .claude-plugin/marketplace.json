@@ -11,8 +11,8 @@
     {
       "name": "tarn",
       "source": "./plugin",
-      "description": "CLI-first API testing tool with .tarn.yaml files, structured JSON output, and MCP server. Write, run, debug, and iterate on API tests — optimized for AI-assisted workflows.",
-      "version": "0.4.0"
+      "description": "CLI-first API testing tool for .tarn.yaml files with structured JSON output and a bundled MCP server for AI-assisted write/run/debug workflows. A companion `tarn-lsp` language server (diagnostics, hover, completion, go-to-definition, rename, formatting, and code actions for .tarn.yaml) ships separately at `editors/claude-code/tarn-lsp-plugin/`.",
+      "version": "0.6.2"
     }
   ]
 }

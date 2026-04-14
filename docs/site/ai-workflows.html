@@ -74,6 +74,32 @@
               <li>Use curl export when you need to replay exact failures outside Tarn.</li>
             </ol>
 
+            <h2>Streaming and scoped execution</h2>
+            <p>For live UIs and incremental retry loops, <code class="ic">tarn run --ndjson</code> streams one JSON event per line to stdout: <code class="ic">file_started</code>, <code class="ic">step_finished</code>, <code class="ic">test_finished</code>, <code class="ic">file_finished</code>, <code class="ic">done</code>. Pair it with <code class="ic">--select FILE[::TEST[::STEP]]</code> (repeatable, ANDs with <code class="ic">--tag</code>) to run just the failing step, or <code class="ic">--only-failed</code> to replay the previous run's failures. Use <code class="ic">--no-progress</code> in CI to keep the stream clean.</p>
+
+            <h2>Editor intelligence via tarn-lsp</h2>
+            <p><code class="ic">tarn-lsp</code> is a standalone LSP 3.17 language server, separate from the CLI. Install with <code class="ic">cargo install tarn-lsp</code>. When an agent authors <code class="ic">.tarn.yaml</code> inside an LSP-aware editor, it gets schema-aware diagnostics, hover with inline JSONPath evaluation against a recorded response, nested completion, document symbols, go-to-definition, references, rename, code lens (<code class="ic">tarn.runTest</code> / <code class="ic">tarn.runStep</code>), whole-document formatting, three code actions (extract env var, capture this field, scaffold assert from recorded response), and a quick-fix code action backed by the same <code class="ic">tarn::fix_plan</code> engine as <a href="./mcp.html">tarn_fix_plan</a>. It also exposes <code class="ic">tarn.evaluateJsonpath</code> via <code class="ic">workspace/executeCommand</code>, so an agent can ask the server to evaluate a JSONPath against the sidecar response without re-running the suite. Full spec at <a href="https://github.com/NazarKalytiuk/hive/blob/main/docs/TARN_LSP.md" target="_blank" rel="noopener">docs/TARN_LSP.md</a>.</p>
+
+            <h3>Claude Code plugin</h3>
+            <p>The <a href="https://github.com/NazarKalytiuk/hive/blob/main/editors/claude-code/tarn-lsp-plugin/README.md" target="_blank" rel="noopener">tarn-lsp Claude Code plugin</a> wires the language server into Claude Code's plugin/LSP system.</p>
+            <div class="code-block">
+              <div class="code-block__header">
+                <span class="code-block__dot code-block__dot--red"></span>
+                <span class="code-block__dot code-block__dot--yellow"></span>
+                <span class="code-block__dot code-block__dot--green"></span>
+              </div>
+              <pre><span class="prompt">$</span> /plugin marketplace add /absolute/path/to/editors/claude-code
+<span class="prompt">$</span> /plugin install tarn-lsp@tarn-lsp <span class="flag">--scope</span> <span class="value">project</span>
+<span class="prompt">$</span> /reload-plugins</pre>
+            </div>
+            <p>The plugin claims all <code class="ic">.yaml</code> and <code class="ic">.yml</code> files because <code class="ic">.tarn.yaml</code> is a compound extension. Install with <code class="ic">--scope project</code> in Tarn-focused repositories so it does not take over YAML files elsewhere.</p>
+
+            <h3>Recorded response sidecar</h3>
+            <p>Several LSP features (inline JSONPath hover, the "scaffold assert from recorded response" code action, and <code class="ic">tarn.evaluateJsonpath</code>) read from a sidecar layout next to the test file. When writing a tool that hands a recorded response to <code class="ic">tarn-lsp</code>, drop the JSON at <code class="ic">&lt;file&gt;.tarn.yaml.last-run/&lt;test-slug&gt;/&lt;step-slug&gt;.response.json</code>.</p>
+
+            <h3>VS Code extension</h3>
+            <p>The <a href="https://github.com/NazarKalytiuk/hive/blob/main/editors/vscode/README.md" target="_blank" rel="noopener">Tarn VS Code extension</a> (publisher <code class="ic">nazarkalytiuk</code>, available on the VS Marketplace and Open VSX) gives agents a test-explorer surface: discovery, CodeLens (Run / Dry Run / Run step), live streaming via <code class="ic">--ndjson</code>, unified-diff failure peek, environment picker, status bar, trusted/untrusted workspace handling, and Remote Development across Dev Container, Codespaces, WSL, and Remote SSH. Off-by-default <code class="ic">tarn.experimentalLspClient</code> scaffolding is in place for future direct consumption of <code class="ic">tarn-lsp</code>. Architecture notes at <a href="https://github.com/NazarKalytiuk/hive/blob/main/docs/VSCODE_EXTENSION.md" target="_blank" rel="noopener">docs/VSCODE_EXTENSION.md</a>.</p>
+
             <h2>Redaction</h2>
             <p>Report-time redaction is configurable at DSL level. Tarn can redact sensitive headers, named env vars, and selected captures across JSON, human, JUnit, TAP, HTML, and curl outputs.</p>
 
@@ -91,6 +117,18 @@
               <a class="sidebar-link" href="https://github.com/NazarKalytiuk/hive/blob/main/schemas/v1/report.json" target="_blank" rel="noopener">
                 <strong>Report Schema</strong>
                 <span>Exact JSON contract</span>
+              </a>
+              <a class="sidebar-link" href="https://github.com/NazarKalytiuk/hive/blob/main/docs/TARN_LSP.md" target="_blank" rel="noopener">
+                <strong>tarn-lsp Spec</strong>
+                <span>Language server capabilities</span>
+              </a>
+              <a class="sidebar-link" href="https://github.com/NazarKalytiuk/hive/blob/main/editors/claude-code/tarn-lsp-plugin/README.md" target="_blank" rel="noopener">
+                <strong>Claude Code Plugin</strong>
+                <span>tarn-lsp in Claude Code</span>
+              </a>
+              <a class="sidebar-link" href="https://github.com/NazarKalytiuk/hive/blob/main/editors/vscode/README.md" target="_blank" rel="noopener">
+                <strong>VS Code Extension</strong>
+                <span>Test explorer and live streaming</span>
               </a>
               <a class="sidebar-link" href="./mcp.html">
                 <strong>MCP Guide</strong>

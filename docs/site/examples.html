@@ -79,8 +79,12 @@
                 <span class="code-block__dot code-block__dot--green"></span>
               </div>
               <pre><span class="prompt">$</span> PORT=3000 cargo run -p demo-server &amp;
-<span class="prompt">$</span> cargo run -p tarn -- run examples/demo-server/</pre>
+<span class="prompt">$</span> cargo run -p tarn -- run examples/demo-server/
+<span class="prompt">$</span> tarn fmt examples/demo-server/ <span class="flag">--check</span>
+<span class="prompt">$</span> tarn run examples/demo-server/ <span class="flag">--select</span> <span class="value">examples/demo-server/auth-user-lifecycle.tarn.yaml::login</span>
+<span class="prompt">$</span> tarn run examples/demo-server/ <span class="flag">--ndjson</span> <span class="flag">--format</span> <span class="value">json=reports/run.json</span></pre>
             </div>
+            <p>Use <code class="ic">--select FILE[::TEST[::STEP]]</code> to run a single test or step, <code class="ic">--ndjson</code> to stream events line-by-line while also writing a full report, and <code class="ic">tarn fmt --check</code> in CI to fail when example files drift from canonical YAML.</p>
           </article>
 
           <aside class="page__sidebar">

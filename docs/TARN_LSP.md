@@ -57,23 +57,27 @@ Phase L3 layers editing features onto the L1/L2 surface. Each ticket is a thin w
 
 ## Installation
 
-`tarn-lsp` is a Cargo workspace crate in this repository. Until the crate is published to crates.io, the only supported install path is building from the workspace:
+`tarn-lsp` is published on crates.io, so the recommended install path is a single Cargo command:
+
+```bash
+cargo install tarn-lsp
+```
+
+The 0.6.2 release was the first Tarn release to publish `tarn-lsp` to crates.io (see `CHANGELOG.md`). After install, `which tarn-lsp` should print a path inside `~/.cargo/bin/`. That binary is what every LSP client below spawns.
+
+If you are working from a local checkout of the hive repo — for example, hacking on the server itself — you can install directly from the workspace instead:
 
 ```bash
 # from the root of the hive repo
 cargo install --path tarn-lsp
 ```
 
-After install, `which tarn-lsp` should print a path inside `~/.cargo/bin/`. That binary is what every LSP client below spawns.
-
-For local development (no install step, useful if you are hacking on the server):
+For pure local development with no install step at all:
 
 ```bash
 cargo build -p tarn-lsp --release
 # binary now lives at ./target/release/tarn-lsp — point your LSP client at this path
 ```
-
-The published-crate install path (`cargo install tarn-lsp`) becomes available when the crate is pushed to crates.io; that is tracked as a Phase L2 follow-up. Until then, please use `cargo install --path`.
 
 ## Features
 

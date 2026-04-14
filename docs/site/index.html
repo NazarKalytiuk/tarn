@@ -59,10 +59,13 @@
 <span class="prompt">$</span> tarn run <span class="flag">--format</span> <span class="value">json</span> <span class="flag">--json-mode</span> <span class="value">compact</span><br>
 <span class="comment"># structured output for agents and CI</span><br>
 <br>
+<span class="prompt">$</span> tarn run <span class="flag">--ndjson</span> <span class="flag">--select</span> <span class="value">tests/auth.tarn.yaml::login</span><br>
+<span class="comment"># stream events for a single scoped test</span><br>
+<br>
 <span class="prompt">$</span> tarn fmt <span class="flag">--check</span><br>
 <span class="comment"># normalize YAML formatting</span><br>
 <br>
-<span class="prompt">$</span> tarn validate<br>
+<span class="prompt">$</span> tarn validate <span class="flag">--format</span> <span class="value">json</span><br>
 <span class="comment"># catch config issues before execution</span>
             </div>
           </div>
@@ -77,12 +80,12 @@
               <span class="stat__label">Human, JSON, JUnit, TAP, HTML, curl, and curl-all.</span>
             </div>
             <div class="stat">
-              <span class="stat__value">MCP native</span>
-              <span class="stat__label">tarn_run, tarn_validate, tarn_list, tarn_fix_plan.</span>
+              <span class="stat__value">MCP &amp; LSP</span>
+              <span class="stat__label">Portable .mcp.json, tarn_fix_plan, and a tarn-lsp language server.</span>
             </div>
             <div class="stat">
-              <span class="stat__value">AI-first</span>
-              <span class="stat__label">Failure categories, error codes, remediation hints.</span>
+              <span class="stat__value">Editor-ready</span>
+              <span class="stat__label">VS Code extension, Claude Code plugin, Neovim, Helix, Zed.</span>
             </div>
           </div>
         </div>
@@ -128,6 +131,21 @@
               <h3 class="feature__title">Polling &amp; Retries</h3>
               <p class="feature__text">Poll until assertions pass. Step-level retries for transient failures. Configurable intervals and limits.</p>
             </div>
+            <div class="feature">
+              <div class="feature__icon">&#x25A2;</div>
+              <h3 class="feature__title">Editor Intelligence</h3>
+              <p class="feature__text"><code class="ic">tarn-lsp</code> is a standalone LSP 3.17 server. VS Code extension and Claude Code plugin on top. Diagnostics, hover, completion, code lens, quick fixes.</p>
+            </div>
+            <div class="feature">
+              <div class="feature__icon feature__icon--cyan">&#x27A4;</div>
+              <h3 class="feature__title">Streaming &amp; Scoped Runs</h3>
+              <p class="feature__text"><code class="ic">--ndjson</code> emits one event per line for live UIs. <code class="ic">--select file::test::step</code> ANDs with <code class="ic">--tag</code> for surgical reruns. <code class="ic">--only-failed</code> keeps tight iteration.</p>
+            </div>
+            <div class="feature">
+              <div class="feature__icon feature__icon--violet">&#x2630;</div>
+              <h3 class="feature__title">Canonical Formatting</h3>
+              <p class="feature__text"><code class="ic">tarn fmt</code> normalizes YAML aliases and field order. <code class="ic">--check</code> mode fails in CI when files drift.</p>
+            </div>
           </div>
         </div>
       </section>
@@ -155,12 +173,12 @@
             <article class="card">
               <div class="card__icon card__icon--violet">03</div>
               <h3 class="card__title"><a href="./ai-workflows.html">AI Workflows</a></h3>
-              <p class="card__text">How compact JSON, failure categories, error codes, and curl exports tighten the agent retry loop.</p>
+              <p class="card__text">Compact JSON, failure categories, error codes, curl exports, plus editor-side <code class="ic">tarn-lsp</code> intelligence for agents like Claude Code.</p>
             </article>
             <article class="card">
               <div class="card__icon">04</div>
               <h3 class="card__title"><a href="./mcp.html">MCP Integration</a></h3>
-              <p class="card__text">Set up tarn-mcp in Claude Code, Cursor, or Windsurf with a structured tool surface.</p>
+              <p class="card__text">Drop a portable <code class="ic">.mcp.json</code> at the repo root. Works with Claude Code, Cursor, Windsurf, and any MCP-compatible client.</p>
             </article>
             <article class="card">
               <div class="card__icon card__icon--cyan">05</div>

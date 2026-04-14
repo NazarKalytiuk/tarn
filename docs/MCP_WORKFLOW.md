@@ -17,7 +17,7 @@ The recommended setup is a project-level `.mcp.json` in the repo root:
 }
 ```
 
-This is portable across Claude Code and other MCP-compatible tools. See `skills/tarn-api-testing/references/mcp-integration.md` for editor-specific alternatives (`.claude/settings.json`, `.cursor/mcp.json`, `.windsurf/mcp.json`).
+This is portable across Claude Code and other MCP-compatible tools. See `plugin/skills/tarn-api-testing/references/mcp-integration.md` for editor-specific alternatives (`.claude/settings.json`, `.cursor/mcp.json`, `.windsurf/mcp.json`).
 
 ## Claude Code Skill
 
