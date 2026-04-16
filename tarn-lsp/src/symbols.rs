@@ -38,7 +38,7 @@ use std::path::Path;
 use lsp_types::{DocumentSymbol, DocumentSymbolResponse, Position, Range, SymbolKind, Url};
 use tarn::outline::{outline_document, Outline, OutlineSpan, StepOutline, TestOutline};
 
-use crate::server::DocumentStore;
+use crate::server::{is_tarn_file_uri, DocumentStore};
 
 /// Entry point for the request dispatcher.
 ///
@@ -53,6 +53,9 @@ use crate::server::DocumentStore;
 /// `non_snake_case` lint fires on the ticket-style `textDocument_*` name,
 /// so we match the file's neighbours rather than its spec.
 pub fn text_document_document_symbol(store: &DocumentStore, uri: &Url) -> DocumentSymbolResponse {
+    if !is_tarn_file_uri(uri) {
+        return DocumentSymbolResponse::Nested(Vec::new());
+    }
     let symbols = build_symbols(store, uri);
     DocumentSymbolResponse::Nested(symbols)
 }

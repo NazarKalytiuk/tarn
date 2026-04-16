@@ -62,6 +62,24 @@ pub const SERVER_NAME: &str = "tarn-lsp";
 /// Tracked version of the server binary — mirrors `tarn` and `tarn-mcp`.
 pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// True when `uri` points at a Tarn test file — the buffer's basename
+/// must end in `.tarn.yaml` or `.tarn.yml`.
+///
+/// Claude Code's `.lsp.json` registers LSP servers by bare extension
+/// (`.yaml`, `.yml`) because the plugin schema has no glob or
+/// compound-extension support, so every YAML file the user opens is
+/// attached to tarn-lsp — Kubernetes manifests, Compose files, CI
+/// configs, all of which have nothing to do with Tarn. Every request
+/// handler short-circuits through this predicate and returns its
+/// LSP-appropriate empty result for non-Tarn URIs so tarn-lsp stays
+/// silent on foreign YAML instead of emitting bogus diagnostics,
+/// hovers, or completions.
+pub fn is_tarn_file_uri(uri: &Url) -> bool {
+    let path = uri.path();
+    let basename = path.rsplit('/').next().unwrap_or("");
+    basename.ends_with(".tarn.yaml") || basename.ends_with(".tarn.yml")
+}
+
 /// In-memory store of currently open documents, keyed by LSP `Url`.
 ///
 /// Phase L1.1 uses full-document sync, so each `didChange` replaces the entire
@@ -607,4 +625,49 @@ where
             format!("failed to parse {method} params: {error}").into()
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_tarn_file_uri_accepts_compound_tarn_extensions() {
+        let yaml = Url::parse("file:///tmp/flow.tarn.yaml").unwrap();
+        let yml = Url::parse("file:///tmp/flow.tarn.yml").unwrap();
+        assert!(is_tarn_file_uri(&yaml));
+        assert!(is_tarn_file_uri(&yml));
+    }
+
+    #[test]
+    fn is_tarn_file_uri_rejects_bare_yaml_and_other_extensions() {
+        let bare_yaml = Url::parse("file:///tmp/deployment.yaml").unwrap();
+        let bare_yml = Url::parse("file:///tmp/ci.yml").unwrap();
+        let json = Url::parse("file:///tmp/config.json").unwrap();
+        let no_ext = Url::parse("file:///tmp/README").unwrap();
+        assert!(!is_tarn_file_uri(&bare_yaml));
+        assert!(!is_tarn_file_uri(&bare_yml));
+        assert!(!is_tarn_file_uri(&json));
+        assert!(!is_tarn_file_uri(&no_ext));
+    }
+
+    #[test]
+    fn is_tarn_file_uri_matches_on_basename_not_path_segments() {
+        // `.tarn.yaml` in a directory segment must not count — only the
+        // trailing basename does.
+        let dir_named = Url::parse("file:///projects/repo.tarn.yaml/deploy.yaml").unwrap();
+        assert!(!is_tarn_file_uri(&dir_named));
+    }
+
+    #[test]
+    fn is_tarn_file_uri_accepts_untitled_and_non_file_schemes() {
+        // Some clients send `untitled:` URIs for unsaved buffers. As long
+        // as the basename ends in `.tarn.yaml` we still match so unsaved
+        // Tarn buffers get full intelligence.
+        let untitled = Url::parse("untitled:///Untitled-1.tarn.yaml").unwrap();
+        let vscode_remote =
+            Url::parse("vscode-remote://ssh-remote%2Bbox/home/me/flow.tarn.yaml").unwrap();
+        assert!(is_tarn_file_uri(&untitled));
+        assert!(is_tarn_file_uri(&vscode_remote));
+    }
 }

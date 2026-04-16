@@ -1,4 +1,5 @@
 use crate::error::TarnError;
+use crate::interpolation::{self, Context};
 use crate::model::{CaptureSpec, ExtendedCapture};
 use crate::regex_cache;
 use serde_json::Value;
@@ -53,20 +54,38 @@ pub fn apply_transforms(value: &Value, transforms: &[ValueTransform]) -> Result<
     Ok(current)
 }
 
+/// Borrowed view over the response fields that capture extraction can
+/// read from. Bundled into a single struct so the top-level entry points
+/// stay under clippy's `too_many_arguments` threshold and future response
+/// dimensions (e.g. trailers) only require changes here, not at every
+/// call site.
+pub struct ResponseView<'a> {
+    pub status: u16,
+    pub url: &'a str,
+    pub body: &'a Value,
+    pub headers: &'a HashMap<String, String>,
+    pub raw_headers: &'a [(String, String)],
+}
+
 /// Extract captures from an HTTP response using JSONPath or extended sources.
 /// Returns a map of capture_name -> extracted JSON value (type-preserving).
+///
+/// `ctx` supplies `env` + previously captured values so that `capture.jsonpath`,
+/// `capture.regex`, `capture.header`, and `capture.cookie` can reference
+/// `{{ env.foo }}` or `{{ capture.bar }}` — useful when a JSONPath filter has
+/// to include an id that was captured in an earlier step. Unresolved
+/// placeholders (e.g. the referenced capture never succeeded) surface as a
+/// regular [`TarnError::Capture`] describing the missing variable so the
+/// caller sees the root cause instead of a cryptic "regex did not match".
 pub fn extract_captures(
-    status: u16,
-    url: &str,
-    body: &Value,
-    headers: &HashMap<String, String>,
-    raw_headers: &[(String, String)],
+    response: &ResponseView<'_>,
     capture_map: &HashMap<String, CaptureSpec>,
+    ctx: &Context,
 ) -> Result<HashMap<String, Value>, TarnError> {
     let mut captures = HashMap::new();
 
     for (name, spec) in capture_map {
-        let value = extract_capture(status, url, body, headers, raw_headers, name, spec)?;
+        let value = extract_capture(response, name, spec, ctx)?;
         captures.insert(name.clone(), value);
     }
 
@@ -75,49 +94,182 @@ pub fn extract_captures(
 
 /// Extract a single named capture while preserving the existing error messages.
 pub fn extract_capture(
-    status: u16,
-    url: &str,
-    body: &Value,
-    headers: &HashMap<String, String>,
-    raw_headers: &[(String, String)],
+    response: &ResponseView<'_>,
     name: &str,
     spec: &CaptureSpec,
+    ctx: &Context,
 ) -> Result<Value, TarnError> {
-    match spec {
-        CaptureSpec::JsonPath(path_str) => extract_jsonpath(body, path_str).map_err(|e| {
+    let resolved = resolve_capture_spec(name, spec, ctx)?;
+    match &resolved {
+        CaptureSpec::JsonPath(path_str) => extract_jsonpath(response.body, path_str).map_err(|e| {
             TarnError::Capture(format!(
                 "Failed to capture '{}' with path '{}': {}",
                 name, path_str, e
             ))
         }),
+        CaptureSpec::Extended(ext) => extract_extended(response, ext)
+            .map_err(|e| TarnError::Capture(format!("Failed to capture '{}': {}", name, e))),
+    }
+}
+
+/// Interpolate every string field of a capture spec against `ctx` and fail
+/// fast if any placeholders are still unresolved after substitution. This is
+/// the one place that decides capture expressions support `{{ ... }}`; keeping
+/// it at the edge of extraction means the JSONPath/regex/header parsers see
+/// only literal, validated input.
+fn resolve_capture_spec(
+    name: &str,
+    spec: &CaptureSpec,
+    ctx: &Context,
+) -> Result<CaptureSpec, TarnError> {
+    match spec {
+        CaptureSpec::JsonPath(path_str) => {
+            let resolved = interpolation::interpolate(path_str, ctx);
+            ensure_resolved(name, "jsonpath", &resolved)?;
+            Ok(CaptureSpec::JsonPath(resolved))
+        }
         CaptureSpec::Extended(ext) => {
-            { extract_extended(status, url, body, headers, raw_headers, ext) }
-                .map_err(|e| TarnError::Capture(format!("Failed to capture '{}': {}", name, e)))
+            let mut out = ext.clone();
+            if let Some(ref raw) = ext.header {
+                let resolved = interpolation::interpolate(raw, ctx);
+                ensure_resolved(name, "header", &resolved)?;
+                out.header = Some(resolved);
+            }
+            if let Some(ref raw) = ext.cookie {
+                let resolved = interpolation::interpolate(raw, ctx);
+                ensure_resolved(name, "cookie", &resolved)?;
+                out.cookie = Some(resolved);
+            }
+            if let Some(ref raw) = ext.jsonpath {
+                let resolved = interpolation::interpolate(raw, ctx);
+                ensure_resolved(name, "jsonpath", &resolved)?;
+                out.jsonpath = Some(resolved);
+            }
+            if let Some(ref raw) = ext.regex {
+                let resolved = interpolation::interpolate(raw, ctx);
+                ensure_resolved(name, "regex", &resolved)?;
+                out.regex = Some(resolved);
+            }
+            if let Some(ref raw) = ext.where_predicate {
+                let resolved = interpolate_yaml(raw, ctx);
+                ensure_resolved_yaml(name, "where", &resolved)?;
+                out.where_predicate = Some(resolved);
+            }
+            Ok(CaptureSpec::Extended(out))
         }
     }
 }
 
+/// Recursively interpolate all string leaves of a YAML value against `ctx`.
+/// Used for the capture `where:` predicate, whose field values may
+/// themselves be `{{ capture.x }}` references that should resolve before
+/// the predicate is compared against response objects.
+fn interpolate_yaml(value: &serde_yaml::Value, ctx: &Context) -> serde_yaml::Value {
+    match value {
+        serde_yaml::Value::String(s) => {
+            serde_yaml::Value::String(interpolation::interpolate(s, ctx))
+        }
+        serde_yaml::Value::Sequence(seq) => {
+            serde_yaml::Value::Sequence(seq.iter().map(|v| interpolate_yaml(v, ctx)).collect())
+        }
+        serde_yaml::Value::Mapping(map) => {
+            let mut out = serde_yaml::Mapping::with_capacity(map.len());
+            for (k, v) in map {
+                out.insert(interpolate_yaml(k, ctx), interpolate_yaml(v, ctx));
+            }
+            serde_yaml::Value::Mapping(out)
+        }
+        other => other.clone(),
+    }
+}
+
+fn ensure_resolved_yaml(
+    name: &str,
+    field: &str,
+    value: &serde_yaml::Value,
+) -> Result<(), TarnError> {
+    let mut remaining: Vec<String> = Vec::new();
+    collect_unresolved_yaml(value, &mut remaining);
+    if remaining.is_empty() {
+        Ok(())
+    } else {
+        remaining.sort();
+        remaining.dedup();
+        Err(TarnError::Capture(format!(
+            "Failed to capture '{}': unresolved template variable(s) in {} predicate: {}. \
+             Check that prior captures succeeded and env vars are set.",
+            name,
+            field,
+            remaining.join(", ")
+        )))
+    }
+}
+
+fn collect_unresolved_yaml(value: &serde_yaml::Value, out: &mut Vec<String>) {
+    match value {
+        serde_yaml::Value::String(s) => {
+            out.extend(interpolation::find_unresolved(s));
+        }
+        serde_yaml::Value::Sequence(seq) => {
+            for v in seq {
+                collect_unresolved_yaml(v, out);
+            }
+        }
+        serde_yaml::Value::Mapping(map) => {
+            for (_, v) in map {
+                collect_unresolved_yaml(v, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn ensure_resolved(name: &str, field: &str, value: &str) -> Result<(), TarnError> {
+    let remaining = interpolation::find_unresolved(value);
+    if remaining.is_empty() {
+        Ok(())
+    } else {
+        let mut names = remaining;
+        names.sort();
+        names.dedup();
+        Err(TarnError::Capture(format!(
+            "Failed to capture '{}': unresolved template variable(s) in {} expression '{}': {}. \
+             Check that prior captures succeeded and env vars are set.",
+            name,
+            field,
+            value,
+            names.join(", ")
+        )))
+    }
+}
+
 /// Extract a value using an extended capture spec.
-fn extract_extended(
-    status: u16,
-    url: &str,
-    body: &Value,
-    headers: &HashMap<String, String>,
-    raw_headers: &[(String, String)],
-    ext: &ExtendedCapture,
-) -> Result<Value, String> {
+fn extract_extended(response: &ResponseView<'_>, ext: &ExtendedCapture) -> Result<Value, String> {
     let source = if let Some(ref header_name) = ext.header {
-        extract_header_source(headers, raw_headers, header_name, ext.regex.as_deref())?
+        extract_header_source(
+            response.headers,
+            response.raw_headers,
+            header_name,
+            ext.regex.as_deref(),
+        )?
     } else if let Some(ref cookie_name) = ext.cookie {
-        extract_cookie_source(raw_headers, cookie_name)?
+        extract_cookie_source(response.raw_headers, cookie_name)?
     } else if let Some(ref jsonpath) = ext.jsonpath {
-        extract_jsonpath(body, jsonpath)?
+        let raw = extract_jsonpath(response.body, jsonpath)?;
+        // `where:` filters the array that `jsonpath` returns, turning
+        // "capture every user" + "`first` transform" into "capture the
+        // user whose id is X". Users who intentionally want to pick by
+        // index can still do so; `where:` is only active when set.
+        match &ext.where_predicate {
+            Some(predicate) => apply_where_filter(&raw, predicate)?,
+            None => raw,
+        }
     } else if ext.body.unwrap_or(false) {
-        Value::String(value_to_string(body))
+        Value::String(value_to_string(response.body))
     } else if ext.status.unwrap_or(false) {
-        Value::Number(status.into())
+        Value::Number(response.status.into())
     } else if ext.url.unwrap_or(false) {
-        Value::String(url.to_string())
+        Value::String(response.url.to_string())
     } else {
         return Err(
             "Extended capture must specify either 'header', 'cookie', 'jsonpath', 'body', 'status', or 'url' as the source".to_string(),
@@ -131,6 +283,47 @@ fn extract_extended(
     } else {
         Ok(source)
     }
+}
+
+/// Apply a `where:` predicate to a JSONPath result, keeping only the
+/// elements that match. If the source is a single object it's treated
+/// as a one-element array for uniformity. The result is always an array
+/// of the matching elements, so callers can chain `| first` to pick a
+/// single identifier-matched record without relying on `$[0]`.
+fn apply_where_filter(source: &Value, predicate: &serde_yaml::Value) -> Result<Value, String> {
+    let predicate_map = match predicate {
+        serde_yaml::Value::Mapping(m) => m,
+        _ => {
+            return Err(
+                "Capture `where` clause must be an object predicate (field: value pairs)"
+                    .to_string(),
+            );
+        }
+    };
+
+    let items: Vec<Value> = match source {
+        Value::Array(arr) => arr.clone(),
+        Value::Object(_) => vec![source.clone()],
+        other => {
+            return Err(format!(
+                "Capture `where` clause requires an array or object at the JSONPath, got {}",
+                match other {
+                    Value::Null => "null",
+                    Value::Bool(_) => "boolean",
+                    Value::Number(_) => "number",
+                    Value::String(_) => "string",
+                    _ => "unknown",
+                }
+            ));
+        }
+    };
+
+    let filtered: Vec<Value> = items
+        .into_iter()
+        .filter(|item| crate::assert::body::object_matches_predicate(item, predicate_map))
+        .collect();
+
+    Ok(Value::Array(filtered))
 }
 
 fn extract_header_source(
@@ -511,8 +704,18 @@ mod tests {
         let mut map = HashMap::new();
         map.insert("user_name".into(), CaptureSpec::JsonPath("$.name".into()));
 
-        let captures =
-            extract_captures(200, "http://example.com/final", &body, &headers, &[], &map).unwrap();
+        let captures = extract_captures(
+            &ResponseView {
+                status: 200,
+                url: "http://example.com/final",
+                body: &body,
+                headers: &headers,
+                raw_headers: &[],
+            },
+            &map,
+            &Context::new(),
+        )
+        .unwrap();
         assert_eq!(captures.get("user_name").unwrap(), &json!("Alice"));
     }
 
@@ -523,8 +726,18 @@ mod tests {
         let mut map = HashMap::new();
         map.insert("user_age".into(), CaptureSpec::JsonPath("$.age".into()));
 
-        let captures =
-            extract_captures(200, "http://example.com/final", &body, &headers, &[], &map).unwrap();
+        let captures = extract_captures(
+            &ResponseView {
+                status: 200,
+                url: "http://example.com/final",
+                body: &body,
+                headers: &headers,
+                raw_headers: &[],
+            },
+            &map,
+            &Context::new(),
+        )
+        .unwrap();
         assert_eq!(captures.get("user_age").unwrap(), &json!(30));
     }
 
@@ -535,8 +748,18 @@ mod tests {
         let mut map = HashMap::new();
         map.insert("is_active".into(), CaptureSpec::JsonPath("$.active".into()));
 
-        let captures =
-            extract_captures(200, "http://example.com/final", &body, &headers, &[], &map).unwrap();
+        let captures = extract_captures(
+            &ResponseView {
+                status: 200,
+                url: "http://example.com/final",
+                body: &body,
+                headers: &headers,
+                raw_headers: &[],
+            },
+            &map,
+            &Context::new(),
+        )
+        .unwrap();
         assert_eq!(captures.get("is_active").unwrap(), &json!(true));
     }
 
@@ -547,8 +770,18 @@ mod tests {
         let mut map = HashMap::new();
         map.insert("deleted".into(), CaptureSpec::JsonPath("$.deleted".into()));
 
-        let captures =
-            extract_captures(200, "http://example.com/final", &body, &headers, &[], &map).unwrap();
+        let captures = extract_captures(
+            &ResponseView {
+                status: 200,
+                url: "http://example.com/final",
+                body: &body,
+                headers: &headers,
+                raw_headers: &[],
+            },
+            &map,
+            &Context::new(),
+        )
+        .unwrap();
         assert_eq!(captures.get("deleted").unwrap(), &json!(null));
     }
 
@@ -562,8 +795,18 @@ mod tests {
             CaptureSpec::JsonPath("$.user.profile.email".into()),
         );
 
-        let captures =
-            extract_captures(200, "http://example.com/final", &body, &headers, &[], &map).unwrap();
+        let captures = extract_captures(
+            &ResponseView {
+                status: 200,
+                url: "http://example.com/final",
+                body: &body,
+                headers: &headers,
+                raw_headers: &[],
+            },
+            &map,
+            &Context::new(),
+        )
+        .unwrap();
         assert_eq!(captures.get("email").unwrap(), &json!("alice@test.com"));
     }
 
@@ -577,8 +820,18 @@ mod tests {
             CaptureSpec::JsonPath("$.items[0].id".into()),
         );
 
-        let captures =
-            extract_captures(200, "http://example.com/final", &body, &headers, &[], &map).unwrap();
+        let captures = extract_captures(
+            &ResponseView {
+                status: 200,
+                url: "http://example.com/final",
+                body: &body,
+                headers: &headers,
+                raw_headers: &[],
+            },
+            &map,
+            &Context::new(),
+        )
+        .unwrap();
         assert_eq!(captures.get("first_id").unwrap(), &json!("first"));
     }
 
@@ -592,7 +845,17 @@ mod tests {
             CaptureSpec::JsonPath("$.nonexistent".into()),
         );
 
-        let result = extract_captures(200, "http://example.com/final", &body, &headers, &[], &map);
+        let result = extract_captures(
+            &ResponseView {
+                status: 200,
+                url: "http://example.com/final",
+                body: &body,
+                headers: &headers,
+                raw_headers: &[],
+            },
+            &map,
+            &Context::new(),
+        );
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -607,7 +870,17 @@ mod tests {
         let mut map = HashMap::new();
         map.insert("bad".into(), CaptureSpec::JsonPath("$[invalid".into()));
 
-        let result = extract_captures(200, "http://example.com/final", &body, &headers, &[], &map);
+        let result = extract_captures(
+            &ResponseView {
+                status: 200,
+                url: "http://example.com/final",
+                body: &body,
+                headers: &headers,
+                raw_headers: &[],
+            },
+            &map,
+            &Context::new(),
+        );
         assert!(result.is_err());
     }
 
@@ -620,8 +893,18 @@ mod tests {
         map.insert("tok".into(), CaptureSpec::JsonPath("$.token".into()));
         map.insert("code".into(), CaptureSpec::JsonPath("$.status".into()));
 
-        let captures =
-            extract_captures(200, "http://example.com/final", &body, &headers, &[], &map).unwrap();
+        let captures = extract_captures(
+            &ResponseView {
+                status: 200,
+                url: "http://example.com/final",
+                body: &body,
+                headers: &headers,
+                raw_headers: &[],
+            },
+            &map,
+            &Context::new(),
+        )
+        .unwrap();
         assert_eq!(captures.len(), 3);
         assert_eq!(captures.get("id").unwrap(), &json!("usr_123"));
         assert_eq!(captures.get("tok").unwrap(), &json!("abc"));
@@ -635,8 +918,18 @@ mod tests {
         let mut map = HashMap::new();
         map.insert("tags".into(), CaptureSpec::JsonPath("$.tags".into()));
 
-        let captures =
-            extract_captures(200, "http://example.com/final", &body, &headers, &[], &map).unwrap();
+        let captures = extract_captures(
+            &ResponseView {
+                status: 200,
+                url: "http://example.com/final",
+                body: &body,
+                headers: &headers,
+                raw_headers: &[],
+            },
+            &map,
+            &Context::new(),
+        )
+        .unwrap();
         assert_eq!(captures.get("tags").unwrap(), &json!(["a", "b"]));
     }
 
@@ -784,8 +1077,18 @@ mod tests {
         let body = json!({"name": "Alice"});
         let headers = HashMap::new();
         let map = HashMap::new();
-        let captures =
-            extract_captures(200, "http://example.com/final", &body, &headers, &[], &map).unwrap();
+        let captures = extract_captures(
+            &ResponseView {
+                status: 200,
+                url: "http://example.com/final",
+                body: &body,
+                headers: &headers,
+                raw_headers: &[],
+            },
+            &map,
+            &Context::new(),
+        )
+        .unwrap();
         assert!(captures.is_empty());
     }
 
@@ -811,17 +1114,21 @@ mod tests {
                 status: None,
                 url: None,
                 regex: Some("session=([^;]+)".to_string()),
+                where_predicate: None,
             }),
         );
         let raw_headers = raw_headers(&[("set-cookie", "session=abc123; Path=/; HttpOnly")]);
 
         let captures = extract_captures(
-            200,
-            "http://example.com/final",
-            &body,
-            &headers,
-            &raw_headers,
+            &ResponseView {
+                status: 200,
+                url: "http://example.com/final",
+                body: &body,
+                headers: &headers,
+                raw_headers: &raw_headers,
+            },
             &map,
+            &Context::new(),
         )
         .unwrap();
         assert_eq!(captures.get("session").unwrap(), &json!("abc123"));
@@ -844,17 +1151,21 @@ mod tests {
                 status: None,
                 url: None,
                 regex: None,
+                where_predicate: None,
             }),
         );
         let raw_headers = raw_headers(&[("x-request-id", "req-12345")]);
 
         let captures = extract_captures(
-            200,
-            "http://example.com/final",
-            &body,
-            &headers,
-            &raw_headers,
+            &ResponseView {
+                status: 200,
+                url: "http://example.com/final",
+                body: &body,
+                headers: &headers,
+                raw_headers: &raw_headers,
+            },
             &map,
+            &Context::new(),
         )
         .unwrap();
         assert_eq!(captures.get("req_id").unwrap(), &json!("req-12345"));
@@ -877,17 +1188,21 @@ mod tests {
                 status: None,
                 url: None,
                 regex: None,
+                where_predicate: None,
             }),
         );
         let raw_headers = raw_headers(&[("Content-Type", "application/json")]);
 
         let captures = extract_captures(
-            200,
-            "http://example.com/final",
-            &body,
-            &headers,
-            &raw_headers,
+            &ResponseView {
+                status: 200,
+                url: "http://example.com/final",
+                body: &body,
+                headers: &headers,
+                raw_headers: &raw_headers,
+            },
             &map,
+            &Context::new(),
         )
         .unwrap();
         assert_eq!(captures.get("ct").unwrap(), &json!("application/json"));
@@ -908,10 +1223,21 @@ mod tests {
                 status: None,
                 url: None,
                 regex: None,
+                where_predicate: None,
             }),
         );
 
-        let result = extract_captures(200, "http://example.com/final", &body, &headers, &[], &map);
+        let result = extract_captures(
+            &ResponseView {
+                status: 200,
+                url: "http://example.com/final",
+                body: &body,
+                headers: &headers,
+                raw_headers: &[],
+            },
+            &map,
+            &Context::new(),
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not found"));
     }
@@ -933,6 +1259,7 @@ mod tests {
                 status: None,
                 url: None,
                 regex: Some("session=([^;]+)".to_string()),
+                where_predicate: None,
             }),
         );
         let raw_headers = raw_headers(&[
@@ -941,12 +1268,15 @@ mod tests {
         ]);
 
         let result = extract_captures(
-            200,
-            "http://example.com/final",
-            &body,
-            &headers,
-            &raw_headers,
+            &ResponseView {
+                status: 200,
+                url: "http://example.com/final",
+                body: &body,
+                headers: &headers,
+                raw_headers: &raw_headers,
+            },
             &map,
+            &Context::new(),
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("did not match"));
@@ -967,11 +1297,22 @@ mod tests {
                 status: None,
                 url: None,
                 regex: Some("ID: (\\w+)".to_string()),
+                where_predicate: None,
             }),
         );
 
-        let captures =
-            extract_captures(200, "http://example.com/final", &body, &headers, &[], &map).unwrap();
+        let captures = extract_captures(
+            &ResponseView {
+                status: 200,
+                url: "http://example.com/final",
+                body: &body,
+                headers: &headers,
+                raw_headers: &[],
+            },
+            &map,
+            &Context::new(),
+        )
+        .unwrap();
         assert_eq!(captures.get("user_id").unwrap(), &json!("usr_42"));
     }
 
@@ -982,13 +1323,16 @@ mod tests {
         let spec = CaptureSpec::JsonPath("$.token".into());
 
         let value = extract_capture(
-            200,
-            "http://example.com/final",
-            &body,
-            &headers,
-            &[],
+            &ResponseView {
+                status: 200,
+                url: "http://example.com/final",
+                body: &body,
+                headers: &headers,
+                raw_headers: &[],
+            },
             "token",
             &spec,
+            &Context::new(),
         )
         .unwrap();
         assert_eq!(value, json!("abc123"));
@@ -1009,11 +1353,22 @@ mod tests {
                 status: Some(true),
                 url: None,
                 regex: None,
+                where_predicate: None,
             }),
         );
 
-        let captures =
-            extract_captures(204, "http://example.com/final", &body, &headers, &[], &map).unwrap();
+        let captures = extract_captures(
+            &ResponseView {
+                status: 204,
+                url: "http://example.com/final",
+                body: &body,
+                headers: &headers,
+                raw_headers: &[],
+            },
+            &map,
+            &Context::new(),
+        )
+        .unwrap();
         assert_eq!(captures.get("status_code").unwrap(), &json!(204));
     }
 
@@ -1032,11 +1387,22 @@ mod tests {
                 status: Some(true),
                 url: None,
                 regex: Some("^(\\d)".to_string()),
+                where_predicate: None,
             }),
         );
 
-        let captures =
-            extract_captures(204, "http://example.com/final", &body, &headers, &[], &map).unwrap();
+        let captures = extract_captures(
+            &ResponseView {
+                status: 204,
+                url: "http://example.com/final",
+                body: &body,
+                headers: &headers,
+                raw_headers: &[],
+            },
+            &map,
+            &Context::new(),
+        )
+        .unwrap();
         assert_eq!(captures.get("status_class").unwrap(), &json!("2"));
     }
 
@@ -1055,11 +1421,22 @@ mod tests {
                 status: None,
                 url: Some(true),
                 regex: None,
+                where_predicate: None,
             }),
         );
 
-        let captures =
-            extract_captures(200, "http://example.com/health", &body, &headers, &[], &map).unwrap();
+        let captures = extract_captures(
+            &ResponseView {
+                status: 200,
+                url: "http://example.com/health",
+                body: &body,
+                headers: &headers,
+                raw_headers: &[],
+            },
+            &map,
+            &Context::new(),
+        )
+        .unwrap();
         assert_eq!(
             captures.get("final_url").unwrap(),
             &json!("http://example.com/health")
@@ -1081,16 +1458,20 @@ mod tests {
                 status: None,
                 url: Some(true),
                 regex: Some("https?://[^/]+(/.+)$".to_string()),
+                where_predicate: None,
             }),
         );
 
         let captures = extract_captures(
-            200,
-            "https://example.com/redirected/path",
-            &body,
-            &headers,
-            &[],
+            &ResponseView {
+                status: 200,
+                url: "https://example.com/redirected/path",
+                body: &body,
+                headers: &headers,
+                raw_headers: &[],
+            },
             &map,
+            &Context::new(),
         )
         .unwrap();
         assert_eq!(
@@ -1118,16 +1499,20 @@ mod tests {
                 status: None,
                 url: None,
                 regex: None,
+                where_predicate: None,
             }),
         );
 
         let captures = extract_captures(
-            200,
-            "http://example.com/final",
-            &body,
-            &headers,
-            &raw_headers,
+            &ResponseView {
+                status: 200,
+                url: "http://example.com/final",
+                body: &body,
+                headers: &headers,
+                raw_headers: &raw_headers,
+            },
             &map,
+            &Context::new(),
         )
         .unwrap();
         assert_eq!(captures.get("session_cookie").unwrap(), &json!("abc123"));
@@ -1152,16 +1537,20 @@ mod tests {
                 status: None,
                 url: None,
                 regex: None,
+                where_predicate: None,
             }),
         );
 
         let err = extract_captures(
-            200,
-            "http://example.com/final",
-            &body,
-            &headers,
-            &raw_headers,
+            &ResponseView {
+                status: 200,
+                url: "http://example.com/final",
+                body: &body,
+                headers: &headers,
+                raw_headers: &raw_headers,
+            },
             &map,
+            &Context::new(),
         )
         .unwrap_err()
         .to_string();
@@ -1185,11 +1574,229 @@ mod tests {
                 status: None,
                 url: None,
                 regex: Some("plain (text)".to_string()),
+                where_predicate: None,
             }),
         );
 
-        let captures =
-            extract_captures(200, "http://example.com/final", &body, &headers, &[], &map).unwrap();
+        let captures = extract_captures(
+            &ResponseView {
+                status: 200,
+                url: "http://example.com/final",
+                body: &body,
+                headers: &headers,
+                raw_headers: &[],
+            },
+            &map,
+            &Context::new(),
+        )
+        .unwrap();
         assert_eq!(captures.get("body_word").unwrap(), &json!("text"));
+    }
+
+    #[test]
+    fn jsonpath_capture_interpolates_prior_capture_in_filter() {
+        // Classic integration pattern: capture id from list endpoint and
+        // reuse it inside a filter on a different endpoint. Without
+        // interpolation the author has to hand-write a regex fallback.
+        let body = json!({
+            "items": [
+                {"id": "abc-1", "label": "one"},
+                {"id": "xyz-2", "label": "two"},
+            ]
+        });
+        let headers = HashMap::new();
+        let mut map = HashMap::new();
+        map.insert(
+            "matched_label".into(),
+            CaptureSpec::JsonPath("$.items[?(@.id == '{{ capture.target_id }}')].label".into()),
+        );
+
+        let mut ctx = Context::new();
+        ctx.captures
+            .insert("target_id".into(), serde_json::json!("xyz-2"));
+
+        let captures = extract_captures(
+            &ResponseView {
+                status: 200,
+                url: "http://example.com/list",
+                body: &body,
+                headers: &headers,
+                raw_headers: &[],
+            },
+            &map,
+            &ctx,
+        )
+        .unwrap();
+        assert_eq!(captures.get("matched_label").unwrap(), &json!("two"));
+    }
+
+    #[test]
+    fn extended_capture_interpolates_header_and_regex() {
+        let body = json!({});
+        let mut headers = HashMap::new();
+        headers.insert("X-Request-Id".into(), "req-42".into());
+        let raw_headers = vec![("X-Request-Id".to_string(), "req-42".to_string())];
+
+        let mut map = HashMap::new();
+        map.insert(
+            "rid".into(),
+            CaptureSpec::Extended(ExtendedCapture {
+                header: Some("{{ env.request_id_header }}".into()),
+                cookie: None,
+                jsonpath: None,
+                body: None,
+                status: None,
+                url: None,
+                regex: Some("{{ env.id_prefix }}-(.+)".into()),
+                where_predicate: None,
+            }),
+        );
+
+        let mut ctx = Context::new();
+        ctx.env
+            .insert("request_id_header".into(), "X-Request-Id".into());
+        ctx.env.insert("id_prefix".into(), "req".into());
+
+        let captures = extract_captures(
+            &ResponseView {
+                status: 200,
+                url: "http://example.com/final",
+                body: &body,
+                headers: &headers,
+                raw_headers: &raw_headers,
+            },
+            &map,
+            &ctx,
+        )
+        .unwrap();
+        assert_eq!(captures.get("rid").unwrap(), &json!("42"));
+    }
+
+    #[test]
+    fn capture_where_filters_array_by_field_predicate() {
+        // Identity-based selection: pick the matching user without
+        // relying on array position. Combined with `first` in a capture
+        // chain this replaces brittle `$[0]` captures on shared
+        // endpoints.
+        let body = json!({
+            "users": [
+                {"id": "a", "role": "user"},
+                {"id": "b", "role": "admin"},
+                {"id": "c", "role": "admin"},
+            ]
+        });
+        let headers = HashMap::new();
+        let mut map = HashMap::new();
+        map.insert(
+            "admins".into(),
+            CaptureSpec::Extended(ExtendedCapture {
+                header: None,
+                cookie: None,
+                jsonpath: Some("$.users".to_string()),
+                body: None,
+                status: None,
+                url: None,
+                regex: None,
+                where_predicate: Some(serde_yaml::from_str("role: admin").unwrap()),
+            }),
+        );
+
+        let captures = extract_captures(
+            &ResponseView {
+                status: 200,
+                url: "http://example.com/list",
+                body: &body,
+                headers: &headers,
+                raw_headers: &[],
+            },
+            &map,
+            &Context::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            captures.get("admins").unwrap(),
+            &json!([{"id": "b", "role": "admin"}, {"id": "c", "role": "admin"}])
+        );
+    }
+
+    #[test]
+    fn capture_where_interpolates_predicate_values() {
+        let body = json!({
+            "items": [
+                {"id": "abc", "label": "one"},
+                {"id": "xyz", "label": "two"},
+            ]
+        });
+        let headers = HashMap::new();
+        let mut map = HashMap::new();
+        map.insert(
+            "picked".into(),
+            CaptureSpec::Extended(ExtendedCapture {
+                header: None,
+                cookie: None,
+                jsonpath: Some("$.items".to_string()),
+                body: None,
+                status: None,
+                url: None,
+                regex: None,
+                where_predicate: Some(
+                    serde_yaml::from_str("id: '{{ capture.target_id }}'").unwrap(),
+                ),
+            }),
+        );
+
+        let mut ctx = Context::new();
+        ctx.captures
+            .insert("target_id".into(), serde_json::json!("xyz"));
+
+        let captures = extract_captures(
+            &ResponseView {
+                status: 200,
+                url: "http://example.com/list",
+                body: &body,
+                headers: &headers,
+                raw_headers: &[],
+            },
+            &map,
+            &ctx,
+        )
+        .unwrap();
+        assert_eq!(
+            captures.get("picked").unwrap(),
+            &json!([{"id": "xyz", "label": "two"}])
+        );
+    }
+
+    #[test]
+    fn capture_fails_fast_on_unresolved_template() {
+        // If a capture spec references something that was never set, the
+        // extractor must say so up-front. Prior behavior tried to use the
+        // literal `{{ ... }}` as a JSONPath, producing a cryptic "invalid
+        // JSONPath" message that hid the real root cause.
+        let body = json!({"items": []});
+        let headers = HashMap::new();
+        let mut map = HashMap::new();
+        map.insert(
+            "x".into(),
+            CaptureSpec::JsonPath("$.items[?(@.id == '{{ capture.missing }}')].id".into()),
+        );
+
+        let err = extract_captures(
+            &ResponseView {
+                status: 200,
+                url: "http://example.com/final",
+                body: &body,
+                headers: &headers,
+                raw_headers: &[],
+            },
+            &map,
+            &Context::new(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("unresolved template variable(s)") && err.contains("capture.missing"),
+            "expected unresolved-template error, got {err}"
+        );
     }
 }

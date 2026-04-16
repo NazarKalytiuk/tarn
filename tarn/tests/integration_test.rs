@@ -3819,3 +3819,368 @@ steps:
         "CLI header must widen the file-level block: {headers:?}"
     );
 }
+
+#[test]
+fn last_run_json_artifact_is_written_in_human_mode() {
+    // Human-mode runs must still leave a machine-readable artifact so
+    // failed runs can be inspected programmatically without rerunning.
+    let dir = TempDir::new().unwrap();
+    let test_file = write_test_file(
+        &dir,
+        "last-run.tarn.yaml",
+        r#"
+name: Last-run artifact
+steps:
+  - name: connect failure
+    request:
+      method: GET
+      url: "http://127.0.0.1:1/missing"
+    assert:
+      status: 200
+"#,
+    );
+
+    let output = tarn()
+        .args(["run", &test_file])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(3));
+
+    let artifact = dir.path().join(".tarn").join("last-run.json");
+    assert!(
+        artifact.is_file(),
+        "expected {} to exist after a human-mode run",
+        artifact.display()
+    );
+
+    let body = fs::read_to_string(&artifact).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&body).expect("artifact is valid JSON");
+    assert_eq!(parsed["summary"]["status"], "FAILED");
+    assert_eq!(parsed["summary"]["steps"]["failed"], 1);
+
+    // The terminal output should tell the user where the artifact went.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("json report saved to") && stderr.contains(".tarn/last-run.json"),
+        "expected last-run.json path to be announced on stderr; got: {stderr}"
+    );
+}
+
+#[test]
+fn last_run_json_artifact_can_be_disabled() {
+    let dir = TempDir::new().unwrap();
+    let test_file = write_test_file(
+        &dir,
+        "opt-out.tarn.yaml",
+        r#"
+name: Opt out
+steps:
+  - name: connect failure
+    request:
+      method: GET
+      url: "http://127.0.0.1:1/missing"
+    assert:
+      status: 200
+"#,
+    );
+
+    let output = tarn()
+        .args(["run", &test_file, "--no-last-run-json"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(3));
+    let artifact = dir.path().join(".tarn").join("last-run.json");
+    assert!(
+        !artifact.exists(),
+        "--no-last-run-json must suppress the artifact; found {}",
+        artifact.display()
+    );
+}
+
+#[test]
+fn downstream_steps_skip_when_prior_capture_fails() {
+    // Classic cascade: first step captures `user_id` from a response
+    // that doesn't contain it; every later step that references
+    // `{{ capture.user_id }}` should be marked skipped, not flooded
+    // with unresolved-template failures (NAZ-342).
+    let server = DemoServer::start();
+    let dir = TempDir::new().unwrap();
+
+    let test_file = write_test_file(
+        &dir,
+        "cascade.tarn.yaml",
+        &format!(
+            r#"
+name: Cascade skip
+env:
+  base_url: "{}"
+steps:
+  - name: capture missing id
+    request:
+      method: GET
+      url: "{{{{ env.base_url }}}}/health"
+    capture:
+      user_id: "$.nonexistent"
+    assert:
+      status: 200
+  - name: uses failed capture
+    request:
+      method: GET
+      url: "{{{{ env.base_url }}}}/users/{{{{ capture.user_id }}}}"
+    assert:
+      status: 200
+  - name: also uses failed capture
+    request:
+      method: GET
+      url: "{{{{ env.base_url }}}}/users/{{{{ capture.user_id }}}}"
+    assert:
+      status: 200
+"#,
+            server.base_url(),
+        ),
+    );
+
+    let output = tarn()
+        .args(["run", &test_file, "--format", "json"])
+        .output()
+        .unwrap();
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let steps = json["files"][0]["tests"][0]["steps"].as_array().unwrap();
+
+    // Step 1: real capture failure.
+    assert_eq!(steps[0]["failure_category"], "capture_error");
+
+    // Steps 2 and 3: cascade fallout.
+    for (i, step) in steps.iter().enumerate().skip(1).take(2) {
+        assert_eq!(
+            step["failure_category"], "skipped_due_to_failed_capture",
+            "step {i} should be classified as skip, got {step:#?}"
+        );
+        assert_eq!(step["error_code"], "skipped_dependency");
+        let message = step["assertions"]["failures"][0]["message"]
+            .as_str()
+            .unwrap_or("");
+        assert!(
+            message.contains("user_id"),
+            "expected message to name the missing capture: {message:?}"
+        );
+    }
+
+    // Exit code stays at 3 because the root cause is a CaptureError —
+    // the cascade skips must not escalate the run further.
+    assert_eq!(output.status.code(), Some(3));
+}
+
+#[test]
+fn exists_where_asserts_identity_without_array_index() {
+    // Hits /users which returns an array with a known set of entries.
+    // The test selects by email (a stable identifier) instead of
+    // `$[0]`/exact length — the brittleness pattern NAZ-341 targets.
+    let server = DemoServer::start();
+    let dir = TempDir::new().unwrap();
+
+    let test_file = write_test_file(
+        &dir,
+        "exists-where.tarn.yaml",
+        &format!(
+            r#"
+name: Identity-based array assertion
+env:
+  base_url: "{}"
+steps:
+  - name: login
+    request:
+      method: POST
+      url: "{{{{ env.base_url }}}}/auth/login"
+      headers:
+        Content-Type: application/json
+      body:
+        email: admin@example.com
+        password: secret
+    assert:
+      status: 200
+    capture:
+      bearer: "$.token"
+  - name: create user A
+    request:
+      method: POST
+      url: "{{{{ env.base_url }}}}/users"
+      headers:
+        Authorization: "Bearer {{{{ capture.bearer }}}}"
+        Content-Type: application/json
+      body:
+        name: Alice
+        email: alice@example.com
+    assert:
+      status: 201
+  - name: create user B
+    request:
+      method: POST
+      url: "{{{{ env.base_url }}}}/users"
+      headers:
+        Authorization: "Bearer {{{{ capture.bearer }}}}"
+        Content-Type: application/json
+      body:
+        name: Bob
+        email: bob@example.com
+    assert:
+      status: 201
+  - name: list users
+    request:
+      method: GET
+      url: "{{{{ env.base_url }}}}/users"
+      headers:
+        Authorization: "Bearer {{{{ capture.bearer }}}}"
+    assert:
+      status: 200
+      body:
+        "$.data":
+          exists_where:
+            email: "alice@example.com"
+          not_exists_where:
+            email: "ghost@example.com"
+"#,
+            server.base_url(),
+        ),
+    );
+
+    let output = tarn()
+        .args(["run", &test_file, "--format", "json"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "expected success; stdout: {stdout}\nstderr: {stderr}"
+    );
+}
+
+#[test]
+fn poll_timeout_includes_final_observed_value() {
+    // /users/99999 always 404s — polling for status:200 will exhaust
+    // attempts, and the new diagnostic must include the last response's
+    // actual status so the operator can tell "stuck" from "progressing
+    // but never matches".
+    let server = DemoServer::start();
+    let dir = TempDir::new().unwrap();
+
+    let test_file = write_test_file(
+        &dir,
+        "poll-timeout.tarn.yaml",
+        &format!(
+            r#"
+name: Poll timeout diagnostics
+steps:
+  - name: Poll missing user
+    request:
+      method: GET
+      url: "{}/users/99999"
+    poll:
+      until:
+        status: 200
+      interval: 10ms
+      max_attempts: 2
+    assert:
+      status: 200
+"#,
+            server.base_url(),
+        ),
+    );
+
+    let output = tarn()
+        .args(["run", &test_file, "--format", "json"])
+        .output()
+        .unwrap();
+
+    // Polling timeouts are classified as runtime failures (exit code 3)
+    // to match how CI systems surface "the endpoint never reached the
+    // expected state" vs. a plain assertion mismatch.
+    assert_eq!(output.status.code(), Some(3));
+
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let step = &report["files"][0]["tests"][0]["steps"][0];
+
+    assert_eq!(step["failure_category"], "timeout");
+    assert_eq!(step["error_code"], "poll_condition_not_met");
+    // Richer diagnostic must carry the final response's status/summary so
+    // the JSON consumer (and the human renderer) can tell stuck from
+    // brittle. Prior behavior left both fields null on timeout.
+    let final_status = step["response_status"]
+        .as_u64()
+        .expect("final status present");
+    assert!(
+        (400..500).contains(&final_status),
+        "expected a 4xx final status from /users/99999, got {final_status}"
+    );
+    let summary = step["response_summary"].as_str().unwrap_or("");
+    assert!(
+        summary.contains(&final_status.to_string()),
+        "expected response_summary to echo the final status {}, got {:?}",
+        final_status,
+        summary
+    );
+
+    // The failing `poll.until` predicates must appear alongside the
+    // top-level timeout message with their actual observed values.
+    let details = step["assertions"]["details"].as_array().unwrap();
+    let final_status_str = final_status.to_string();
+    let final_state_emitted = details.iter().any(|d| {
+        d["assertion"]
+            .as_str()
+            .map(|s| s.starts_with("poll final:"))
+            .unwrap_or(false)
+            && d["actual"]
+                .as_str()
+                .unwrap_or("")
+                .contains(&final_status_str)
+    });
+    assert!(
+        final_state_emitted,
+        "expected a `poll final:` assertion surfacing the actual status {}, got {:#?}",
+        final_status, details
+    );
+}
+
+#[test]
+fn last_run_json_artifact_path_can_be_overridden() {
+    let dir = TempDir::new().unwrap();
+    let test_file = write_test_file(
+        &dir,
+        "override-path.tarn.yaml",
+        r#"
+name: Override
+steps:
+  - name: connect failure
+    request:
+      method: GET
+      url: "http://127.0.0.1:1/missing"
+    assert:
+      status: 200
+"#,
+    );
+
+    let custom = dir.path().join("reports").join("custom-run.json");
+    let output = tarn()
+        .args([
+            "run",
+            &test_file,
+            "--report-json",
+            &custom.display().to_string(),
+        ])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(3));
+    assert!(custom.is_file(), "expected {} to exist", custom.display());
+    // Default path should NOT be created when override is set.
+    assert!(!dir.path().join(".tarn").join("last-run.json").exists());
+}

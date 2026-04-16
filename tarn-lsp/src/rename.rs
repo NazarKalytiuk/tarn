@@ -84,7 +84,7 @@ use tarn::outline::{find_capture_declarations, CaptureScope};
 use tarn::parser;
 
 use crate::references::{CaptureScopeOwned, WorkspaceFile};
-use crate::server::ServerState;
+use crate::server::{is_tarn_file_uri, ServerState};
 use crate::token::{
     byte_offset_to_position, position_to_byte_offset, resolve_interpolation_token,
     scan_all_interpolations, InterpolationToken, InterpolationTokenSpan,
@@ -784,6 +784,9 @@ pub fn text_document_prepare_rename(
 ) -> Option<PrepareRenameResponse> {
     let uri = params.text_document.uri;
     let position = params.position;
+    if !is_tarn_file_uri(&uri) {
+        return None;
+    }
     let source = state.documents.get(&uri).map(|s| s.to_owned())?;
     let span = resolve_interpolation_token(&source, position)?;
     let ctx = PrepareRenameContext {
@@ -806,6 +809,9 @@ pub fn text_document_rename(
     let position = params.text_document_position.position;
     let new_name = params.new_name;
 
+    if !is_tarn_file_uri(&uri) {
+        return Ok(WorkspaceEdit::default());
+    }
     let source = match state.documents.get(&uri).map(|s| s.to_owned()) {
         Some(s) => s,
         None => return Ok(WorkspaceEdit::default()),

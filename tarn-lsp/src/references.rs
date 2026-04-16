@@ -48,7 +48,7 @@ use tarn::model::Location as TarnLocation;
 use tarn::outline::{find_capture_declarations, CaptureScope, Outline};
 use tarn::parser;
 
-use crate::server::ServerState;
+use crate::server::{is_tarn_file_uri, ServerState};
 use crate::token::{resolve_interpolation_token, scan_all_interpolations, InterpolationToken};
 
 /// Context the references renderer consults.
@@ -346,6 +346,9 @@ pub fn text_document_references(
     let uri = params.text_document_position.text_document.uri.clone();
     let position = params.text_document_position.position;
 
+    if !is_tarn_file_uri(&uri) {
+        return Vec::new();
+    }
     let Some(source) = state.documents.get(&uri).map(|s| s.to_owned()) else {
         return Vec::new();
     };

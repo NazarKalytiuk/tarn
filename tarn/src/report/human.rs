@@ -1,4 +1,4 @@
-use crate::assert::types::{FileResult, RunResult, StepResult, TestResult};
+use crate::assert::types::{FailureCategory, FileResult, RunResult, StepResult, TestResult};
 use crate::model::RedactionConfig;
 use crate::report::redaction::sanitize_assertion;
 use crate::report::RenderOptions;
@@ -179,6 +179,26 @@ fn render_step_into(
             step.name,
             step.duration_ms
         ));
+    } else if matches!(
+        step.error_category,
+        Some(FailureCategory::SkippedDueToFailedCapture)
+            | Some(FailureCategory::SkippedDueToFailFast)
+    ) {
+        // Skipped-cascade steps use a distinct glyph so operators can
+        // tell cascade fallout apart from primary failures at a glance.
+        output.push_str(&format!(
+            "   {} {} (skipped)\n",
+            "⊘".yellow(),
+            step.name.yellow(),
+        ));
+        if let Some(reason) = step.assertion_results.iter().find(|a| !a.passed) {
+            let reason = sanitize_assertion(reason, redaction, redacted_values);
+            output.push_str(&format!(
+                "     {} {}\n",
+                "└─".dimmed(),
+                reason.message.yellow()
+            ));
+        }
     } else {
         output.push_str(&format!(
             "   {} {} ({}ms)\n",

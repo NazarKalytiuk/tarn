@@ -51,7 +51,7 @@ use lsp_types::{
 use tarn::env::{self, EnvEntry};
 use tarn::parser;
 
-use crate::server::ServerState;
+use crate::server::{is_tarn_file_uri, ServerState};
 
 pub mod capture_field;
 pub mod extract_env;
@@ -146,6 +146,9 @@ pub fn text_document_code_action(
     let range = params.range;
     let lsp_ctx = params.context;
 
+    if !is_tarn_file_uri(&uri) {
+        return Vec::new();
+    }
     let Some(source) = state.documents.get(&uri).map(|s| s.to_owned()) else {
         return Vec::new();
     };

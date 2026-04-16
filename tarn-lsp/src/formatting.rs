@@ -40,7 +40,7 @@
 use lsp_types::{Position, Range, TextEdit, Url};
 use tarn::format;
 
-use crate::server::DocumentStore;
+use crate::server::{is_tarn_file_uri, DocumentStore};
 
 /// Build the list of text edits that transform `source` into
 /// `new_source`. Returns an empty `Vec` when the two buffers are
@@ -89,6 +89,9 @@ pub fn format_edits(source: &str, new_source: &str) -> Vec<TextEdit> {
 ///   "Language Server" output pane, then return empty. Formatting must
 ///   never corrupt a partially-broken test file.
 pub fn text_document_formatting(store: &DocumentStore, uri: &Url) -> Vec<TextEdit> {
+    if !is_tarn_file_uri(uri) {
+        return Vec::new();
+    }
     let Some(source) = store.get(uri) else {
         return Vec::new();
     };

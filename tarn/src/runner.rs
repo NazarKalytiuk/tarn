@@ -18,7 +18,7 @@ use crate::selector::{self, Selector};
 use base64::Engine;
 use indexmap::IndexMap;
 use std::collections::{BTreeSet, HashMap};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 /// Options controlling how tests are run.
@@ -34,6 +34,11 @@ pub struct RunOptions {
     /// of the file's declared `cookies:` mode. Used by the
     /// `--cookie-jar-per-test` flag and the VS Code extension's subset runs.
     pub cookie_jar_per_test: bool,
+    /// When true, any step failure inside a test marks every later
+    /// step in the same test as `SkippedDueToFailFast` instead of
+    /// running it. Keeps reports short when the first failure already
+    /// tells the whole story (auth break, schema mismatch, etc.).
+    pub fail_fast_within_test: bool,
 }
 
 /// Name of the default cookie jar used when no `cookies: <name>` is set on a step.
@@ -387,8 +392,41 @@ fn run_steps(
     base_dir: &Path,
 ) -> Result<Vec<StepResult>, TarnError> {
     let mut results = Vec::new();
+    // Track which capture names this scope failed to produce so that
+    // downstream steps referencing them can be classified as cascade
+    // fallout (`SkippedDueToFailedCapture`) instead of re-failing the
+    // run with `UnresolvedTemplate`. Keyed on capture name (not
+    // per-step) because callers can reference a single failed capture
+    // in many later steps; one failure name suppresses them all.
+    let mut failed_captures: BTreeSet<String> = BTreeSet::new();
+    let mut any_step_failed = false;
 
     for step in steps {
+        // `fail_fast_within_test`: once any step in this scope has
+        // failed, short-circuit the remaining ones so reports stop at
+        // the root cause.
+        if opts.fail_fast_within_test && any_step_failed {
+            results.push(fail_fast_skipped_step(step));
+            continue;
+        }
+
+        // If this step's request interpolates a capture that the test
+        // already failed to produce, skip the HTTP round-trip and
+        // record the cascade explicitly. This keeps the output short
+        // and machine-classifiable instead of flooding it with
+        // unresolved-template duplicates.
+        let cascade_refs = step_references_failed_captures(step, &failed_captures);
+        if !cascade_refs.is_empty() {
+            results.push(skipped_due_to_failed_capture(step, &cascade_refs));
+            any_step_failed = true;
+            // Propagate: anything this step would have captured is
+            // also unavailable downstream.
+            for name in step.capture.keys() {
+                failed_captures.insert(name.clone());
+            }
+            continue;
+        }
+
         let result = run_step(
             step,
             env,
@@ -402,10 +440,131 @@ fn run_steps(
             cookie_jars,
             base_dir,
         )?;
+
+        if !result.passed {
+            any_step_failed = true;
+            // Any declared capture whose value never made it into the
+            // shared `captures` map is a failed capture for cascade
+            // detection purposes. We use `captures_set` (the authority
+            // on what this step did produce) rather than the
+            // `error_category`, so a partial-failure path that captured
+            // some values and failed assertions on others still blocks
+            // downstream references to the missing names.
+            for name in step.capture.keys() {
+                if !result.captures_set.iter().any(|k| k == name) {
+                    failed_captures.insert(name.clone());
+                }
+            }
+        }
+
         results.push(result);
     }
 
     Ok(results)
+}
+
+/// Collect the `capture.<name>` references that `step`'s request makes
+/// and that appear in `failed_captures`. Returns the set of referenced
+/// names (sorted, deduped) so the caller can render a diagnostic like
+/// `skipped: prior capture 'user_id' failed`.
+fn step_references_failed_captures(step: &Step, failed_captures: &BTreeSet<String>) -> Vec<String> {
+    if failed_captures.is_empty() {
+        return Vec::new();
+    }
+
+    let mut refs: BTreeSet<String> = BTreeSet::new();
+    fn collect(out: &mut BTreeSet<String>, s: &str) {
+        for expr in interpolation::find_unresolved(s) {
+            if let Some(name) = expr.strip_prefix("capture.") {
+                out.insert(name.trim().to_string());
+            }
+        }
+    }
+    fn collect_json(out: &mut BTreeSet<String>, value: &serde_json::Value) {
+        for expr in interpolation::find_unresolved_in_json(value) {
+            if let Some(name) = expr.strip_prefix("capture.") {
+                out.insert(name.trim().to_string());
+            }
+        }
+    }
+
+    collect(&mut refs, &step.request.url);
+    for v in step.request.headers.values() {
+        collect(&mut refs, v);
+    }
+    if let Some(ref body) = step.request.body {
+        collect_json(&mut refs, body);
+    }
+    if let Some(ref form) = step.request.form {
+        for v in form.values() {
+            collect(&mut refs, v);
+        }
+    }
+    if let Some(ref auth) = step.request.auth {
+        if let Some(ref bearer) = auth.bearer {
+            collect(&mut refs, bearer);
+        }
+        if let Some(ref basic) = auth.basic {
+            collect(&mut refs, &basic.username);
+            collect(&mut refs, &basic.password);
+        }
+    }
+    if let Some(ref graphql) = step.request.graphql {
+        collect(&mut refs, &graphql.query);
+        if let Some(ref vars) = graphql.variables {
+            collect_json(&mut refs, vars);
+        }
+    }
+
+    refs.retain(|name| failed_captures.contains(name));
+    refs.into_iter().collect()
+}
+
+fn skipped_due_to_failed_capture(step: &Step, failed_refs: &[String]) -> StepResult {
+    let message = format!(
+        "Skipped: step references capture(s) that failed earlier in this test: {}. \
+         Fix the root-cause step first — this cascade failure is a direct consequence.",
+        failed_refs.join(", ")
+    );
+    StepResult {
+        name: step.name.clone(),
+        passed: false,
+        duration_ms: 0,
+        assertion_results: vec![AssertionResult::fail(
+            "cascade",
+            "prior captures available".to_string(),
+            format!("missing: {}", failed_refs.join(", ")),
+            message,
+        )],
+        request_info: None,
+        response_info: None,
+        error_category: Some(FailureCategory::SkippedDueToFailedCapture),
+        response_status: None,
+        response_summary: None,
+        captures_set: vec![],
+        location: step.location.clone(),
+    }
+}
+
+fn fail_fast_skipped_step(step: &Step) -> StepResult {
+    StepResult {
+        name: step.name.clone(),
+        passed: false,
+        duration_ms: 0,
+        assertion_results: vec![AssertionResult::fail(
+            "fail_fast",
+            "earlier steps passing".to_string(),
+            "earlier step failed".to_string(),
+            "Skipped: `fail_fast_within_test` aborted the remaining steps after an earlier failure.".to_string(),
+        )],
+        request_info: None,
+        response_info: None,
+        error_category: Some(FailureCategory::SkippedDueToFailFast),
+        response_status: None,
+        response_summary: None,
+        captures_set: vec![],
+        location: step.location.clone(),
+    }
 }
 
 /// Stamp each `AssertionResult` with its source `Location` (if the
@@ -523,20 +682,20 @@ fn record_redacted_capture_candidates(
     capture_map: &HashMap<String, crate::model::CaptureSpec>,
     redaction: &RedactionConfig,
     redacted_values: &mut BTreeSet<String>,
+    ctx: &Context,
 ) {
     for name in &redaction.captures {
         let Some(spec) = capture_map.get(name) else {
             continue;
         };
-        if let Ok(value) = capture::extract_capture(
-            response.status,
-            &response.url,
-            &response.body,
-            &response.headers,
-            &response.raw_headers,
-            name,
-            spec,
-        ) {
+        let view = capture::ResponseView {
+            status: response.status,
+            url: &response.url,
+            body: &response.body,
+            headers: &response.headers,
+            raw_headers: &response.raw_headers,
+        };
+        if let Ok(value) = capture::extract_capture(&view, name, spec, ctx) {
             insert_redacted_value(&capture::value_to_string(&value), redacted_values);
         }
     }
@@ -956,7 +1115,13 @@ fn run_step(
             jar.capture_from_response(&response.url, &response.raw_headers);
         }
 
-        record_redacted_capture_candidates(&response, &step.capture, redaction, redacted_values);
+        record_redacted_capture_candidates(
+            &response,
+            &step.capture,
+            redaction,
+            redacted_values,
+            &request.ctx,
+        );
 
         if opts.verbose {
             eprintln!("  <-- {} ({}ms)", response.status, response.duration_ms);
@@ -982,12 +1147,15 @@ fn run_step(
             let mut captured_keys = Vec::new();
             let capture_result = if !step.capture.is_empty() {
                 match capture::extract_captures(
-                    response.status,
-                    &response.url,
-                    &response.body,
-                    &response.headers,
-                    &response.raw_headers,
+                    &capture::ResponseView {
+                        status: response.status,
+                        url: &response.url,
+                        body: &response.body,
+                        headers: &response.headers,
+                        raw_headers: &response.raw_headers,
+                    },
                     &step.capture,
+                    &request.ctx,
                 ) {
                     Ok(new_captures) => {
                         captured_keys = new_captures.keys().cloned().collect();
@@ -1108,6 +1276,16 @@ fn run_step_poll(
         None
     };
 
+    // Persist enough context from each attempt so that a timeout can
+    // emit a real diagnostic instead of "Polling timed out after N
+    // attempts". NAZ-339: users cannot tell a real product bug from a
+    // brittle assertion or slow eventual consistency without the final
+    // observed value. We capture both the first and last attempts so the
+    // timeout report can flag whether the system is making progress
+    // (`"pending" → "ready"`, changing) or actually stuck.
+    let mut first_snapshot: Option<PollSnapshot> = None;
+    let mut last_snapshot: Option<PollSnapshot> = None;
+
     for attempt in 0..poll.max_attempts {
         if attempt > 0 {
             std::thread::sleep(std::time::Duration::from_millis(interval_ms));
@@ -1182,12 +1360,40 @@ fn run_step_poll(
             jar.capture_from_response(&response.url, &response.raw_headers);
         }
 
-        record_redacted_capture_candidates(&response, &step.capture, redaction, redacted_values);
+        record_redacted_capture_candidates(
+            &response,
+            &step.capture,
+            redaction,
+            redacted_values,
+            &request.ctx,
+        );
 
         // Check poll.until condition
         let until_interpolated = interpolate_assertion(&poll.until, &request.ctx);
         let until_results = assert::run_assertions(&until_interpolated, &response);
         let until_passed = until_results.iter().all(|a| a.passed);
+
+        // Snapshot this attempt in case it turns out to be the final one.
+        // We clone the response info pieces that are cheap (headers, url,
+        // body) rather than holding a ref — the response is consumed on
+        // each iteration, and on timeout we want the last attempt's data
+        // even though the loop has moved on.
+        let snapshot = PollSnapshot {
+            attempt_index: attempt,
+            response_status: response.status,
+            response_summary: summarize_response(&response),
+            response_info: ResponseInfo {
+                status: response.status,
+                headers: response.headers.clone(),
+                body: Some(response.body.clone()),
+            },
+            request_info: request_info.clone(),
+            until_results: until_results.clone(),
+        };
+        if first_snapshot.is_none() {
+            first_snapshot = Some(snapshot.clone());
+        }
+        last_snapshot = Some(snapshot);
 
         if until_passed {
             // Condition met — run the step's own assertions
@@ -1207,12 +1413,15 @@ fn run_step_poll(
             let mut captured_keys = Vec::new();
             if passed && !step.capture.is_empty() {
                 match capture::extract_captures(
-                    response.status,
-                    &response.url,
-                    &response.body,
-                    &response.headers,
-                    &response.raw_headers,
+                    &capture::ResponseView {
+                        status: response.status,
+                        url: &response.url,
+                        body: &response.body,
+                        headers: &response.headers,
+                        raw_headers: &response.raw_headers,
+                    },
                     &step.capture,
+                    &request.ctx,
                 ) {
                     Ok(new_captures) => {
                         captured_keys = new_captures.keys().cloned().collect();
@@ -1274,28 +1483,131 @@ fn run_step_poll(
         }
     }
 
-    // Polling timed out
+    // Polling timed out. Build a diagnostic that captures the final
+    // observed state plus a first-vs-last progress comparison so users
+    // can tell an actually-stuck system apart from a brittle assertion
+    // or slow eventual consistency.
+    let last = match last_snapshot {
+        Some(s) => s,
+        None => {
+            // poll.max_attempts == 0 is the only way we never entered the
+            // loop body; fall back to the original minimal message.
+            return Ok(StepResult {
+                name: step.name.clone(),
+                passed: false,
+                duration_ms: 0,
+                assertion_results: vec![AssertionResult::fail(
+                    "poll",
+                    "condition met",
+                    format!("not met after {} attempts", poll.max_attempts),
+                    format!(
+                        "Polling timed out after {} attempts (interval: {})",
+                        poll.max_attempts, poll.interval
+                    ),
+                )],
+                request_info: None,
+                response_info: None,
+                error_category: Some(FailureCategory::Timeout),
+                response_status: None,
+                response_summary: None,
+                captures_set: vec![],
+                location: step.location.clone(),
+            });
+        }
+    };
+
+    let mut assertion_results: Vec<AssertionResult> = Vec::new();
+    assertion_results.push(AssertionResult::fail(
+        "poll",
+        "condition met",
+        format!("not met after {} attempts", poll.max_attempts),
+        format!(
+            "Polling timed out after {} attempts (interval: {}). Last response: HTTP {} {}.",
+            poll.max_attempts, poll.interval, last.response_status, last.response_summary
+        ),
+    ));
+
+    // Surface the final attempt's per-predicate results so the report
+    // includes the actual value at each asserted JSONPath. We only carry
+    // over failures — predicates that happened to match on the last
+    // attempt would otherwise look confusing ("passed" assertions under
+    // a timeout).
+    for res in last.until_results.iter().filter(|r| !r.passed) {
+        let mut decorated = res.clone();
+        decorated.assertion = format!("poll final: {}", res.assertion);
+        assertion_results.push(decorated);
+    }
+
+    // First-vs-last comparison: when the actual value changed between
+    // attempts, the system is making progress but not reaching the
+    // expected state — a strong hint that the assertion is too strict
+    // rather than the endpoint being broken. When it stayed the same,
+    // the system is actually stuck.
+    if let Some(first) = first_snapshot {
+        if first.attempt_index != last.attempt_index {
+            for (i, last_res) in last.until_results.iter().enumerate() {
+                if last_res.passed {
+                    continue;
+                }
+                let first_actual = first
+                    .until_results
+                    .get(i)
+                    .map(|r| r.actual.as_str())
+                    .unwrap_or("<unknown>");
+                let progress_label = if first_actual == last_res.actual {
+                    "unchanged"
+                } else {
+                    "changed"
+                };
+                assertion_results.push(AssertionResult::fail(
+                    format!("poll progress: {}", last_res.assertion),
+                    first_actual.to_string(),
+                    last_res.actual.clone(),
+                    format!(
+                        "{} across {} attempts: first {:?}, last {:?}",
+                        progress_label,
+                        last.attempt_index + 1,
+                        first_actual,
+                        last_res.actual
+                    ),
+                ));
+            }
+        }
+    }
+
     Ok(StepResult {
         name: step.name.clone(),
         passed: false,
         duration_ms: 0,
-        assertion_results: vec![AssertionResult::fail(
-            "poll",
-            "condition met",
-            format!("not met after {} attempts", poll.max_attempts),
-            format!(
-                "Polling timed out after {} attempts (interval: {})",
-                poll.max_attempts, poll.interval
-            ),
-        )],
-        request_info: None,
-        response_info: None,
+        assertion_results,
+        request_info: Some(last.request_info),
+        response_info: Some(last.response_info),
         error_category: Some(FailureCategory::Timeout),
-        response_status: None,
-        response_summary: None,
+        response_status: Some(last.response_status),
+        response_summary: Some(last.response_summary),
         captures_set: vec![],
         location: step.location.clone(),
     })
+}
+
+/// Per-attempt state we need to carry across iterations so that a poll
+/// timeout can report the final observed value and whether the system
+/// was making progress between attempts. Clone-heavy because attempts
+/// are sparse and poll intervals typically dominate the total runtime;
+/// the allocation is cheap compared to the HTTP round-trip.
+#[derive(Debug, Clone)]
+struct PollSnapshot {
+    /// 0-based attempt index — used to decide whether first/last are
+    /// the same snapshot (single-attempt poll).
+    attempt_index: u32,
+    response_status: u16,
+    response_summary: String,
+    response_info: ResponseInfo,
+    request_info: RequestInfo,
+    /// Per-predicate assertion results from the `poll.until` check on
+    /// this attempt; their `actual` field is the observed value at each
+    /// JSONPath.
+    until_results: Vec<AssertionResult>,
 }
 
 /// Run Lua script after HTTP step if `script:` field is present.
@@ -1446,16 +1758,173 @@ fn interpolate_yaml_value(value: &serde_yaml::Value, ctx: &Context) -> serde_yam
     }
 }
 
-/// Discover test files in a directory matching *.tarn.yaml pattern.
+/// Directory basenames that are skipped during recursive test discovery
+/// unless the caller opts out. These cover three classes of false positives:
+/// nested Git worktrees that duplicate the whole suite
+/// (`.git`, `.worktrees`), vendored dependency trees (`node_modules`,
+/// `.venv`, `venv`), and build/scratch outputs (`dist`, `build`, `target`,
+/// `tmp`, `.tarn`). Matched by basename, not full path, so a user's own
+/// `tests/node_modules` is skipped the same way as a repo-root one.
+pub const DEFAULT_DISCOVERY_IGNORES: &[&str] = &[
+    ".git",
+    ".worktrees",
+    "node_modules",
+    ".venv",
+    "venv",
+    "dist",
+    "build",
+    "target",
+    "tmp",
+    ".tarn",
+];
+
+/// Configuration for [`discover_test_files_with_report`]. Callers wanting the
+/// documented defaults should use [`DiscoveryOptions::default`]; callers that
+/// truly want to scan everything (e.g. the `--no-default-excludes` flag) build
+/// an empty `ignored_dirs` vec.
+#[derive(Debug, Clone)]
+pub struct DiscoveryOptions {
+    /// Directory names (basename-matched) to skip during recursion.
+    pub ignored_dirs: Vec<String>,
+}
+
+impl Default for DiscoveryOptions {
+    fn default() -> Self {
+        Self {
+            ignored_dirs: DEFAULT_DISCOVERY_IGNORES
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
+        }
+    }
+}
+
+/// Output of a discovery scan. `files` is the list of `.tarn.yaml` paths
+/// that were selected; `excluded_roots` records the directories that were
+/// skipped because they matched `DiscoveryOptions.ignored_dirs`, and
+/// `duplicate_test_trees` flags the case where the search root contains more
+/// than one `tests/` ancestor holding discovered files (a strong hint of
+/// stale copies or nested worktrees surviving the excludes).
+#[derive(Debug, Clone)]
+pub struct DiscoveryReport {
+    /// The root directory that was scanned.
+    pub root: PathBuf,
+    /// Discovered `.tarn.yaml` files, sorted lexicographically.
+    pub files: Vec<String>,
+    /// Directories that were skipped by the ignore rules. Full paths, sorted.
+    pub excluded_roots: Vec<String>,
+    /// Ancestor directories whose basename is `tests` and that contain
+    /// at least one discovered file. Populated only when there are two or
+    /// more such ancestors under `root`.
+    pub duplicate_test_trees: Vec<String>,
+}
+
+/// Discover `.tarn.yaml` files recursively under `dir`, applying the
+/// default ignore rules. Equivalent to
+/// `discover_test_files_with_report(dir, &DiscoveryOptions::default())?.files`
+/// — kept as a stable entry point for embedders (tarn-mcp, the LSP crate,
+/// and existing tests) that do not need the summary data.
 pub fn discover_test_files(dir: &Path) -> Result<Vec<String>, TarnError> {
-    let pattern = format!("{}/**/*.tarn.yaml", dir.display());
-    let mut files: Vec<String> = glob::glob(&pattern)
-        .map_err(|e| TarnError::Config(format!("Invalid glob pattern: {}", e)))?
-        .filter_map(|entry| entry.ok())
-        .map(|path| path.display().to_string())
-        .collect();
+    let report = discover_test_files_with_report(dir, &DiscoveryOptions::default())?;
+    Ok(report.files)
+}
+
+/// Recursively discover `.tarn.yaml` files under `dir`, honoring
+/// `opts.ignored_dirs`, and return a summary the CLI can print before the
+/// run starts. The walker does not follow symlinked directories, so a
+/// symlink that loops back to `dir` does not cause an infinite walk.
+pub fn discover_test_files_with_report(
+    dir: &Path,
+    opts: &DiscoveryOptions,
+) -> Result<DiscoveryReport, TarnError> {
+    let mut files: Vec<String> = Vec::new();
+    let mut excluded: Vec<String> = Vec::new();
+
+    // DFS with an explicit stack avoids recursion blowing the stack on
+    // deeply nested test fixtures and keeps ordering deterministic.
+    let mut stack: Vec<PathBuf> = vec![dir.to_path_buf()];
+    while let Some(current) = stack.pop() {
+        let entries = match std::fs::read_dir(&current) {
+            Ok(rd) => rd,
+            Err(e) => {
+                return Err(TarnError::Config(format!(
+                    "Failed to read directory {}: {}",
+                    current.display(),
+                    e
+                )));
+            }
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            // Don't traverse symlinks to directories — they can create
+            // cycles and rarely point to something a caller wants in the
+            // default recursive scan.
+            let file_type = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(_) => continue,
+            };
+
+            if file_type.is_dir() {
+                let name = entry.file_name();
+                let name_str = name.to_string_lossy();
+                if opts
+                    .ignored_dirs
+                    .iter()
+                    .any(|ig| ig.as_str() == name_str.as_ref())
+                {
+                    excluded.push(path.display().to_string());
+                    continue;
+                }
+                stack.push(path);
+            } else if file_type.is_file() {
+                let name = entry.file_name();
+                if name.to_string_lossy().ends_with(".tarn.yaml") {
+                    files.push(path.display().to_string());
+                }
+            }
+        }
+    }
+
     files.sort();
-    Ok(files)
+    excluded.sort();
+
+    let duplicate_test_trees = detect_duplicate_test_trees(dir, &files);
+
+    Ok(DiscoveryReport {
+        root: dir.to_path_buf(),
+        files,
+        excluded_roots: excluded,
+        duplicate_test_trees,
+    })
+}
+
+/// Find ancestor directories named `tests` that contain at least one
+/// discovered file. Returns them only when there is more than one, so
+/// callers can warn the user that the run is pulling from separate
+/// fixture trees (typically a sign of stale copies in a worktree).
+fn detect_duplicate_test_trees(root: &Path, files: &[String]) -> Vec<String> {
+    use std::collections::BTreeSet;
+    let mut tests_ancestors: BTreeSet<String> = BTreeSet::new();
+    for file in files {
+        let path = Path::new(file);
+        for ancestor in path.ancestors().skip(1) {
+            if !ancestor.starts_with(root) {
+                break;
+            }
+            if ancestor.file_name().map(|n| n == "tests").unwrap_or(false) {
+                tests_ancestors.insert(ancestor.display().to_string());
+                // Don't break — record every `tests` ancestor on the path.
+                // `tests/unit/foo` and `tests/unit` both count, and the
+                // duplicate-tree check looks at the unique set.
+            }
+        }
+    }
+    if tests_ancestors.len() >= 2 {
+        tests_ancestors.into_iter().collect()
+    } else {
+        Vec::new()
+    }
 }
 
 #[cfg(test)]
@@ -1495,6 +1964,85 @@ mod tests {
         let files = discover_test_files(dir.path()).unwrap();
         assert_eq!(files.len(), 250);
         assert!(files.first().unwrap().ends_with("test-0.tarn.yaml"));
+    }
+
+    #[test]
+    fn discover_skips_default_ignored_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        for ignored in &[
+            ".git",
+            ".worktrees/head-baseline/tests",
+            "node_modules/pkg",
+            ".venv/lib",
+            "dist/snapshot",
+            "build/cache",
+            "target/debug/fixtures",
+            "tmp",
+            ".tarn/cache",
+        ] {
+            let sub = dir.path().join(ignored);
+            std::fs::create_dir_all(&sub).unwrap();
+            std::fs::write(sub.join("stale.tarn.yaml"), "name: stale\n").unwrap();
+        }
+
+        let kept = dir.path().join("tests");
+        std::fs::create_dir_all(&kept).unwrap();
+        std::fs::write(kept.join("real.tarn.yaml"), "name: real\n").unwrap();
+
+        let report =
+            discover_test_files_with_report(dir.path(), &DiscoveryOptions::default()).unwrap();
+
+        assert_eq!(report.files.len(), 1);
+        assert!(report.files[0].ends_with("real.tarn.yaml"));
+        // Every top-level ignored directory should be listed in
+        // excluded_roots so the summary can name them.
+        for name in &[".git", ".worktrees", "node_modules", ".venv", "target"] {
+            assert!(
+                report
+                    .excluded_roots
+                    .iter()
+                    .any(|r| r.ends_with(name) || r.contains(&format!("/{}", name))),
+                "expected exclusion of {name} in {:?}",
+                report.excluded_roots
+            );
+        }
+    }
+
+    #[test]
+    fn discover_with_empty_ignores_recurses_everywhere() {
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join(".worktrees/head-baseline/tests");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("stale.tarn.yaml"), "name: stale\n").unwrap();
+
+        let report = discover_test_files_with_report(
+            dir.path(),
+            &DiscoveryOptions {
+                ignored_dirs: Vec::new(),
+            },
+        )
+        .unwrap();
+        assert_eq!(report.files.len(), 1);
+        assert!(report.excluded_roots.is_empty());
+    }
+
+    #[test]
+    fn discover_flags_duplicate_tests_trees() {
+        // Simulate what EQHUB hit: a legitimate tests/ tree and a stale
+        // copy inside a non-ignored directory so the duplicate-tree check
+        // can still fire even after default excludes.
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("tests");
+        let stale = dir.path().join("baseline/tests");
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::create_dir_all(&stale).unwrap();
+        std::fs::write(real.join("a.tarn.yaml"), "").unwrap();
+        std::fs::write(stale.join("b.tarn.yaml"), "").unwrap();
+
+        let report =
+            discover_test_files_with_report(dir.path(), &DiscoveryOptions::default()).unwrap();
+        assert_eq!(report.files.len(), 2);
+        assert_eq!(report.duplicate_test_trees.len(), 2);
     }
 
     #[test]
@@ -1688,7 +2236,13 @@ steps:
         };
         let mut values = BTreeSet::new();
 
-        record_redacted_capture_candidates(&response, &capture_map, &redaction, &mut values);
+        record_redacted_capture_candidates(
+            &response,
+            &capture_map,
+            &redaction,
+            &mut values,
+            &Context::new(),
+        );
 
         assert_eq!(
             values.into_iter().collect::<Vec<_>>(),

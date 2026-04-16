@@ -28,7 +28,7 @@ use lsp_types::{
 use tarn::model::Location;
 use tarn::validation::{self, Severity as TarnSeverity, ValidationMessage};
 
-use crate::server::DocumentStore;
+use crate::server::{is_tarn_file_uri, DocumentStore};
 
 /// LSP `Diagnostic.source` value. Keep this as a single constant so editors
 /// that filter by source (Claude Code does) can anchor on one stable string.
@@ -40,11 +40,20 @@ pub const DIAGNOSTIC_SOURCE: &str = "tarn";
 /// If `uri` has no open document in `store` this is a no-op — the server
 /// would otherwise publish diagnostics for a buffer the client has already
 /// closed, which some clients treat as a protocol violation.
+///
+/// Non-`*.tarn.yaml` URIs are silently skipped: tarn-lsp is attached to
+/// every `.yaml` file by Claude Code's extension-based LSP matcher, so
+/// this guard keeps us from running the Tarn validator against foreign
+/// YAML (Kubernetes manifests, Compose files, etc.) and polluting the
+/// client's diagnostic panel.
 pub fn validate_and_publish(
     store: &DocumentStore,
     uri: &Url,
     connection: &Connection,
 ) -> Result<(), Box<dyn Error + Sync + Send>> {
+    if !is_tarn_file_uri(uri) {
+        return Ok(());
+    }
     let Some(source) = store.get(uri) else {
         return Ok(());
     };
@@ -56,10 +65,17 @@ pub fn validate_and_publish(
 
 /// Push an empty `publishDiagnostics` for `uri` so any previously reported
 /// diagnostics disappear from the client.
+///
+/// Non-`*.tarn.yaml` URIs are a no-op for the same reason
+/// [`validate_and_publish`] is: we never published anything for them, so
+/// there's nothing to clear.
 pub fn publish_empty(
     connection: &Connection,
     uri: &Url,
 ) -> Result<(), Box<dyn Error + Sync + Send>> {
+    if !is_tarn_file_uri(uri) {
+        return Ok(());
+    }
     publish(connection, uri, Vec::new())
 }
 

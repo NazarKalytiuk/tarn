@@ -12,6 +12,15 @@ pub enum FailureCategory {
     ParseError,
     CaptureError,
     UnresolvedTemplate,
+    /// The step was not executed because a capture referenced in its
+    /// request failed in an earlier step of the same test. Carrying a
+    /// distinct category (rather than re-emitting `UnresolvedTemplate`)
+    /// lets reports collapse cascade fallout under the root cause
+    /// without misrepresenting the later step as a fresh failure.
+    SkippedDueToFailedCapture,
+    /// The step was not executed because `fail_fast_within_test` is on
+    /// and an earlier step in the same test already failed.
+    SkippedDueToFailFast,
 }
 
 /// Stable machine-readable failure code for programmatic handling.
@@ -31,6 +40,9 @@ pub enum ErrorCode {
     ValidationFailed,
     ConfigurationError,
     ParseError,
+    /// Paired with `SkippedDueToFailedCapture` / `SkippedDueToFailFast`
+    /// so consumers can filter cascade fallout from primary failures.
+    SkippedDependency,
 }
 
 /// Result of a single assertion check.
@@ -185,6 +197,8 @@ impl StepResult {
                 }
             }
             Some(FailureCategory::UnresolvedTemplate) => Some(ErrorCode::InterpolationFailed),
+            Some(FailureCategory::SkippedDueToFailedCapture)
+            | Some(FailureCategory::SkippedDueToFailFast) => Some(ErrorCode::SkippedDependency),
             Some(FailureCategory::ParseError) => {
                 if lower.contains("interpolation") {
                     Some(ErrorCode::InterpolationFailed)

@@ -69,7 +69,7 @@ use crate::schema::{
     children_at_schema_path, schema_key_cache, PathSegment, SchemaField, SchemaFieldKind,
     SchemaKeyCache, SchemaPath,
 };
-use crate::server::DocumentStore;
+use crate::server::{is_tarn_file_uri, DocumentStore};
 use crate::token::{column_to_line_byte_offset, line_at_position};
 
 /// Classification of the cursor's *completion* context.
@@ -759,6 +759,9 @@ pub fn text_document_completion(
     uri: &Url,
     position: Position,
 ) -> Option<CompletionResponse> {
+    if !is_tarn_file_uri(uri) {
+        return None;
+    }
     let source = store.get(uri)?;
 
     // Interpolation contexts take precedence — they're the most

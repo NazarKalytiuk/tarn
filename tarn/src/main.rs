@@ -140,6 +140,25 @@ enum Commands {
         /// defaults and any `redaction:` block from config or test files.
         #[arg(long = "redact-header", value_name = "NAME")]
         redact_header: Vec<String>,
+
+        /// Include normally-ignored directories (`.git`, `.worktrees`,
+        /// `node_modules`, `.venv`/`venv`, `dist`, `build`, `target`, `tmp`,
+        /// `.tarn`) during test discovery. Use with care — it commonly
+        /// doubles the run by picking up stale worktree copies.
+        #[arg(long = "no-default-excludes")]
+        no_default_excludes: bool,
+
+        /// Override the path for the always-on JSON artifact. Defaults to
+        /// `<project-root>/.tarn/last-run.json`. Every run overwrites the
+        /// file so machines can always find the most recent result
+        /// without rerunning in `--format json`.
+        #[arg(long = "report-json", value_name = "PATH")]
+        report_json: Option<PathBuf>,
+
+        /// Skip writing the always-on JSON artifact. Use for transient
+        /// runs where persisting the result on disk is undesirable.
+        #[arg(long = "no-last-run-json")]
+        no_last_run_json: bool,
     },
 
     /// Validate test files without running
@@ -150,6 +169,10 @@ enum Commands {
         /// Output format: human (default) or json
         #[arg(long, default_value = "human")]
         format: String,
+
+        /// Include normally-ignored directories during discovery (see `run --no-default-excludes`).
+        #[arg(long = "no-default-excludes")]
+        no_default_excludes: bool,
     },
 
     /// Format Tarn test files into canonical YAML
@@ -175,6 +198,10 @@ enum Commands {
         /// Output format: human (default) or json
         #[arg(long, default_value = "human")]
         format: String,
+
+        /// Include normally-ignored directories during discovery (see `run --no-default-excludes`).
+        #[arg(long = "no-default-excludes")]
+        no_default_excludes: bool,
     },
 
     /// List project-defined named environments
@@ -329,6 +356,9 @@ fn main() {
             http1_1,
             http2,
             redact_header,
+            no_default_excludes,
+            report_json,
+            no_last_run_json,
         } => run_command(
             path,
             &format,
@@ -357,6 +387,9 @@ fn main() {
                 http_version: cli_http_version(http1_1, http2),
             },
             &redact_header,
+            no_default_excludes,
+            report_json.as_deref(),
+            no_last_run_json,
         ),
         Commands::Bench {
             path,
@@ -406,11 +439,23 @@ fn main() {
                 http_version: cli_http_version(http1_1, http2),
             },
         ),
-        Commands::Validate { path, format } => validate_command(path, &format),
+        Commands::Validate {
+            path,
+            format,
+            no_default_excludes,
+        } => validate_command(path, &format, no_default_excludes),
         Commands::Fmt { path, check } => fmt_command(path, check),
-        Commands::List { tag, file, format } => {
-            list_command(tag.as_deref(), file.as_deref(), &format)
-        }
+        Commands::List {
+            tag,
+            file,
+            format,
+            no_default_excludes,
+        } => list_command(
+            tag.as_deref(),
+            file.as_deref(),
+            &format,
+            no_default_excludes,
+        ),
         Commands::Env { json } => env_command(json),
         Commands::ImportHurl { path, output } => import_hurl_command(&path, output.as_deref()),
         Commands::Init => init_command(),
@@ -445,6 +490,9 @@ fn run_command(
     cookie_jar_per_test: bool,
     cli_http_transport: HttpTransportConfig,
     extra_redact_headers: &[String],
+    no_default_excludes: bool,
+    report_json_path: Option<&Path>,
+    no_last_run_json: bool,
 ) -> i32 {
     let project =
         match load_project_context(path.as_deref().map(Path::new).unwrap_or(Path::new("."))) {
@@ -464,7 +512,7 @@ fn run_command(
             return 2;
         }
     };
-    let output_targets = match parse_output_targets(format_specs) {
+    let mut output_targets = match parse_output_targets(format_specs) {
         Ok(targets) => targets,
         Err(e) => {
             eprintln!(
@@ -474,6 +522,27 @@ fn run_command(
             return 2;
         }
     };
+
+    // Every run produces a machine-readable JSON artifact by default so
+    // human-mode runs can still be inspected programmatically after the
+    // fact. We resolve the path here (user override > default under the
+    // project root) and prepend an explicit OutputTarget — this reuses
+    // the existing `emit_run_outputs` plumbing (path resolution, error
+    // reporting, the "<format> report saved to …" message) instead of
+    // carving out a side-channel writer.
+    if !no_last_run_json {
+        let artifact_path = match report_json_path {
+            Some(p) => p.to_path_buf(),
+            None => project.root_dir.join(".tarn").join("last-run.json"),
+        };
+        output_targets.insert(
+            0,
+            OutputTarget {
+                format: OutputFormat::Json,
+                path: Some(artifact_path),
+            },
+        );
+    }
     let json_output_mode = match json_mode.parse::<JsonOutputMode>() {
         Ok(mode) => mode,
         Err(e) => {
@@ -490,17 +559,32 @@ fn run_command(
         }
     };
 
-    let files = match resolve_files(path) {
-        Ok(f) => f,
+    let discovery_report = match resolve_files_with_report(path, no_default_excludes) {
+        Ok(r) => r,
         Err(e) => {
             eprintln!("Error: {}", e);
             return e.exit_code();
         }
     };
+    let files = discovery_report.files.clone();
 
     if files.is_empty() {
         eprintln!("No test files found");
         return 2;
+    }
+
+    // Only print the human-mode discovery summary when a human-mode
+    // stdout target actually exists: if every output target is a
+    // structured file (json=run.json, junit=out.xml, etc.) the summary
+    // would be stray noise, and NDJSON requires a clean stream.
+    let emits_human_stdout = !ndjson
+        && output_targets
+            .iter()
+            .any(|t| matches!(t.format, OutputFormat::Human) && t.path.is_none());
+    if emits_human_stdout {
+        if let Some(summary) = format_discovery_summary(&discovery_report, no_default_excludes) {
+            println!("{}", summary);
+        }
     }
 
     let run_opts = runner::RunOptions {
@@ -508,6 +592,7 @@ fn run_command(
         dry_run,
         http: cli_http_transport,
         cookie_jar_per_test,
+        fail_fast_within_test: project.config.fail_fast_within_test,
     };
     let effective_parallel = parallel || project.config.parallel;
 
@@ -1108,13 +1193,43 @@ fn emit_bench_outputs(
 }
 
 fn resolve_files(path: Option<String>) -> Result<Vec<String>, TarnError> {
+    Ok(resolve_files_with_report(path, false)?.files)
+}
+
+/// Like [`resolve_files`] but also returns the excluded directories and any
+/// detected duplicate `tests/` trees so the caller (currently only the
+/// `run` subcommand) can surface them in a discovery summary.
+fn resolve_files_with_report(
+    path: Option<String>,
+    no_default_excludes: bool,
+) -> Result<runner::DiscoveryReport, TarnError> {
+    let opts = if no_default_excludes {
+        runner::DiscoveryOptions {
+            ignored_dirs: Vec::new(),
+        }
+    } else {
+        runner::DiscoveryOptions::default()
+    };
+
     match path {
         Some(p) => {
             let path = Path::new(&p);
             if path.is_file() {
-                Ok(vec![p])
+                // Explicit single-file inputs bypass the walker: there's
+                // nothing to exclude, and the report should still list the
+                // file so the downstream caller can treat all code paths
+                // uniformly.
+                Ok(runner::DiscoveryReport {
+                    root: path
+                        .parent()
+                        .map(|p| p.to_path_buf())
+                        .unwrap_or_else(|| Path::new(".").to_path_buf()),
+                    files: vec![p],
+                    excluded_roots: Vec::new(),
+                    duplicate_test_trees: Vec::new(),
+                })
             } else if path.is_dir() {
-                runner::discover_test_files(path)
+                runner::discover_test_files_with_report(path, &opts)
             } else {
                 Err(TarnError::Config(format!("Path not found: {}", p)))
             }
@@ -1123,15 +1238,70 @@ fn resolve_files(path: Option<String>) -> Result<Vec<String>, TarnError> {
             let project = load_project_context(Path::new("."))?;
             let tests_dir = project.root_dir.join(&project.config.test_dir);
             if tests_dir.is_dir() {
-                runner::discover_test_files(&tests_dir)
+                runner::discover_test_files_with_report(&tests_dir, &opts)
             } else {
-                runner::discover_test_files(&project.root_dir)
+                runner::discover_test_files_with_report(&project.root_dir, &opts)
             }
         }
     }
 }
 
-fn validate_command(path: Option<String>, format: &str) -> i32 {
+/// Render a one-to-three line discovery summary for human output. Returns
+/// `None` when the report is uninteresting (a single-file input, no
+/// exclusions, no duplicate trees) so the command stays quiet by default.
+fn format_discovery_summary(
+    report: &runner::DiscoveryReport,
+    no_default_excludes: bool,
+) -> Option<String> {
+    let has_interesting_content = !report.excluded_roots.is_empty()
+        || !report.duplicate_test_trees.is_empty()
+        || report.files.len() > 1;
+    if !has_interesting_content {
+        return None;
+    }
+
+    let mut out = String::new();
+    out.push_str(&format!(
+        "Discovered {} test file{} under {}\n",
+        report.files.len(),
+        if report.files.len() == 1 { "" } else { "s" },
+        report.root.display(),
+    ));
+
+    if no_default_excludes {
+        out.push_str("  (default excludes disabled — scanning every nested directory)\n");
+    } else if !report.excluded_roots.is_empty() {
+        // Keep the list compact: most repos will only trip one or two
+        // (usually `.git` and `node_modules`). Collapse by basename so
+        // twenty `.git` copies deep in worktrees don't flood the console.
+        let mut names: Vec<String> = report
+            .excluded_roots
+            .iter()
+            .filter_map(|p| {
+                Path::new(p)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+            })
+            .collect();
+        names.sort();
+        names.dedup();
+        out.push_str(&format!("  Excluded: {}\n", names.join(", ")));
+    }
+
+    if !report.duplicate_test_trees.is_empty() {
+        out.push_str("  Warning: multiple `tests` trees discovered under this root:\n");
+        for tree in &report.duplicate_test_trees {
+            out.push_str(&format!("    - {}\n", tree));
+        }
+        out.push_str(
+            "  If this was not intentional, pass an explicit path or add the stale copy to your ignores.\n",
+        );
+    }
+
+    Some(out.trim_end().to_string())
+}
+
+fn validate_command(path: Option<String>, format: &str, no_default_excludes: bool) -> i32 {
     let json_format = match format.to_ascii_lowercase().as_str() {
         "human" => false,
         "json" => true,
@@ -1144,8 +1314,8 @@ fn validate_command(path: Option<String>, format: &str) -> i32 {
         }
     };
 
-    let files = match resolve_files(path) {
-        Ok(f) => f,
+    let files = match resolve_files_with_report(path, no_default_excludes) {
+        Ok(r) => r.files,
         Err(e) => {
             if json_format {
                 let output = serde_json::json!({
@@ -1182,7 +1352,21 @@ fn validate_files_human(files: &[String]) -> i32 {
     for file_path in files {
         let path = Path::new(file_path);
         match parser::parse_file(path) {
-            Ok(_) => println!("  ✓ {}", file_path),
+            Ok(_) => {
+                println!("  ✓ {}", file_path);
+                // Lint pass: surface brittle-pattern warnings after a
+                // successful parse. Warnings never fail validation —
+                // they are advisory so operators can tighten tests
+                // before the next rerun (NAZ-342).
+                for warning in collect_lint_warnings(path) {
+                    let loc = warning
+                        .location
+                        .as_ref()
+                        .map(|l| format!(" ({}:{}:{})", file_path, l.line, l.column))
+                        .unwrap_or_default();
+                    println!("    ⚠ warning{}: {}", loc, warning.message);
+                }
+            }
             Err(e) => {
                 println!("  ✗ {}: {}", file_path, e);
                 all_valid = false;
@@ -1194,6 +1378,19 @@ fn validate_files_human(files: &[String]) -> i32 {
     } else {
         2
     }
+}
+
+/// Rerun just the warning-severity pass of `validate_document` on a
+/// parsed file. Returns an empty vector when the file doesn't parse —
+/// the caller has already surfaced that error.
+fn collect_lint_warnings(path: &Path) -> Vec<tarn::validation::ValidationMessage> {
+    let Ok(source) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    tarn::validation::validate_document(path, &source)
+        .into_iter()
+        .filter(|m| matches!(m.severity, tarn::validation::Severity::Warning))
+        .collect()
 }
 
 fn validate_files_json(files: &[String]) -> i32 {
@@ -1223,10 +1420,36 @@ fn validate_files_json(files: &[String]) -> i32 {
                 serde_json::Value::Object(obj)
             })
             .collect();
+        // Warnings only appear when the file parsed successfully. They
+        // are advisory and do not flip `valid` to false.
+        let warnings_json: Vec<serde_json::Value> = if valid {
+            collect_lint_warnings(path)
+                .iter()
+                .map(|warning| {
+                    let mut obj = serde_json::Map::new();
+                    obj.insert(
+                        "code".into(),
+                        serde_json::Value::String(warning.code.as_str().to_string()),
+                    );
+                    obj.insert(
+                        "message".into(),
+                        serde_json::Value::String(warning.message.clone()),
+                    );
+                    if let Some(loc) = &warning.location {
+                        obj.insert("line".into(), serde_json::Value::from(loc.line));
+                        obj.insert("column".into(), serde_json::Value::from(loc.column));
+                    }
+                    serde_json::Value::Object(obj)
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         file_entries.push(serde_json::json!({
             "file": file_path,
             "valid": valid,
             "errors": error_json,
+            "warnings": warnings_json,
         }));
     }
     let output = serde_json::json!({ "files": file_entries });
@@ -1393,7 +1616,12 @@ fn fmt_command(path: Option<String>, check: bool) -> i32 {
     }
 }
 
-fn list_command(tag: Option<&str>, file: Option<&Path>, format: &str) -> i32 {
+fn list_command(
+    tag: Option<&str>,
+    file: Option<&Path>,
+    format: &str,
+    no_default_excludes: bool,
+) -> i32 {
     let json_format = match format.to_ascii_lowercase().as_str() {
         "human" => false,
         "json" => true,
@@ -1424,8 +1652,8 @@ fn list_command(tag: Option<&str>, file: Option<&Path>, format: &str) -> i32 {
                 return e.exit_code();
             }
         },
-        None => match resolve_files(None) {
-            Ok(f) => f,
+        None => match resolve_files_with_report(None, no_default_excludes) {
+            Ok(r) => r.files,
             Err(e) => {
                 if json_format {
                     let output = serde_json::json!({
@@ -1682,7 +1910,20 @@ struct ProjectContext {
 
 fn load_project_context(start_dir: &Path) -> Result<ProjectContext, TarnError> {
     let start_dir = absolute_path(start_dir);
-    let root_dir = config::find_project_root(&start_dir).unwrap_or(start_dir);
+    // Normalize to a directory: callers frequently pass a file path (e.g.
+    // `tarn run tests/health.tarn.yaml`) and downstream code treats
+    // `root_dir` as a directory for `.join("tests")`,
+    // `.join(".tarn/last-run.json")`, etc. Without this step those joins
+    // would produce `<file>/…` which is not a valid filesystem path.
+    let search_root = if start_dir.is_file() {
+        start_dir
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| start_dir.clone())
+    } else {
+        start_dir.clone()
+    };
+    let root_dir = config::find_project_root(&search_root).unwrap_or(search_root);
     let config = config::load_config(&root_dir)?;
     Ok(ProjectContext { root_dir, config })
 }
@@ -1896,7 +2137,15 @@ fn run_result_exit_code(run_result: &RunResult) -> i32 {
             Some(FailureCategory::ParseError) | Some(FailureCategory::UnresolvedTemplate) => {
                 exit_code = exit_code.max(2)
             }
-            Some(FailureCategory::AssertionFailed) | None => {}
+            // Cascade fallout and fail-fast skips never bump the exit
+            // code above 1 — the root-cause step already set the
+            // correct category (usually CaptureError → 3). Treating
+            // a skip as a fresh runtime error would double-count the
+            // same failure.
+            Some(FailureCategory::SkippedDueToFailedCapture)
+            | Some(FailureCategory::SkippedDueToFailFast)
+            | Some(FailureCategory::AssertionFailed)
+            | None => {}
         }
     }
 
@@ -2340,6 +2589,7 @@ steps:
                 cert: None,
                 key: None,
                 insecure: false,
+                fail_fast_within_test: false,
             },
         );
 
@@ -2403,6 +2653,7 @@ steps:
                 cert: None,
                 key: None,
                 insecure: false,
+                fail_fast_within_test: false,
             },
         );
 
@@ -2437,6 +2688,7 @@ steps:
             cert: Some("project-cert.pem".into()),
             key: Some("project-key.pem".into()),
             insecure: false,
+            fail_fast_within_test: false,
         };
 
         let transport = resolve_http_transport_config(
@@ -2477,6 +2729,7 @@ steps:
             cert: Some("project-cert.pem".into()),
             key: Some("project-key.pem".into()),
             insecure: true,
+            fail_fast_within_test: false,
         };
 
         let transport = resolve_http_transport_config(&config, &HttpTransportConfig::default());

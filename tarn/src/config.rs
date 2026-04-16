@@ -87,6 +87,13 @@ pub struct TarnConfig {
     /// Disable TLS certificate and hostname verification.
     #[serde(default)]
     pub insecure: bool,
+
+    /// Abort the remaining steps inside each test the moment one step
+    /// fails. Keeps reports short in integration suites where the first
+    /// failure (auth break, schema mismatch, missing capture) makes
+    /// every subsequent step a cascade echo rather than new information.
+    #[serde(default, alias = "fail-fast-within-test")]
+    pub fail_fast_within_test: bool,
 }
 
 fn default_test_dir() -> String {
@@ -118,6 +125,7 @@ impl Default for TarnConfig {
             cert: None,
             key: None,
             insecure: false,
+            fail_fast_within_test: false,
         }
     }
 }
@@ -329,6 +337,7 @@ mod tests {
             cert: Some("certs/client.pem".into()),
             key: Some("certs/client-key.pem".into()),
             insecure: true,
+            fail_fast_within_test: false,
         };
 
         let transport = config.http_transport();
@@ -360,6 +369,7 @@ mod tests {
             cert: None,
             key: None,
             insecure: false,
+            fail_fast_within_test: false,
         }
         .normalized();
 

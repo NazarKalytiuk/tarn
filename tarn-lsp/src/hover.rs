@@ -42,7 +42,7 @@ use tarn::parser;
 
 use crate::code_actions::response_source::{DiskResponseSource, RecordedResponseSource};
 use crate::schema::schema_key_cache;
-use crate::server::DocumentStore;
+use crate::server::{is_tarn_file_uri, DocumentStore};
 use crate::token::{
     byte_offset_to_position, find_line_end, find_subslice, is_identifier, position_to_byte_offset,
     position_to_line_start,
@@ -1113,6 +1113,9 @@ fn uri_to_path(uri: &Url) -> std::path::PathBuf {
 /// tracked in `store`. Does not error for missing documents — LSP clients
 /// occasionally send hover for a stale buffer and expect a silent `null`.
 pub fn text_document_hover(store: &DocumentStore, uri: &Url, position: Position) -> Option<Hover> {
+    if !is_tarn_file_uri(uri) {
+        return None;
+    }
     let source = store.get(uri)?;
     let span = resolve_hover_token(source, position)?;
     let schema_keys = schema_key_descriptions();

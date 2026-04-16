@@ -325,7 +325,7 @@ pub enum CaptureSpec {
 }
 
 /// Extended capture specification supporting multiple response sources with optional regex extraction.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Default)]
 pub struct ExtendedCapture {
     /// Capture from a response header (case-insensitive lookup)
     pub header: Option<String>,
@@ -341,6 +341,14 @@ pub struct ExtendedCapture {
     pub url: Option<bool>,
     /// Optional regex to extract a sub-match (capture group 1)
     pub regex: Option<String>,
+    /// Predicate filter for arrays: when `jsonpath` yields an array,
+    /// keep only elements whose every field equals (or satisfies the
+    /// nested operator map for) the corresponding entry in this
+    /// mapping. Combined with `first`/`last`/`count` transforms this
+    /// replaces brittle `$[0]` captures from shared list endpoints with
+    /// identity-based selection (NAZ-341).
+    #[serde(default, rename = "where")]
+    pub where_predicate: Option<serde_yaml::Value>,
 }
 
 /// Polling configuration: re-execute step until a condition is met.

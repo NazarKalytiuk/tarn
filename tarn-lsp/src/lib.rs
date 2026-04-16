@@ -29,5 +29,6 @@ pub mod workspace;
 
 pub use capabilities::server_capabilities;
 pub use server::{
-    run, run_with_connection, DocumentStore, ServerState, SERVER_NAME, SERVER_VERSION,
+    is_tarn_file_uri, run, run_with_connection, DocumentStore, ServerState, SERVER_NAME,
+    SERVER_VERSION,
 };

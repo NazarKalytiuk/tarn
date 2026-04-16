@@ -58,7 +58,7 @@ use serde_json::json;
 use tarn::outline::{outline_document, Outline, OutlineSpan, StepOutline, TestOutline};
 use tarn::selector::{format_step_selector, format_test_selector};
 
-use crate::server::DocumentStore;
+use crate::server::{is_tarn_file_uri, DocumentStore};
 
 /// Well-known command ID for the `Run test` lens. The client is
 /// expected to handle this on its own side by shelling out to
@@ -196,15 +196,6 @@ fn span_to_range(span: &OutlineSpan) -> Range {
         span.end_column.saturating_sub(1) as u32,
     );
     Range::new(start, end)
-}
-
-/// True when `uri` looks like a Tarn test file — the same rule
-/// [`crate::workspace`] uses for the filesystem walk. Everything else
-/// short-circuits to an empty lens list.
-fn is_tarn_file_uri(uri: &Url) -> bool {
-    let path = uri.path();
-    let basename = path.rsplit('/').next().unwrap_or("");
-    basename.ends_with(".tarn.yaml") || basename.ends_with(".tarn.yml")
 }
 
 /// Convert an LSP `Url` to a `PathBuf` for the outline extractor.

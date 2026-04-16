@@ -38,6 +38,13 @@ pub(crate) const ASSERTION_OPERATORS: &[&str] = &[
     "gte",
     "lt",
     "lte",
+    // Identifier-based array primitives (NAZ-341). These let tests
+    // assert "the list contains *a record with these fields*" without
+    // committing to a specific array index or exact length, which is
+    // the brittleness pattern that dominated the EQHUB investigation.
+    "exists_where",
+    "not_exists_where",
+    "contains_object",
 ];
 
 /// Assert body fields via JSONPath expressions.
@@ -694,6 +701,16 @@ fn assert_operator_map(
                     &label, path, "<=", threshold, actual_num, passes,
                 ));
             }
+            "exists_where" | "contains_object" => {
+                results.push(assert_predicate_in_array(
+                    &label, path, actual_val, val, /* should_exist */ true,
+                ));
+            }
+            "not_exists_where" => {
+                results.push(assert_predicate_in_array(
+                    &label, path, actual_val, val, /* should_exist */ false,
+                ));
+            }
             other => {
                 results.push(AssertionResult::fail(
                     &label,
@@ -706,6 +723,164 @@ fn assert_operator_map(
     }
 
     results
+}
+
+/// `exists_where` / `not_exists_where` / `contains_object` assertion.
+///
+/// `should_exist = true` passes when at least one element of the array
+/// matches the predicate; `should_exist = false` passes when no element
+/// matches. The predicate is the YAML value the user wrote — a mapping
+/// of `{ field: expected }` pairs where `expected` is either a scalar
+/// (exact match) or a nested operator map (e.g. `{ matches: "^usr_" }`).
+fn assert_predicate_in_array(
+    label: &str,
+    path: &str,
+    actual_val: &Value,
+    predicate: &serde_yaml::Value,
+    should_exist: bool,
+) -> AssertionResult {
+    let predicate_map = match predicate {
+        serde_yaml::Value::Mapping(m) => m,
+        _ => {
+            return AssertionResult::fail(
+                label,
+                "predicate mapping".to_string(),
+                format!("{:?}", predicate),
+                format!(
+                    "JSONPath {}: exists_where/contains_object expects an object predicate \
+                     (e.g. `exists_where: {{ id: \"...\", name: \"...\" }}`)",
+                    path
+                ),
+            );
+        }
+    };
+
+    let items = match actual_val {
+        Value::Array(a) => a.as_slice(),
+        _ => {
+            return AssertionResult::fail(
+                label,
+                "array at path".to_string(),
+                json_type_name(actual_val).to_string(),
+                format!(
+                    "JSONPath {}: exists_where/contains_object requires an array at the path, got {}",
+                    path,
+                    json_type_name(actual_val),
+                ),
+            );
+        }
+    };
+
+    let matches = items
+        .iter()
+        .any(|item| object_matches_predicate(item, predicate_map));
+
+    let op_label = if should_exist {
+        "exists_where"
+    } else {
+        "not_exists_where"
+    };
+    let predicate_str = predicate_summary(predicate_map);
+
+    if should_exist == matches {
+        AssertionResult::pass(
+            label,
+            format!("{} {}", op_label, predicate_str),
+            format!("{} elements scanned", items.len()),
+        )
+    } else if should_exist {
+        AssertionResult::fail(
+            label,
+            format!("{} {}", op_label, predicate_str),
+            format!("no match in {} elements", items.len()),
+            format!(
+                "JSONPath {}: expected at least one object matching {}, none of the {} items did. \
+                 Consider asserting by a stable identifier — array position and exact length are \
+                 brittle on shared endpoints.",
+                path,
+                predicate_str,
+                items.len()
+            ),
+        )
+    } else {
+        let first_match = items
+            .iter()
+            .find(|item| object_matches_predicate(item, predicate_map))
+            .map(format_value)
+            .unwrap_or_default();
+        AssertionResult::fail(
+            label,
+            format!("{} {}", op_label, predicate_str),
+            format!("match found: {}", first_match),
+            format!(
+                "JSONPath {}: expected no object matching {}, but found {}",
+                path, predicate_str, first_match
+            ),
+        )
+    }
+}
+
+/// Render a human-readable summary of an `{ field: expected }` predicate —
+/// used in assertion messages so the operator can see what was being
+/// matched without having to re-read the YAML.
+fn predicate_summary(map: &serde_yaml::Mapping) -> String {
+    let mut parts = Vec::with_capacity(map.len());
+    for (k, v) in map {
+        let key_str = k.as_str().unwrap_or("<?>").to_string();
+        let value_str = match v {
+            serde_yaml::Value::Mapping(_) => "<operator map>".to_string(),
+            other => format_value(&yaml_to_json(other)),
+        };
+        parts.push(format!("{}: {}", key_str, value_str));
+    }
+    format!("{{ {} }}", parts.join(", "))
+}
+
+/// Check whether `item` (expected to be a JSON object) satisfies every
+/// key/value pair in `predicate`. Scalar predicate values match by
+/// equality; mapping predicate values are treated as operator maps and
+/// dispatched through [`assert_operator_map`] — this is what lets users
+/// write `exists_where: { id: "x", role: { matches: "^admin$" } }`
+/// without inventing a second mini-language.
+pub(crate) fn object_matches_predicate(item: &Value, predicate: &serde_yaml::Mapping) -> bool {
+    let obj = match item {
+        Value::Object(o) => o,
+        // A predicate can only match an object — any array/scalar in the
+        // input is an automatic miss.
+        _ => return false,
+    };
+
+    for (key, expected) in predicate {
+        let Some(field) = key.as_str() else {
+            return false;
+        };
+        let actual = match obj.get(field) {
+            Some(v) => v.clone(),
+            None => return false,
+        };
+
+        match expected {
+            serde_yaml::Value::Mapping(inner) => {
+                // Inner operator map: reuse the existing assertion
+                // dispatch by rendering a single-field assertion and
+                // checking it passed. Going through the same code path
+                // keeps behaviour consistent (e.g. numeric coercion
+                // rules in `eq`, regex caching in `matches`).
+                let sub_results =
+                    assert_operator_map(&format!("predicate.{field}"), &Some(actual), &[], inner);
+                if sub_results.iter().any(|r| !r.passed) {
+                    return false;
+                }
+            }
+            _ => {
+                if !values_equal(&actual, &yaml_to_json(expected)) {
+                    return false;
+                }
+            }
+        }
+    }
+
+    true
 }
 
 fn equality_failure(label: &str, path: &str, expected: &Value, actual: &Value) -> AssertionResult {
@@ -1771,5 +1946,81 @@ mod tests {
         let results = run(r#"{"name": "Alice"}"#, r#""$.name": { foobar: "test" }"#);
         assert!(!results[0].passed);
         assert!(results[0].message.contains("Unknown assertion operator"));
+    }
+
+    // --- Array predicate operators (exists_where/not_exists_where/contains_object) ---
+
+    #[test]
+    fn exists_where_matches_by_identifier_fields() {
+        let results = run(
+            r#"{"users": [{"id": "a", "role": "user"}, {"id": "b", "role": "admin"}]}"#,
+            r#""$.users": { exists_where: { id: "b", role: "admin" } }"#,
+        );
+        assert!(results[0].passed, "{:?}", results[0]);
+    }
+
+    #[test]
+    fn exists_where_reports_the_other_items_on_miss() {
+        // This is the EQHUB-style failure: the list is long, the test
+        // wanted a specific record, and the diagnostic must say what's
+        // missing, not just "assertion failed".
+        let results = run(
+            r#"{"users": [{"id": "a"}, {"id": "b"}, {"id": "c"}]}"#,
+            r#""$.users": { exists_where: { id: "missing" } }"#,
+        );
+        assert!(!results[0].passed);
+        assert!(
+            results[0].message.contains("3 items")
+                && results[0].message.contains("id: \"missing\""),
+            "expected message to reference 3 scanned items and the predicate, got {:?}",
+            results[0].message
+        );
+    }
+
+    #[test]
+    fn not_exists_where_rejects_forbidden_object() {
+        let passed = run(
+            r#"{"users": [{"id": "a"}, {"id": "b"}]}"#,
+            r#""$.users": { not_exists_where: { id: "c" } }"#,
+        );
+        assert!(passed[0].passed);
+
+        let failed = run(
+            r#"{"users": [{"id": "a"}, {"id": "b"}]}"#,
+            r#""$.users": { not_exists_where: { id: "a" } }"#,
+        );
+        assert!(!failed[0].passed);
+    }
+
+    #[test]
+    fn contains_object_is_alias_for_exists_where() {
+        let results = run(
+            r#"{"items": [{"sku": "A1"}, {"sku": "B2"}]}"#,
+            r#""$.items": { contains_object: { sku: "A1" } }"#,
+        );
+        assert!(results[0].passed);
+    }
+
+    #[test]
+    fn exists_where_supports_nested_operator_maps_in_predicate() {
+        let results = run(
+            r#"{"users": [{"id": "u_1", "email": "a@b.com"}]}"#,
+            r#""$.users": { exists_where: { email: { matches: ".+@.+" } } }"#,
+        );
+        assert!(results[0].passed, "{:?}", results[0]);
+    }
+
+    #[test]
+    fn exists_where_requires_array_target() {
+        let results = run(
+            r#"{"user": {"id": "a"}}"#,
+            r#""$.user": { exists_where: { id: "a" } }"#,
+        );
+        assert!(!results[0].passed);
+        assert!(
+            results[0].message.contains("requires an array"),
+            "expected type-mismatch message, got {:?}",
+            results[0].message
+        );
     }
 }

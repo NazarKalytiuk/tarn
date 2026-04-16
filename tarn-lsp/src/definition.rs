@@ -50,7 +50,7 @@ use tarn::outline::{find_capture_declarations, CaptureScope};
 use tarn::parser;
 
 use crate::hover::HoverToken;
-use crate::server::DocumentStore;
+use crate::server::{is_tarn_file_uri, DocumentStore};
 
 /// Context the pure renderer consults to produce a definition response.
 ///
@@ -451,6 +451,9 @@ pub fn text_document_definition(
     uri: &Url,
     position: Position,
 ) -> Option<GotoDefinitionResponse> {
+    if !is_tarn_file_uri(uri) {
+        return None;
+    }
     let source = store.get(uri)?;
     let span = crate::hover::resolve_hover_token(source, position)?;
     let ctx = build_definition_context(source, uri, position);

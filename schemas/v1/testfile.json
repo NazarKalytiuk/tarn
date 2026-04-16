@@ -304,6 +304,11 @@
         "regex": {
           "type": "string",
           "description": "Regex to extract a sub-match (capture group 1 is used)"
+        },
+        "where": {
+          "type": "object",
+          "description": "Predicate filter applied to a JSONPath array result. Keeps only elements whose fields match the { field: value } pairs here. Combine with the `first` transform to capture an object by stable identifier instead of `$[0]`.",
+          "additionalProperties": true
         }
       },
       "oneOf": [
@@ -699,6 +704,21 @@
         "lte": {
           "type": "number",
           "description": "Less than or equal (numeric comparison)"
+        },
+        "exists_where": {
+          "type": "object",
+          "description": "Assert the target array contains at least one object matching the given { field: value } predicate. Use this instead of `$[N]` lookups and exact `length:` to assert identity-based membership on shared list endpoints.",
+          "additionalProperties": true
+        },
+        "not_exists_where": {
+          "type": "object",
+          "description": "Assert the target array contains no object matching the given { field: value } predicate.",
+          "additionalProperties": true
+        },
+        "contains_object": {
+          "type": "object",
+          "description": "Alias for exists_where — assert the target array contains an object with the given fields.",
+          "additionalProperties": true
         }
       },
       "additionalProperties": false

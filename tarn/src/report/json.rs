@@ -355,6 +355,12 @@ fn remediation_hints(step: &StepResult) -> Vec<String> {
                     .to_string(),
             );
         }
+        Some(ErrorCode::SkippedDependency) => {
+            hints.push(
+                "This step did not execute. Fix the root-cause failure (listed in the failing assertion message) — this cascade entry will clear automatically once the upstream step passes."
+                    .to_string(),
+            );
+        }
         None => {}
     }
 
