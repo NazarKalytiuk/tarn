@@ -4,12 +4,16 @@
       "description": "Run API tests defined in .tarn.yaml files and return structured JSON results. Use this to execute API tests and get detailed pass/fail information with assertion details.",
       "inputSchema": {
         "properties": {
+          "cwd": {
+            "description": "Absolute path to the project root. tarn.config.yaml, tarn.env.yaml, and relative paths are resolved against this directory. Defaults to the workspace root captured during MCP `initialize`, or the server process's current directory.",
+            "type": "string"
+          },
           "env": {
             "description": "Environment name (loads tarn.env.{name}.yaml)",
             "type": "string"
           },
           "path": {
-            "description": "Path to a .tarn.yaml test file or directory containing test files",
+            "description": "Path to a .tarn.yaml test file or directory containing test files. Relative paths resolve against `cwd`.",
             "type": "string"
           },
           "tag": {
@@ -32,8 +36,12 @@
       "description": "Validate .tarn.yaml test files without executing them. Checks YAML syntax and schema validity.",
       "inputSchema": {
         "properties": {
+          "cwd": {
+            "description": "Absolute path to the project root. Defaults to the workspace root captured during MCP `initialize`, or the server process's current directory.",
+            "type": "string"
+          },
           "path": {
-            "description": "Path to a .tarn.yaml file or directory",
+            "description": "Path to a .tarn.yaml file or directory. Relative paths resolve against `cwd`.",
             "type": "string"
           }
         },
@@ -48,8 +56,12 @@
       "description": "List all available tests in .tarn.yaml files. Returns file names, test names, and step counts.",
       "inputSchema": {
         "properties": {
+          "cwd": {
+            "description": "Absolute path to the project root. Defaults to the workspace root captured during MCP `initialize`, or the server process's current directory.",
+            "type": "string"
+          },
           "path": {
-            "description": "Path to directory (defaults to current directory)",
+            "description": "Path to directory (defaults to `cwd`). Relative paths resolve against `cwd`.",
             "type": "string"
           }
         },
@@ -61,6 +73,10 @@
       "description": "Analyze a Tarn JSON report and return a prioritized fix plan with next actions, evidence, and remediation hints. Accepts either a `report` object from `tarn_run` or the same inputs as `tarn_run` to execute first.",
       "inputSchema": {
         "properties": {
+          "cwd": {
+            "description": "Absolute path to the project root used when `path` is provided. Defaults to the workspace root captured during MCP `initialize`, or the server process's current directory.",
+            "type": "string"
+          },
           "env": {
             "description": "Environment name used when `path` is provided",
             "type": "string"
@@ -71,7 +87,7 @@
             "type": "integer"
           },
           "path": {
-            "description": "Optional .tarn.yaml path or directory to run before planning",
+            "description": "Optional .tarn.yaml path or directory to run before planning. Relative paths resolve against `cwd`.",
             "type": "string"
           },
           "report": {

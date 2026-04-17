@@ -1,9 +1,7 @@
-mod protocol;
-mod tools;
-
-use protocol::{JsonRpcRequest, JsonRpcResponse};
 use serde_json::Value;
 use std::io::{self, BufRead, Write};
+use tarn_mcp::protocol::{self, JsonRpcRequest, JsonRpcResponse};
+use tarn_mcp::tools;
 
 fn main() {
     let stdin = io::stdin();
@@ -50,7 +48,16 @@ fn write_response(out: &mut impl Write, response: &JsonRpcResponse) {
 
 fn dispatch(req: &JsonRpcRequest) -> JsonRpcResponse {
     match req.method.as_str() {
-        "initialize" => JsonRpcResponse::success(req.id.clone(), protocol::server_info()),
+        "initialize" => {
+            // NAZ-248: capture the MCP client's workspace root from the
+            // `initialize` params so subsequent tool calls can default
+            // their `cwd` without the caller having to restate it. The
+            // function is a best-effort extractor — clients that omit
+            // `rootUri`/`workspaceFolders` simply fall through to the
+            // process cwd inside `tools::resolve_cwd`.
+            protocol::capture_workspace_root(&req.params);
+            JsonRpcResponse::success(req.id.clone(), protocol::server_info())
+        }
 
         "notifications/initialized" => {
             // No response needed for notifications

@@ -33,6 +33,27 @@ The `plugin/skills/tarn-api-testing/` directory is the canonical home for the Ta
 - `tarn_run`
 - `tarn_fix_plan`
 
+### `cwd` parameter
+
+Every tool accepts an optional `cwd` parameter (absolute path string). When set, it is used as the project root for:
+
+- discovery of `tarn.config.yaml`, `tarn.env.yaml`, `tarn.env.{name}.yaml`, and `tarn.env.local.yaml`
+- resolving any relative `path`, `include:` directive, and multipart file reference
+- resolving CLI-style named environments configured under `environments:` in `tarn.config.yaml`
+
+Defaulting rules (when `cwd` is omitted):
+
+1. the workspace root the MCP client announced during `initialize` — either `workspaceFolders[0].uri` or the legacy `rootUri` / `rootPath` fields (with `file://` stripped), **is used when available**;
+2. otherwise the MCP server process's current directory is used.
+
+Failure modes:
+
+- A relative `cwd` is rejected with `Parameter cwd must be an absolute path`.
+- A non-existent or non-directory `cwd` is rejected with `cwd does not exist` / `cwd is not a directory`.
+- When `cwd` is explicitly set but the directory does **not** contain `tarn.config.yaml`, the tool fails fast with an error that names the full resolved path. There is no silent fallback to the process cwd — the assumption is that an agent that set `cwd` meant it.
+
+When `cwd` is not set, a missing `tarn.config.yaml` is still tolerated (the server walks up for an ancestor project or runs with library defaults) so legacy single-file flows keep working.
+
 ## Recommended Loop
 
 1. Call `tarn_list` to discover tests and steps.

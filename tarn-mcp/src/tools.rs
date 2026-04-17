@@ -1,5 +1,5 @@
 use serde_json::Value;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tarn::assert::types::RunResult;
 use tarn::config;
 use tarn::env;
@@ -9,8 +9,129 @@ use tarn::parser;
 use tarn::report;
 use tarn::runner::{self, RunOptions};
 
+/// Resolved working directory for an MCP tool call, plus a flag telling
+/// downstream code whether the caller pinned it explicitly.
+///
+/// The distinction matters for error handling: when the caller passes
+/// `cwd` we refuse to silently fall back to the process cwd if the
+/// directory does not contain `tarn.config.yaml` (requirement #4). When
+/// the caller did *not* pass `cwd`, we use whatever workspace root the
+/// MCP client announced during `initialize` (if any), or finally the
+/// process cwd — and a missing `tarn.config.yaml` is tolerated there
+/// because the default behaviour must stay backwards-compatible with
+/// how `tarn-mcp` worked before NAZ-248.
+#[derive(Debug)]
+pub struct ResolvedCwd {
+    pub path: PathBuf,
+    pub explicit: bool,
+}
+
+/// Resolve the working directory for an MCP tool call.
+///
+/// Priority (highest first):
+///   1. `params.cwd` — must be an absolute path that exists
+///   2. the workspace root captured from the MCP `initialize` handshake
+///   3. the process `current_dir()`
+///
+/// Returns `Err` for a malformed explicit `cwd` (relative, non-string,
+/// non-directory). A relative-path rejection keeps the contract
+/// predictable: MCP clients run anywhere on disk, and resolving a
+/// relative `cwd` against the *server's* process cwd would defeat the
+/// whole point of this parameter.
+pub fn resolve_cwd(params: &Value) -> Result<ResolvedCwd, String> {
+    if let Some(raw) = params.get("cwd") {
+        let cwd_str = raw
+            .as_str()
+            .ok_or_else(|| "Parameter `cwd` must be a string".to_string())?;
+        let path = PathBuf::from(cwd_str);
+        if !path.is_absolute() {
+            return Err(format!(
+                "Parameter `cwd` must be an absolute path, got: {}",
+                cwd_str
+            ));
+        }
+        if !path.exists() {
+            return Err(format!("`cwd` does not exist: {}", path.display()));
+        }
+        if !path.is_dir() {
+            return Err(format!("`cwd` is not a directory: {}", path.display()));
+        }
+        return Ok(ResolvedCwd {
+            path,
+            explicit: true,
+        });
+    }
+
+    if let Some(root) = crate::protocol::workspace_root() {
+        return Ok(ResolvedCwd {
+            path: root,
+            explicit: false,
+        });
+    }
+
+    let cwd = std::env::current_dir()
+        .map_err(|e| format!("Failed to read process current_dir: {}", e))?;
+    Ok(ResolvedCwd {
+        path: cwd,
+        explicit: false,
+    })
+}
+
+/// Resolve a user-supplied path (which may be relative) against the
+/// resolved working directory. Absolute paths are returned unchanged so
+/// callers can always pass one when the MCP client has no workspace
+/// context.
+fn resolve_path_against_cwd(path_str: &str, cwd: &Path) -> PathBuf {
+    let p = Path::new(path_str);
+    if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        cwd.join(p)
+    }
+}
+
+/// When the caller passed an explicit `cwd`, refuse to run unless that
+/// directory actually contains `tarn.config.yaml`. This is requirement
+/// #4 of NAZ-248: never silently default if the user pinned the
+/// workspace, and always name the path we looked at so the agent can
+/// correct its tool call without extra round-trips.
+fn require_config_for_explicit_cwd(resolved: &ResolvedCwd) -> Result<(), String> {
+    if !resolved.explicit {
+        return Ok(());
+    }
+    let config_path = resolved.path.join("tarn.config.yaml");
+    if config_path.exists() {
+        Ok(())
+    } else {
+        Err(format!(
+            "tarn.config.yaml not found at {} (resolved from explicit `cwd` parameter). \
+             Pass the workspace root that contains tarn.config.yaml.",
+            config_path.display()
+        ))
+    }
+}
+
+/// Expand a user-supplied `path` into a list of `.tarn.yaml` files.
+/// Relative paths are resolved against `cwd`. When `path` is a bare
+/// directory and relative, discovery is rooted at `cwd.join(path)` so
+/// MCP clients can ask for `"tests"` without knowing the filesystem
+/// layout the server was launched from.
+fn expand_test_files(path_str: &str, cwd: &Path) -> Result<Vec<String>, String> {
+    let resolved = resolve_path_against_cwd(path_str, cwd);
+    if resolved.is_file() {
+        Ok(vec![resolved.to_string_lossy().into_owned()])
+    } else if resolved.is_dir() {
+        runner::discover_test_files(&resolved).map_err(|e| e.to_string())
+    } else {
+        Err(format!("Path not found: {}", resolved.display()))
+    }
+}
+
 /// Execute tarn_run: parse, resolve env, run tests, return JSON results.
 pub fn tarn_run(params: &Value) -> Result<Value, String> {
+    let cwd = resolve_cwd(params)?;
+    require_config_for_explicit_cwd(&cwd)?;
+
     let path_str = params
         .get("path")
         .and_then(|v| v.as_str())
@@ -36,14 +157,7 @@ pub fn tarn_run(params: &Value) -> Result<Value, String> {
         runner::parse_tag_filter(tag_str)
     };
 
-    let path = Path::new(path_str);
-    let files = if path.is_file() {
-        vec![path_str.to_string()]
-    } else if path.is_dir() {
-        runner::discover_test_files(path).map_err(|e| e.to_string())?
-    } else {
-        return Err(format!("Path not found: {}", path_str));
-    };
+    let files = expand_test_files(path_str, &cwd.path)?;
 
     if files.is_empty() {
         return Err("No .tarn.yaml files found".to_string());
@@ -64,13 +178,18 @@ pub fn tarn_run(params: &Value) -> Result<Value, String> {
         let fp = Path::new(file_path);
         let test_file = parser::parse_file(fp).map_err(|e| e.to_string())?;
 
-        let start_dir = fp.parent().unwrap_or(Path::new("."));
-        let abs_start = if start_dir.is_absolute() {
-            start_dir.to_path_buf()
+        // Use the resolved MCP cwd as the root for config + env lookup.
+        // Previously this walked up from the test file's parent, which
+        // broke when the MCP server was launched outside the project
+        // (no `tarn.config.yaml` / `tarn.env.yaml` in sight). With an
+        // explicit cwd we honour the caller; without one we still call
+        // `find_project_root` so the ergonomic default (run from inside
+        // the project) keeps working.
+        let root_dir = if cwd.explicit {
+            cwd.path.clone()
         } else {
-            std::env::current_dir().unwrap_or_default().join(start_dir)
+            config::find_project_root(&cwd.path).unwrap_or_else(|| cwd.path.clone())
         };
-        let root_dir = config::find_project_root(&abs_start).unwrap_or(abs_start);
         let project_config = config::load_config(&root_dir).map_err(|e| e.to_string())?;
         let resolved_env = env::resolve_env_with_profiles(
             &test_file.env,
@@ -102,19 +221,15 @@ pub fn tarn_run(params: &Value) -> Result<Value, String> {
 
 /// Validate .tarn.yaml files without running them.
 pub fn tarn_validate(params: &Value) -> Result<Value, String> {
+    let cwd = resolve_cwd(params)?;
+    require_config_for_explicit_cwd(&cwd)?;
+
     let path_str = params
         .get("path")
         .and_then(|v| v.as_str())
         .ok_or("Missing required parameter: path")?;
 
-    let path = Path::new(path_str);
-    let files = if path.is_file() {
-        vec![path_str.to_string()]
-    } else if path.is_dir() {
-        runner::discover_test_files(path).map_err(|e| e.to_string())?
-    } else {
-        return Err(format!("Path not found: {}", path_str));
-    };
+    let files = expand_test_files(path_str, &cwd.path)?;
 
     let mut results = Vec::new();
 
@@ -147,16 +262,12 @@ pub fn tarn_validate(params: &Value) -> Result<Value, String> {
 
 /// List available tests from .tarn.yaml files.
 pub fn tarn_list(params: &Value) -> Result<Value, String> {
+    let cwd = resolve_cwd(params)?;
+    require_config_for_explicit_cwd(&cwd)?;
+
     let path_str = params.get("path").and_then(|v| v.as_str()).unwrap_or(".");
 
-    let path = Path::new(path_str);
-    let files = if path.is_file() {
-        vec![path_str.to_string()]
-    } else if path.is_dir() {
-        runner::discover_test_files(path).map_err(|e| e.to_string())?
-    } else {
-        return Err(format!("Path not found: {}", path_str));
-    };
+    let files = expand_test_files(path_str, &cwd.path)?;
 
     let mut file_list = Vec::new();
 
@@ -215,6 +326,10 @@ pub fn tarn_fix_plan(params: &Value) -> Result<Value, String> {
     let report = if let Some(report) = params.get("report") {
         report.clone()
     } else {
+        // NAZ-248: `cwd` is forwarded to `tarn_run` through the raw
+        // params object, so we do not need a second resolution pass
+        // here. The validation still runs inside `tarn_run` and will
+        // surface an error before any files are touched.
         tarn_run(params)?
     };
 
@@ -297,5 +412,93 @@ mod tests {
         let expected: Value =
             serde_json::from_str(include_str!("../tests/golden/fix-plan.json.golden")).unwrap();
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn resolve_cwd_rejects_relative_path() {
+        let params = serde_json::json!({ "cwd": "relative/path" });
+        let err = resolve_cwd(&params).unwrap_err();
+        assert!(err.contains("absolute"), "got: {}", err);
+    }
+
+    #[test]
+    fn resolve_cwd_rejects_non_string() {
+        let params = serde_json::json!({ "cwd": 42 });
+        let err = resolve_cwd(&params).unwrap_err();
+        assert!(err.contains("must be a string"), "got: {}", err);
+    }
+
+    #[test]
+    fn resolve_cwd_rejects_missing_directory() {
+        let params = serde_json::json!({ "cwd": "/definitely/not/a/real/tarn/cwd/xyzzy" });
+        let err = resolve_cwd(&params).unwrap_err();
+        assert!(err.contains("does not exist"), "got: {}", err);
+    }
+
+    #[test]
+    fn resolve_cwd_accepts_explicit_existing_absolute_dir() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let params = serde_json::json!({ "cwd": tmp.path().to_string_lossy() });
+        let resolved = resolve_cwd(&params).unwrap();
+        assert!(resolved.explicit);
+        assert_eq!(resolved.path, tmp.path());
+    }
+
+    #[test]
+    fn resolve_cwd_defaults_to_process_cwd_when_absent() {
+        let params = serde_json::json!({});
+        let resolved = resolve_cwd(&params).unwrap();
+        assert!(!resolved.explicit);
+        // Must be absolute and exist.
+        assert!(resolved.path.is_absolute());
+        assert!(resolved.path.exists());
+    }
+
+    #[test]
+    fn require_config_for_explicit_cwd_errors_when_missing() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let resolved = ResolvedCwd {
+            path: tmp.path().to_path_buf(),
+            explicit: true,
+        };
+        let err = require_config_for_explicit_cwd(&resolved).unwrap_err();
+        assert!(err.contains("tarn.config.yaml"), "got: {}", err);
+        assert!(err.contains(&tmp.path().display().to_string()), "got: {}", err);
+    }
+
+    #[test]
+    fn require_config_for_explicit_cwd_ok_when_present() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("tarn.config.yaml"), "test_dir: tests\n").unwrap();
+        let resolved = ResolvedCwd {
+            path: tmp.path().to_path_buf(),
+            explicit: true,
+        };
+        require_config_for_explicit_cwd(&resolved).unwrap();
+    }
+
+    #[test]
+    fn require_config_for_explicit_cwd_skips_check_when_default() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let resolved = ResolvedCwd {
+            path: tmp.path().to_path_buf(),
+            explicit: false,
+        };
+        // No config present, but this is a default cwd — must pass.
+        require_config_for_explicit_cwd(&resolved).unwrap();
+    }
+
+    #[test]
+    fn resolve_path_against_cwd_joins_relative() {
+        let cwd = std::path::Path::new("/tmp/workspace");
+        let joined = resolve_path_against_cwd("tests/x.tarn.yaml", cwd);
+        assert_eq!(joined, std::path::PathBuf::from("/tmp/workspace/tests/x.tarn.yaml"));
+    }
+
+    #[test]
+    fn resolve_path_against_cwd_preserves_absolute() {
+        let cwd = std::path::Path::new("/tmp/workspace");
+        let joined = resolve_path_against_cwd("/other/file.tarn.yaml", cwd);
+        assert_eq!(joined, std::path::PathBuf::from("/other/file.tarn.yaml"));
     }
 }

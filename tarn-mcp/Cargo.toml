@@ -11,6 +11,10 @@ readme = "../README.md"
 keywords = ["mcp", "api", "testing", "cli"]
 categories = ["command-line-utilities", "development-tools::testing"]
 
+[lib]
+name = "tarn_mcp"
+path = "src/lib.rs"
+
 [[bin]]
 name = "tarn-mcp"
 path = "src/main.rs"
@@ -19,3 +23,6 @@ path = "src/main.rs"
 tarn = { version = "0.7.0", path = "../tarn" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"
