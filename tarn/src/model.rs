@@ -318,6 +318,14 @@ pub struct Step {
     /// - `"jar-name"`: use a named cookie jar (for multi-user scenarios)
     pub cookies: Option<StepCookies>,
 
+    /// When true, record request/response details for this step in the
+    /// report even when the step passes. This is a per-step opt-in
+    /// equivalent of the global `--verbose-responses` CLI flag, useful
+    /// for keeping one hot debugging step loud without enabling verbose
+    /// capture across the whole file.
+    #[serde(default)]
+    pub debug: bool,
+
     /// Source location of the step's `name:` node in the original YAML.
     /// Populated by `parser::parse_str` after deserialization so downstream
     /// consumers can anchor runtime results on the exact source range.

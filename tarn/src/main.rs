@@ -35,8 +35,9 @@ enum Commands {
         /// Test file or directory to run
         path: Option<String>,
 
-        /// Output format target(s): human, json, junit, tap, html, curl, curl-all, or FORMAT=PATH
-        #[arg(long, value_delimiter = ',', default_value = "human")]
+        /// Output format target(s): human, json, junit, tap, html, curl, curl-all, compact, llm, or FORMAT=PATH.
+        /// When omitted, tarn picks `human` on a TTY and `llm` when stdout is piped (so an LLM never sees boxed headers by default).
+        #[arg(long, value_delimiter = ',')]
         format: Vec<String>,
 
         /// JSON report mode: verbose (default) or compact
@@ -65,8 +66,23 @@ enum Commands {
         #[arg(short, long)]
         verbose: bool,
 
-        /// Show only failed tests and steps in the output
-        #[arg(long = "only-failed")]
+        /// Include response body, response headers, and captures in the
+        /// report for every step (not just failed ones). Works with
+        /// `json`, `html`, `compact`, and `llm` formats. Use
+        /// `--max-body` to cap body size.
+        #[arg(long = "verbose-responses")]
+        verbose_responses: bool,
+
+        /// Maximum response body size (bytes) embedded in the report
+        /// when `--verbose-responses` or a per-step `debug: true`
+        /// causes the body to be recorded. Larger bodies are truncated
+        /// with a `"...<truncated: N bytes>"` marker.
+        #[arg(long = "max-body", value_name = "BYTES", default_value_t = tarn::runner::DEFAULT_MAX_BODY_BYTES)]
+        max_body: usize,
+
+        /// Show only failed tests and steps in the output.
+        /// `--only-fails` is accepted as an alias.
+        #[arg(long = "only-failed", alias = "only-fails")]
         only_failed: bool,
 
         /// Disable streaming progress output (print the final report in one batch)
@@ -335,6 +351,21 @@ enum Commands {
         #[arg(value_enum)]
         shell: Shell,
     },
+
+    /// Re-render a prior JSON report in the LLM-friendly format.
+    /// Accepts a file path or `-` to read from stdin. Primarily for
+    /// `tarn run --format json > run.json && tarn summary run.json`
+    /// workflows where a large report is streamed once and summarized
+    /// lazily on demand.
+    Summary {
+        /// Path to a prior JSON report produced by `tarn run --format json`
+        /// (or `.tarn/last-run.json`). Use `-` to read from stdin.
+        path: String,
+
+        /// Output format (compact or llm). Defaults to llm.
+        #[arg(long, default_value = "llm")]
+        format: String,
+    },
 }
 
 fn main() {
@@ -350,6 +381,8 @@ fn main() {
             vars,
             env_name,
             verbose,
+            verbose_responses,
+            max_body,
             only_failed,
             no_progress,
             ndjson,
@@ -381,6 +414,8 @@ fn main() {
             tag.as_deref(),
             &select,
             verbose,
+            verbose_responses,
+            max_body,
             only_failed,
             no_progress,
             ndjson,
@@ -478,6 +513,7 @@ fn main() {
             generate(shell, &mut Cli::command(), "tarn", &mut std::io::stdout());
             0
         }
+        Commands::Summary { path, format } => summary_command(&path, &format),
     };
 
     process::exit(exit_code);
@@ -493,6 +529,8 @@ fn run_command(
     tag: Option<&str>,
     select: &[String],
     verbose: bool,
+    verbose_responses: bool,
+    max_body: usize,
     only_failed: bool,
     no_progress: bool,
     ndjson: bool,
@@ -527,11 +565,35 @@ fn run_command(
             return 2;
         }
     };
-    let mut output_targets = match parse_output_targets(format_specs) {
+    // Pick a TTY-aware default when `--format` was omitted: humans on
+    // a terminal expect the colored `human` report; everyone piping to
+    // a file, another process, or an LLM expects the stable `llm`
+    // format. The caller can still override this by passing `--format`
+    // explicitly, including `--format human` when piping.
+    //
+    // `--ndjson` owns stdout outright, so if no explicit `--format`
+    // was requested we skip the auto-selection to avoid a TTY-default
+    // `llm` target colliding with the event stream. The user can still
+    // ask for `--format llm=run.llm` alongside ndjson if they want one.
+    let effective_format_specs: Vec<String> = if format_specs.is_empty() {
+        if ndjson {
+            Vec::new()
+        } else {
+            let default_format = if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+                "human"
+            } else {
+                "llm"
+            };
+            vec![default_format.to_string()]
+        }
+    } else {
+        format_specs.to_vec()
+    };
+    let mut output_targets = match parse_output_targets(&effective_format_specs) {
         Ok(targets) => targets,
         Err(e) => {
             eprintln!(
-                "Error: {}. Use: human, json, junit, tap, html, curl, curl-all, or FORMAT=PATH",
+                "Error: {}. Use: human, json, junit, tap, html, curl, curl-all, compact, llm, or FORMAT=PATH",
                 e
             );
             return 2;
@@ -608,6 +670,8 @@ fn run_command(
         http: cli_http_transport,
         cookie_jar_per_test,
         fail_fast_within_test: project.config.fail_fast_within_test,
+        verbose_responses,
+        max_body_bytes: max_body,
     };
     let effective_parallel = parallel || project.config.parallel;
 
@@ -620,7 +684,16 @@ fn run_command(
         return 2;
     }
 
-    let render_opts = RenderOptions { only_failed };
+    // `no_color` is flipped on whenever stdout is not a TTY. The llm
+    // format uses this to strip ANSI escapes when piped; every other
+    // format happens to leave colors on (they were already TTY-only
+    // via `colored`'s auto-detection).
+    let stdout_is_tty = std::io::IsTerminal::is_terminal(&std::io::stdout());
+    let render_opts = RenderOptions {
+        only_failed,
+        verbose,
+        no_color: !stdout_is_tty,
+    };
 
     // Validate --ndjson does not collide with a non-human stdout format.
     // A stdout-bound `human` target is the default and gets silently
@@ -795,6 +868,64 @@ fn build_progress_reporter(
     Some(Box::new(HumanProgress::new(writer, render_opts, mode)))
 }
 
+/// Re-render a previously stored JSON report in the LLM or compact
+/// format. Accepts a file path or `-` to read from stdin.
+fn summary_command(path: &str, format: &str) -> i32 {
+    let input = if path == "-" {
+        let mut buffer = String::new();
+        match std::io::Read::read_to_string(&mut std::io::stdin(), &mut buffer) {
+            Ok(_) => buffer,
+            Err(e) => {
+                eprintln!("Error: Failed to read stdin: {}", e);
+                return 2;
+            }
+        }
+    } else {
+        match std::fs::read_to_string(path) {
+            Ok(content) => content,
+            Err(e) => {
+                eprintln!("Error: Failed to read {}: {}", path, e);
+                return 2;
+            }
+        }
+    };
+
+    let run_result = match tarn::report::json_parse::parse(&input) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            return 2;
+        }
+    };
+
+    let stdout_is_tty = std::io::IsTerminal::is_terminal(&std::io::stdout());
+    let render_opts = RenderOptions {
+        only_failed: false,
+        verbose: false,
+        no_color: !stdout_is_tty,
+    };
+
+    let output = match format.to_ascii_lowercase().as_str() {
+        "llm" => tarn::report::llm::render_with_options(&run_result, render_opts),
+        "compact" => tarn::report::compact::render_with_options(&run_result, render_opts),
+        other => {
+            eprintln!(
+                "Error: unknown summary format '{}'. Use 'llm' or 'compact'.",
+                other
+            );
+            return 2;
+        }
+    };
+
+    print!("{}", output);
+
+    if run_result.passed() {
+        0
+    } else {
+        1
+    }
+}
+
 fn parse_output_targets(specs: &[String]) -> Result<Vec<OutputTarget>, String> {
     let targets = specs
         .iter()
@@ -895,6 +1026,8 @@ fn format_name(format: OutputFormat) -> &'static str {
         OutputFormat::Html => "html",
         OutputFormat::Curl => "curl",
         OutputFormat::CurlAll => "curl-all",
+        OutputFormat::Compact => "compact",
+        OutputFormat::Llm => "llm",
     }
 }
 

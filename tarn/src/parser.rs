@@ -67,6 +67,10 @@ const STEP_FIELDS: &[(&str, &str)] = &[
     ("poll", "poll"),
     ("script", "script"),
     ("cookies", "cookies"),
+    // NAZ-244: per-step debug opt-in — records response_info even when
+    // the step passes so operators can tail a single hot step without
+    // turning on `--verbose-responses` globally.
+    ("debug", "debug"),
 ];
 const INCLUDE_FIELDS: &[(&str, &str)] = &[
     ("include", "include"),

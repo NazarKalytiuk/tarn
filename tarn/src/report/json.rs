@@ -243,9 +243,15 @@ fn render_step(
         if !remediation_hints.is_empty() {
             obj["remediation_hints"] = json!(remediation_hints);
         }
+    }
 
-        // Include request/response for failed steps
-        if let Some(ref req) = step.request_info {
+    // Include request/response when available. Failed steps always
+    // populate `response_info`, so the pre-existing contract holds. For
+    // passing steps, `--verbose-responses` and step-level `debug: true`
+    // are what cause the runner to preserve these fields — this branch
+    // is the knob that lets those flags show up in the report (NAZ-244).
+    if let Some(ref req) = step.request_info {
+        if !step.passed || step.response_info.is_some() {
             obj["request"] = json!({
                 "method": req.method,
                 "url": sanitize_string(&req.url, &redaction.replacement, secret_values),
@@ -253,21 +259,21 @@ fn render_step(
                 "body": req.body.as_ref().map(|body| sanitize_json(body, &redaction.replacement, secret_values)),
             });
         }
-        if let Some(ref resp) = step.response_info {
-            let body = resp.body.as_ref().map(|body| {
-                let sanitized = sanitize_json(body, &redaction.replacement, secret_values);
-                if mode == JsonOutputMode::Compact {
-                    truncate_json_body(&sanitized, 200)
-                } else {
-                    sanitized
-                }
-            });
-            obj["response"] = json!({
-                "status": resp.status,
-                "headers": redact_headers(&resp.headers, redaction, secret_values),
-                "body": body,
-            });
-        }
+    }
+    if let Some(ref resp) = step.response_info {
+        let body = resp.body.as_ref().map(|body| {
+            let sanitized = sanitize_json(body, &redaction.replacement, secret_values);
+            if mode == JsonOutputMode::Compact {
+                truncate_json_body(&sanitized, 200)
+            } else {
+                sanitized
+            }
+        });
+        obj["response"] = json!({
+            "status": resp.status,
+            "headers": redact_headers(&resp.headers, redaction, secret_values),
+            "body": body,
+        });
     }
 
     obj

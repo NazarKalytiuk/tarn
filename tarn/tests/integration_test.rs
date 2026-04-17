@@ -305,6 +305,30 @@ fn tarn() -> Command {
     Command::cargo_bin("tarn").unwrap()
 }
 
+/// Accepts either the legacy human summary (`"N passed"`) or the new
+/// llm summary (`"PASS N/M steps"`) — `tarn run` now auto-selects llm
+/// when stdout is piped (assert_cmd captures stdout, so every test
+/// subcommand runs without a TTY). Tests that care about a specific
+/// format still pass `--format human` explicitly.
+fn passed_summary_predicate(count: usize) -> predicates::BoxPredicate<str> {
+    let human = format!("{} passed", count);
+    let llm = format!("PASS {}/", count);
+    predicates::BoxPredicate::new(
+        predicate::str::contains(human).or(predicate::str::contains(llm)),
+    )
+}
+
+/// Companion of [`passed_summary_predicate`] for the `FAILED` summary
+/// line. Accepts either the legacy human trailer (`"N failed"`) or the
+/// grep-friendly llm line (`"tarn: FAIL ..., N failed"`).
+fn failed_summary_predicate(count: usize) -> predicates::BoxPredicate<str> {
+    let human = format!("{} failed", count);
+    let llm = format!(", {} failed", count);
+    predicates::BoxPredicate::new(
+        predicate::str::contains(human).or(predicate::str::contains(llm)),
+    )
+}
+
 fn write_nested_test_file(root: &std::path::Path, relative: &str, content: &str) -> PathBuf {
     let path = root.join(relative);
     if let Some(parent) = path.parent() {
@@ -507,7 +531,7 @@ steps:
         .args(["run", &test_file])
         .assert()
         .success()
-        .stdout(predicate::str::contains("1 passed"));
+        .stdout(passed_summary_predicate(1));
 }
 
 #[test]
@@ -537,7 +561,7 @@ steps:
         .args(["run", &test_file])
         .assert()
         .code(1)
-        .stdout(predicate::str::contains("1 failed"));
+        .stdout(failed_summary_predicate(1));
 }
 
 #[test]
@@ -667,7 +691,7 @@ steps:
         .args(["run", &test_file])
         .assert()
         .success()
-        .stdout(predicate::str::contains("3 passed"));
+        .stdout(passed_summary_predicate(3));
 }
 
 #[test]
@@ -709,7 +733,7 @@ steps:
         .args(["run", &test_file])
         .assert()
         .success()
-        .stdout(predicate::str::contains("2 passed"));
+        .stdout(passed_summary_predicate(2));
 }
 
 #[test]
@@ -771,7 +795,7 @@ steps:
         .args(["run", &test_file])
         .assert()
         .success()
-        .stdout(predicate::str::contains("3 passed"));
+        .stdout(passed_summary_predicate(3));
 }
 
 #[test]
@@ -842,7 +866,7 @@ steps:
         .args(["run", &test_file])
         .assert()
         .success()
-        .stdout(predicate::str::contains("3 passed"));
+        .stdout(passed_summary_predicate(3));
 }
 
 #[test]
@@ -908,7 +932,7 @@ steps:
         .args(["run", &test_file])
         .assert()
         .success()
-        .stdout(predicate::str::contains("3 passed"));
+        .stdout(passed_summary_predicate(3));
 }
 
 #[test]
@@ -1097,7 +1121,7 @@ steps:
         .args(["run", &test_file])
         .assert()
         .success()
-        .stdout(predicate::str::contains("1 passed"));
+        .stdout(passed_summary_predicate(1));
 }
 
 #[test]
@@ -1151,7 +1175,7 @@ tests:
     );
 
     tarn()
-        .args(["run", &test_file])
+        .args(["run", &test_file, "--format", "human"])
         .assert()
         .success()
         .stdout(predicate::str::contains("Setup"))
@@ -1331,7 +1355,7 @@ steps:
         .args(["run", &test_file])
         .assert()
         .success()
-        .stdout(predicate::str::contains("2 passed"));
+        .stdout(passed_summary_predicate(2));
 }
 
 #[test]
@@ -1435,7 +1459,7 @@ steps:
         .args(["run", &test_file])
         .assert()
         .success()
-        .stdout(predicate::str::contains("1 passed"));
+        .stdout(passed_summary_predicate(1));
 }
 
 #[test]
@@ -1489,7 +1513,7 @@ steps:
         .args(["run", &test_file])
         .assert()
         .success()
-        .stdout(predicate::str::contains("3 passed"));
+        .stdout(passed_summary_predicate(3));
 }
 
 #[test]
@@ -1531,7 +1555,7 @@ steps:
         .args(["run", &test_file])
         .assert()
         .success()
-        .stdout(predicate::str::contains("2 passed"));
+        .stdout(passed_summary_predicate(2));
 }
 
 /// Build a named-test file that (1) sets a session cookie in test A and
@@ -1597,7 +1621,11 @@ fn cookies_leak_between_named_tests_by_default() {
         .args(["run", &test_file])
         .assert()
         .failure()
-        .stdout(predicate::str::contains("1 passed").or(predicate::str::contains("failed")));
+        .stdout(
+            passed_summary_predicate(1)
+                .or(predicate::str::contains("failed"))
+                .or(predicate::str::contains("FAIL ")),
+        );
 }
 
 #[test]
@@ -1618,7 +1646,7 @@ fn cookies_per_test_mode_isolates_named_tests() {
         .args(["run", &test_file])
         .assert()
         .success()
-        .stdout(predicate::str::contains("3 passed"));
+        .stdout(passed_summary_predicate(3));
 }
 
 #[test]
@@ -1638,7 +1666,7 @@ fn cookie_jar_per_test_cli_flag_overrides_file_default() {
         .args(["run", &test_file, "--cookie-jar-per-test"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("3 passed"));
+        .stdout(passed_summary_predicate(3));
 }
 
 #[test]
@@ -1695,7 +1723,7 @@ tests:
         .args(["run", &test_file, "--cookie-jar-per-test"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("3 passed"));
+        .stdout(passed_summary_predicate(3));
 }
 
 #[test]
@@ -2132,7 +2160,14 @@ tests:
     );
 
     let output = tarn()
-        .args(["run", &test_file, "--only-failed", "--no-progress"])
+        .args([
+            "run",
+            &test_file,
+            "--format",
+            "human",
+            "--only-failed",
+            "--no-progress",
+        ])
         .output()
         .unwrap();
 
@@ -4187,4 +4222,475 @@ steps:
     assert!(custom.is_file(), "expected {} to exist", custom.display());
     // Default path should NOT be created when override is set.
     assert!(!dir.path().join(".tarn").join("last-run.json").exists());
+}
+
+// ============================================================
+// NAZ-240 / NAZ-349 / NAZ-244: compact, llm, verbose-responses
+// ============================================================
+
+fn write_mixed_suite(dir: &TempDir, server: &DemoServer) -> String {
+    write_test_file(
+        dir,
+        "mixed.tarn.yaml",
+        &format!(
+            r#"
+name: Mixed suite
+tests:
+  happy:
+    steps:
+      - name: healthy
+        request:
+          method: GET
+          url: "{base}/health"
+        assert:
+          status: 200
+  broken:
+    steps:
+      - name: wrong status
+        request:
+          method: GET
+          url: "{base}/health"
+        assert:
+          status: 418
+"#,
+            base = server.base_url()
+        ),
+    )
+}
+
+#[test]
+fn compact_format_renders_header_and_fail_line() {
+    let server = DemoServer::start();
+    let dir = TempDir::new().unwrap();
+    let test_file = write_mixed_suite(&dir, &server);
+
+    let output = tarn()
+        .args(["run", &test_file, "--format", "compact"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("tarn: 1 file, 2 tests, 1/2 steps passed"),
+        "header should summarise files/tests/steps: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("FAIL:"),
+        "failure line expected in compact output: {}",
+        stdout
+    );
+    // Grouping uses the actual status from the response, so a
+    // `status: 418` assertion failing against a real 200 surfaces as
+    // `HTTP 200: N`. That is deliberate — readers want to bucket by
+    // what the server really did, not what the test expected.
+    assert!(
+        stdout.contains("HTTP 200: 1"),
+        "trailing group summary expected: {}",
+        stdout
+    );
+}
+
+#[test]
+fn compact_format_with_only_failed_hides_passing_files() {
+    let server = DemoServer::start();
+    let dir = TempDir::new().unwrap();
+
+    // Two files: one fully passing, one failing
+    let ok = write_test_file(
+        &dir,
+        "ok.tarn.yaml",
+        &format!(
+            r#"
+name: ok
+steps:
+  - name: ping
+    request:
+      method: GET
+      url: "{base}/health"
+    assert:
+      status: 200
+"#,
+            base = server.base_url()
+        ),
+    );
+    let bad = write_test_file(
+        &dir,
+        "bad.tarn.yaml",
+        &format!(
+            r#"
+name: bad
+steps:
+  - name: wrong
+    request:
+      method: GET
+      url: "{base}/health"
+    assert:
+      status: 500
+"#,
+            base = server.base_url()
+        ),
+    );
+
+    // `tarn run` takes a single path; the directory contains both
+    // files, so let discovery pick them up.
+    let _ = (ok, bad);
+    let output = tarn()
+        .args([
+            "run",
+            dir.path().to_str().unwrap(),
+            "--format",
+            "compact",
+            "--only-failed",
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("ok.tarn.yaml"), "got: {}", stdout);
+    assert!(stdout.contains("bad.tarn.yaml"), "got: {}", stdout);
+}
+
+#[test]
+fn llm_format_first_line_is_grep_friendly() {
+    let server = DemoServer::start();
+    let dir = TempDir::new().unwrap();
+    let test_file = write_mixed_suite(&dir, &server);
+
+    let output = tarn()
+        .args(["run", &test_file, "--format", "llm"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let first = stdout.lines().next().unwrap();
+    assert!(
+        first.starts_with("tarn: FAIL 1/2 steps, 1 failed, 1 file,"),
+        "first line must be grep-friendly, got: {}",
+        first
+    );
+    assert!(
+        stdout.contains("FAIL "),
+        "failure block missing in llm output: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("failure summary:"),
+        "trailing summary missing: {}",
+        stdout
+    );
+}
+
+#[test]
+fn llm_format_auto_selected_when_no_format_and_piped() {
+    let server = DemoServer::start();
+    let dir = TempDir::new().unwrap();
+    let test_file = write_test_file(
+        &dir,
+        "auto.tarn.yaml",
+        &format!(
+            r#"
+name: Auto llm
+steps:
+  - name: ping
+    request:
+      method: GET
+      url: "{base}/health"
+    assert:
+      status: 200
+"#,
+            base = server.base_url()
+        ),
+    );
+
+    // assert_cmd always captures stdout, so stdout is not a TTY. Without
+    // `--format`, the run must pick `llm`.
+    let output = tarn().args(["run", &test_file]).output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let first = stdout.lines().next().unwrap();
+    assert!(
+        first.starts_with("tarn: PASS 1/1 steps"),
+        "piped default should be llm, got: {}",
+        first
+    );
+}
+
+#[test]
+fn verbose_responses_embeds_body_on_passing_step_in_json() {
+    let server = DemoServer::start();
+    let dir = TempDir::new().unwrap();
+    let test_file = write_test_file(
+        &dir,
+        "vr.tarn.yaml",
+        &format!(
+            r#"
+name: Verbose responses
+steps:
+  - name: healthy
+    request:
+      method: GET
+      url: "{base}/health"
+    assert:
+      status: 200
+"#,
+            base = server.base_url()
+        ),
+    );
+
+    let report_path = dir.path().join("out.json");
+    let output = tarn()
+        .args([
+            "run",
+            &test_file,
+            "--verbose-responses",
+            "--format",
+            &format!("json={}", report_path.display()),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+
+    let content = fs::read_to_string(&report_path).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+    // A file written with top-level `steps:` is rendered as a synthetic
+    // test whose name is the file name, so the path is
+    // files[0].tests[0].steps[0].
+    let step = &parsed["files"][0]["tests"][0]["steps"][0];
+    assert!(
+        step["response"].is_object(),
+        "passing step should include response when --verbose-responses is set: {}",
+        parsed
+    );
+    assert!(step["response"]["body"].is_object() || step["response"]["body"].is_string());
+}
+
+#[test]
+fn step_level_debug_true_embeds_body_without_global_flag() {
+    let server = DemoServer::start();
+    let dir = TempDir::new().unwrap();
+    let test_file = write_test_file(
+        &dir,
+        "debug.tarn.yaml",
+        &format!(
+            r#"
+name: Debug step
+tests:
+  t:
+    steps:
+      - name: debug step
+        debug: true
+        request:
+          method: GET
+          url: "{base}/health"
+        assert:
+          status: 200
+      - name: plain step
+        request:
+          method: GET
+          url: "{base}/health"
+        assert:
+          status: 200
+"#,
+            base = server.base_url()
+        ),
+    );
+
+    let report_path = dir.path().join("out.json");
+    let output = tarn()
+        .args([
+            "run",
+            &test_file,
+            "--format",
+            &format!("json={}", report_path.display()),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}\nstdout: {}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+
+    let content = fs::read_to_string(&report_path).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+    let steps = &parsed["files"][0]["tests"][0]["steps"];
+
+    // `debug: true` step retains response_info...
+    assert!(
+        steps[0]["response"].is_object(),
+        "debug:true step should embed response: {}",
+        steps
+    );
+    // ...the plain sibling does not (global flag not set, step not debug).
+    assert!(
+        steps[1].get("response").is_none(),
+        "plain step should not embed response: {}",
+        steps
+    );
+}
+
+#[test]
+fn max_body_truncates_response_body_with_marker() {
+    let server = DemoServer::start();
+    let dir = TempDir::new().unwrap();
+    let test_file = write_test_file(
+        &dir,
+        "trunc.tarn.yaml",
+        &format!(
+            r#"
+name: Truncation
+steps:
+  - name: fat body
+    request:
+      method: GET
+      url: "{base}/health"
+    assert:
+      status: 200
+"#,
+            base = server.base_url()
+        ),
+    );
+
+    let report_path = dir.path().join("out.json");
+    let output = tarn()
+        .args([
+            "run",
+            &test_file,
+            "--verbose-responses",
+            "--max-body",
+            "4",
+            "--format",
+            &format!("json={}", report_path.display()),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+
+    let content = fs::read_to_string(&report_path).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+    let body = &parsed["files"][0]["tests"][0]["steps"][0]["response"]["body"];
+    // Body must be a string containing the truncation marker once we
+    // capped at 4 bytes — /health returns a multi-field JSON object.
+    let as_str = body.as_str().unwrap_or_default();
+    assert!(
+        as_str.contains("<truncated:"),
+        "expected truncation marker, got: {:?}",
+        body
+    );
+}
+
+#[test]
+fn summary_subcommand_round_trips_last_run_json() {
+    let server = DemoServer::start();
+    let dir = TempDir::new().unwrap();
+    let test_file = write_test_file(
+        &dir,
+        "summary.tarn.yaml",
+        &format!(
+            r#"
+name: Summary round-trip
+tests:
+  t:
+    steps:
+      - name: ok
+        request:
+          method: GET
+          url: "{base}/health"
+        assert:
+          status: 200
+      - name: bad
+        request:
+          method: GET
+          url: "{base}/health"
+        assert:
+          status: 418
+"#,
+            base = server.base_url()
+        ),
+    );
+
+    let report_path = dir.path().join("run.json");
+    let _ = tarn()
+        .args([
+            "run",
+            &test_file,
+            "--format",
+            &format!("json={}", report_path.display()),
+        ])
+        .output()
+        .unwrap();
+    assert!(report_path.is_file());
+
+    let output = tarn()
+        .args(["summary", &report_path.display().to_string()])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.starts_with("tarn: FAIL 1/2 steps, 1 failed, 1 file,"),
+        "summary should emit llm first line, got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("failure summary:"),
+        "summary block missing: {}",
+        stdout
+    );
+}
+
+#[test]
+fn summary_subcommand_accepts_stdin() {
+    let server = DemoServer::start();
+    let dir = TempDir::new().unwrap();
+    let test_file = write_test_file(
+        &dir,
+        "stdin.tarn.yaml",
+        &format!(
+            r#"
+name: stdin summary
+steps:
+  - name: ok
+    request:
+      method: GET
+      url: "{base}/health"
+    assert:
+      status: 200
+"#,
+            base = server.base_url()
+        ),
+    );
+
+    // Produce a JSON report.
+    let output = tarn()
+        .args(["run", &test_file, "--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    let report = String::from_utf8(output.stdout).unwrap();
+
+    let mut child = std::process::Command::new(tarn().get_program())
+        .args(["summary", "-"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(report.as_bytes())
+        .unwrap();
+    let done = child.wait_with_output().unwrap();
+    assert_eq!(done.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&done.stdout);
+    assert!(
+        stdout.starts_with("tarn: PASS 1/1 steps"),
+        "stdin summary failed: {}",
+        stdout
+    );
 }

@@ -1,8 +1,12 @@
+pub mod compact;
 pub mod curl;
+pub mod failure;
 pub mod html;
 pub mod human;
 pub mod json;
+pub mod json_parse;
 pub mod junit;
+pub mod llm;
 pub mod progress;
 pub mod redaction;
 pub mod tap;
@@ -16,6 +20,11 @@ use std::str::FromStr;
 pub struct RenderOptions {
     /// Show only failed tests/steps in the output. Summary counts stay accurate.
     pub only_failed: bool,
+    /// Verbose rendering: e.g. compact format shows captured values per test.
+    pub verbose: bool,
+    /// When true, skip ANSI color escapes in the output. Used by the
+    /// llm format whenever stdout is not a TTY (pipes, files, CI logs).
+    pub no_color: bool,
 }
 
 /// Output format for test results.
@@ -28,6 +37,8 @@ pub enum OutputFormat {
     Html,
     Curl,
     CurlAll,
+    Compact,
+    Llm,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,6 +59,8 @@ impl FromStr for OutputFormat {
             "html" => Ok(OutputFormat::Html),
             "curl" => Ok(OutputFormat::Curl),
             "curl-all" => Ok(OutputFormat::CurlAll),
+            "compact" => Ok(OutputFormat::Compact),
+            "llm" => Ok(OutputFormat::Llm),
             other => Err(format!("Unknown output format: '{}'", other)),
         }
     }
@@ -94,6 +107,8 @@ pub fn render_with_options(
         OutputFormat::Html => html::render(result),
         OutputFormat::Curl => curl::render_failures(result),
         OutputFormat::CurlAll => curl::render_all(result),
+        OutputFormat::Compact => compact::render_with_options(result, opts),
+        OutputFormat::Llm => llm::render_with_options(result, opts),
     }
 }
 
@@ -115,6 +130,9 @@ mod tests {
         );
         assert_eq!("JSON".parse::<OutputFormat>(), Ok(OutputFormat::Json));
         assert_eq!("HTML".parse::<OutputFormat>(), Ok(OutputFormat::Html));
+        assert_eq!("compact".parse::<OutputFormat>(), Ok(OutputFormat::Compact));
+        assert_eq!("llm".parse::<OutputFormat>(), Ok(OutputFormat::Llm));
+        assert_eq!("LLM".parse::<OutputFormat>(), Ok(OutputFormat::Llm));
         assert!("unknown".parse::<OutputFormat>().is_err());
     }
 

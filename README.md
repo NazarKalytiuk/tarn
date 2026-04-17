@@ -849,6 +849,7 @@ tarn bench <PATH> [OPTIONS]        Benchmark a step
 tarn validate [PATH] [--format]    Validate YAML (--format human|json)
 tarn fmt [PATH] [--check]          Normalize Tarn YAML
 tarn list                          List all tests
+tarn summary <PATH|->              Re-render a prior JSON report (llm/compact)
 tarn import-hurl <PATH>            Convert common-case Hurl files to Tarn
 tarn init                          Scaffold a new project
 tarn update                        Update to the latest version
@@ -860,14 +861,16 @@ tarn completions <SHELL>           Generate shell completions
 
 | Flag | Description |
 |------|-------------|
-| `--format <FORMAT>` | Repeatable. Supports `human`, `json`, `junit`, `tap`, `html`, `curl`, `curl-all`, or `FORMAT=PATH` |
+| `--format <FORMAT>` | Repeatable. Supports `human`, `json`, `junit`, `tap`, `html`, `curl`, `curl-all`, `compact`, `llm`, or `FORMAT=PATH`. When omitted, tarn picks `human` on a TTY and `llm` when stdout is piped. |
 | `--json-mode <MODE>` | For JSON outputs: `verbose` (default) or `compact` |
 | `--tag <TAGS>` | Filter by tag (comma-separated, AND logic) |
 | `--select <FILE[::TEST[::STEP]]>` | Narrow execution to specific files, tests, or steps (repeatable; ANDs with `--tag`) |
 | `--var <KEY=VALUE>` | Override env variables (repeatable) |
 | `--env <NAME>` | Load `tarn.env.{name}.yaml` |
-| `-v, --verbose` | Print full request/response for every step |
-| `--only-failed` | Show only failed tests and steps (summary counts stay accurate) |
+| `-v, --verbose` | Print full request/response for every step in the streaming progress |
+| `--verbose-responses` | Include response body, headers, and captures in the report for every step (not just failed ones). Applies to `json`, `html`, `compact`, and `llm`. |
+| `--max-body <BYTES>` | Cap the response body size embedded when `--verbose-responses` or step-level `debug: true` is active (default 8192). Larger bodies are truncated with a `"...<truncated: N bytes>"` marker. |
+| `--only-failed` | Show only failed tests and steps (summary counts stay accurate). `--only-fails` is accepted as an alias. |
 | `--no-progress` | Disable streaming progress output; print the final report in one batch |
 | `--ndjson` | Stream machine-readable NDJSON events to stdout (for editor integrations, MCP, structured CI) |
 | `--dry-run` | Show interpolated requests without sending |
@@ -904,6 +907,37 @@ tarn run --select "a.tarn.yaml::login" --select "b.tarn.yaml::checkout"  # union
 tarn fmt tests/                                  # rewrite a directory in place
 tarn fmt tests/auth.tarn.yaml --check            # CI-style formatting check
 ```
+
+### LLM-friendly output (`--format llm`)
+
+`--format llm` emits a grep-friendly summary line followed by only the
+failed steps, each expanded with request, response, and the assertion
+that failed. It strips ANSI colors automatically when stdout is piped
+and omits boxed/colored headers entirely.
+
+```bash
+tarn run tests/                    # emits llm format when piped (auto-selected)
+tarn run tests/ --format llm       # force llm format explicitly
+tarn summary .tarn/last-run.json   # re-summarize a prior run as llm
+```
+
+`tarn summary` reads a prior JSON report (`.tarn/last-run.json` is
+written after every run, or whatever you produced with `tarn run
+--format json`) and re-renders it as the llm format without re-running
+the tests. Use `-` to stream from stdin:
+
+```bash
+tarn run tests/ --format json > run.json
+tarn summary run.json              # render run.json as llm
+cat run.json | tarn summary -      # same, piped
+tarn summary run.json --format compact  # render as compact instead
+```
+
+The sibling `--format compact` format is a shorter human-ish variant
+for quick console scanning — one line per file, inline expansion of
+failed tests, and a trailing `HTTP 500: 3 | JSONPath mismatch: 18`
+tally of failure categories. Both formats strip colors in non-TTY
+output.
 
 ### Structured Validation (`tarn validate --format json`)
 
@@ -1450,6 +1484,28 @@ timeout: 30000    # 30 seconds for this step
 ```yaml
 delay: "2s"    # wait before executing
 ```
+
+### Debug
+
+Mark an individual step so the report always records its response body,
+response headers, and captures — even when the step passes. Equivalent
+to running with `--verbose-responses` but scoped to a single step:
+
+```yaml
+- name: fetch user
+  debug: true    # keep response in the report for this step
+  request:
+    method: GET
+    url: "{{ env.base_url }}/users/42"
+  assert:
+    status: 200
+```
+
+The global `--verbose-responses` flag plus `--max-body <BYTES>` give
+the same behavior for every step in the run; `debug: true` is a
+targeted override for one-off debugging. Bodies exceeding the
+`--max-body` cap (8 KiB by default) are truncated with a
+`"...<truncated: N bytes>"` marker.
 
 ## JSON Schema
 

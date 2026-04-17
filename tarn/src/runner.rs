@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 /// Options controlling how tests are run.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct RunOptions {
     /// Print full request/response for every step
     pub verbose: bool,
@@ -39,6 +39,33 @@ pub struct RunOptions {
     /// running it. Keeps reports short when the first failure already
     /// tells the whole story (auth break, schema mismatch, etc.).
     pub fail_fast_within_test: bool,
+    /// When true, capture response body, headers, and captures into
+    /// the report for every step — not just failed ones. Individual
+    /// steps can opt in via `debug: true` even when this flag is off.
+    /// (NAZ-244.)
+    pub verbose_responses: bool,
+    /// Maximum response body size (bytes) to embed in the report when
+    /// `verbose_responses` or step-level `debug: true` is active. Bodies
+    /// larger than this are truncated and a `"...<truncated: N bytes>"`
+    /// marker is appended. Defaults to 8 KiB.
+    pub max_body_bytes: usize,
+}
+
+/// Default cap for verbose/debug response body embedding.
+pub const DEFAULT_MAX_BODY_BYTES: usize = 8 * 1024;
+
+impl Default for RunOptions {
+    fn default() -> Self {
+        Self {
+            verbose: false,
+            dry_run: false,
+            http: HttpTransportConfig::default(),
+            cookie_jar_per_test: false,
+            fail_fast_within_test: false,
+            verbose_responses: false,
+            max_body_bytes: DEFAULT_MAX_BODY_BYTES,
+        }
+    }
 }
 
 /// Name of the default cookie jar used when no `cookies: <name>` is set on a step.
@@ -1099,6 +1126,46 @@ fn build_request_info(step: &Step, request: &PreparedRequest, base_dir: &Path) -
     }
 }
 
+/// Build a [`ResponseInfo`] suitable for report embedding, truncating the
+/// body payload if its serialized form exceeds `max_body_bytes`. When the
+/// body is truncated we replace it with a JSON string marker so every
+/// downstream consumer (JSON, HTML, compact, llm) sees the same shape.
+fn build_response_info(response: &http::HttpResponse, max_body_bytes: usize) -> ResponseInfo {
+    ResponseInfo {
+        status: response.status,
+        headers: response.headers.clone(),
+        body: Some(truncate_report_body(&response.body, max_body_bytes)),
+    }
+}
+
+/// Truncate a JSON body for report embedding. Bodies whose serialized
+/// form is within `max_bytes` are returned unchanged. Larger bodies are
+/// replaced with a string marker so the output stays machine-parseable
+/// (`"...<truncated: N bytes>"`).
+pub(crate) fn truncate_report_body(body: &serde_json::Value, max_bytes: usize) -> serde_json::Value {
+    if max_bytes == 0 {
+        return body.clone();
+    }
+    let serialized = serde_json::to_string(body).unwrap_or_default();
+    if serialized.len() <= max_bytes {
+        return body.clone();
+    }
+    // Walk to a UTF-8 boundary so we never slice inside a multi-byte
+    // character; serde_json's output is always valid UTF-8.
+    let end = serialized
+        .char_indices()
+        .take_while(|(idx, _)| *idx < max_bytes)
+        .last()
+        .map(|(idx, ch)| idx + ch.len_utf8())
+        .unwrap_or(0);
+    let prefix = &serialized[..end];
+    serde_json::Value::String(format!(
+        "{}...<truncated: {} bytes>",
+        prefix,
+        serialized.len()
+    ))
+}
+
 fn form_to_report_body(form: &IndexMap<String, String>) -> serde_json::Value {
     let body: serde_json::Map<String, serde_json::Value> = form
         .iter()
@@ -1556,6 +1623,17 @@ fn run_step(
                 redacted_values,
             )?;
 
+            // Preserve response_info on passing steps when the caller
+            // asked for verbose responses globally, when the step has
+            // `debug: true`, or (if a script flipped the step to failed)
+            // always — failed steps already embed the response.
+            let include_response = opts.verbose_responses || step.debug || !all_passed;
+            let response_info = if include_response {
+                Some(build_response_info(&response, opts.max_body_bytes))
+            } else {
+                None
+            };
+
             return Ok(StepResult {
                 name: step.name.clone(),
                 description: step.description.clone(),
@@ -1563,8 +1641,12 @@ fn run_step(
                 duration_ms: response.duration_ms,
                 assertion_results: all_assertions,
                 request_info: Some(request_info.clone()),
-                response_info: None,
-                error_category: None,
+                response_info,
+                error_category: if all_passed {
+                    None
+                } else {
+                    Some(FailureCategory::AssertionFailed)
+                },
                 response_status: Some(resp_status),
                 response_summary: Some(resp_summary),
                 captures_set: captured_keys,
@@ -1803,6 +1885,16 @@ fn run_step_poll(
                 redacted_values,
             )?;
 
+            // Preserve response_info on passing polled steps when the
+            // caller asked for verbose responses or the step is marked
+            // `debug: true`, mirroring the non-polling path.
+            let include_response = opts.verbose_responses || step.debug || !all_passed;
+            let response_info = if include_response {
+                Some(build_response_info(&response, opts.max_body_bytes))
+            } else {
+                None
+            };
+
             return Ok(StepResult {
                 name: step.name.clone(),
                 description: step.description.clone(),
@@ -1810,8 +1902,12 @@ fn run_step_poll(
                 duration_ms: response.duration_ms,
                 assertion_results: all_assertions,
                 request_info: Some(request_info.clone()),
-                response_info: None,
-                error_category: None,
+                response_info,
+                error_category: if all_passed {
+                    None
+                } else {
+                    Some(FailureCategory::AssertionFailed)
+                },
                 response_status: Some(resp_status),
                 response_summary: Some(resp_summary),
                 captures_set: captured_keys,

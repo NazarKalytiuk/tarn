@@ -298,6 +298,11 @@
           "type": "string",
           "description": "Conditionally run this step only when the interpolated expression is falsy (inverse of 'if'). Mutually exclusive with 'if'.",
           "examples": ["{{ capture.already_provisioned }}"]
+        },
+        "debug": {
+          "type": "boolean",
+          "description": "When true, record request/response details for this step in the report even when it passes. Equivalent to running `tarn run --verbose-responses` for just this step. Useful for keeping one hot debugging step loud without enabling verbose capture across the whole file.",
+          "default": false
         }
       },
       "additionalProperties": false

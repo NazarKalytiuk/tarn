@@ -169,6 +169,8 @@ pub fn tarn_run(params: &Value) -> Result<Value, String> {
         http: HttpTransportConfig::default(),
         cookie_jar_per_test: false,
         fail_fast_within_test: false,
+        verbose_responses: false,
+        max_body_bytes: runner::DEFAULT_MAX_BODY_BYTES,
     };
 
     let start = std::time::Instant::now();

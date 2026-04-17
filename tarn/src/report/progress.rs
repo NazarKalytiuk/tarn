@@ -505,7 +505,10 @@ mod tests {
         let buf = Arc::new(StdMutex::new(Vec::new()));
         let progress = HumanProgress::new(
             Box::new(SharedWriter(buf.clone())),
-            RenderOptions { only_failed: true },
+            RenderOptions {
+                only_failed: true,
+                ..RenderOptions::default()
+            },
             ProgressMode::Sequential,
         );
         let ctx = ReportContext {
@@ -540,7 +543,10 @@ mod tests {
         let buf = Arc::new(StdMutex::new(Vec::new()));
         let progress = HumanProgress::new(
             Box::new(SharedWriter(buf.clone())),
-            RenderOptions { only_failed: true },
+            RenderOptions {
+                only_failed: true,
+                ..RenderOptions::default()
+            },
             ProgressMode::Parallel,
         );
         progress.file_finished(&make_file("ok", true));
