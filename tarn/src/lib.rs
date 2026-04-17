@@ -7,6 +7,7 @@ pub mod cookie;
 pub mod env;
 pub mod error;
 pub mod fix_plan;
+pub mod fixtures;
 pub mod format;
 pub mod http;
 pub mod hurl_import;

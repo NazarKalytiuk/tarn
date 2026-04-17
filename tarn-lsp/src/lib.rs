@@ -11,10 +11,14 @@
 pub mod capabilities;
 pub mod code_actions;
 pub mod code_lens;
+pub mod commands;
 pub mod completion;
 pub mod debounce;
 pub mod definition;
 pub mod diagnostics;
+pub mod envelope;
+pub mod explain_failure;
+pub mod fixtures;
 pub mod formatting;
 pub mod hover;
 pub mod identifier;

@@ -14,18 +14,25 @@
 //!     [`RecordedResponseSource`] trait the scaffold-assert code
 //!     action already consumes.
 //!
-//! Both argument shapes share the same return envelope, documented
-//! in [`EvaluationResult`], so the client always knows where the
-//! matches live regardless of which lookup path fired.
+//! ## Return shape (NAZ-254)
 //!
-//! ## Error policy
+//! Every response is wrapped in [`crate::envelope`] and carries a
+//! `result` discriminator in the inner payload:
 //!
-//! Every soft failure (parse error, missing step, missing sidecar,
-//! empty / malformed arguments) collapses to [`lsp_server::ErrorCode::InvalidParams`]
-//! with a human-readable message. This is stricter than the hover
-//! provider — hover always wants to render *something*, whereas the
-//! command is invoked programmatically and benefits from explicit
-//! errors so the caller can retry with corrected arguments.
+//!   * `"match"` — the JSONPath parsed and produced at least one
+//!     value. `value` is the first match (or the sole match); the
+//!     full list is also returned under `values` when there are
+//!     multiple so the renderer can show array-flavoured output.
+//!   * `"no_match"` — the JSONPath parsed but did not select
+//!     anything. `available_top_keys` helps the LLM guess what the
+//!     response actually looks like.
+//!   * `"no_fixture"` — the step reference could not be resolved to a
+//!     recorded response. `message` explains why.
+//!
+//! Parse errors still bubble up as `InvalidParams` so callers get
+//! an explicit RPC error they can surface in diagnostics; the three
+//! success-style variants above are the only ones the handler
+//! returns inside `data`.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -37,7 +44,7 @@ use serde_json::Value;
 use tarn::jsonpath::{evaluate_path, JsonPathError};
 
 use crate::code_actions::response_source::{DiskResponseSource, RecordedResponseSource};
-use crate::server::ServerState;
+use crate::envelope;
 
 /// Stable LSP command id advertised in [`crate::capabilities`] and
 /// dispatched by [`crate::server::dispatch_request`]. Exposed as a
@@ -86,19 +93,38 @@ pub struct StepRef {
     pub step: String,
 }
 
-/// Return envelope from `tarn.evaluateJsonpath`.
+/// Return payload carried inside the [`crate::envelope`] wrapper.
 ///
-/// The shape is deliberately explicit (`{ "matches": [...] }`) so
-/// clients never have to guess whether a bare JSON value was
-/// originally one match or the raw document. Future expansions
-/// (e.g. match locations inside the response document) can add
-/// fields without a source-breaking change.
-#[derive(Debug, Clone, Serialize)]
-pub struct EvaluationResult {
-    /// Every match the JSONPath produced, in document order. An
-    /// empty vector is a valid success response — it means "the
-    /// path parsed but matched no values."
-    pub matches: Vec<Value>,
+/// The three variants correspond to the NAZ-254 contract:
+///
+///   * `Match` — the JSONPath parsed and matched at least one value.
+///   * `NoMatch` — the path parsed but no values were selected.
+///   * `NoFixture` — no recorded response was found for the step
+///     reference. Parse errors on the path itself do **not** fall
+///     into this variant; they come back as `InvalidParams`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "result", rename_all = "snake_case")]
+pub enum EvaluationResult {
+    Match {
+        /// The first match (equivalent to the sole match when there
+        /// is exactly one). Kept as a top-level field so
+        /// single-value JSONPath consumers don't need to unwrap an
+        /// array.
+        value: Value,
+        /// Full list of matches, in document order. `[value]` for a
+        /// single match.
+        values: Vec<Value>,
+    },
+    NoMatch {
+        /// Top-level keys of the evaluated response, so the LLM
+        /// can guide the user towards a valid path. Empty for
+        /// non-object responses.
+        available_top_keys: Vec<String>,
+    },
+    NoFixture {
+        /// Human-readable explanation of why the fixture is missing.
+        message: String,
+    },
 }
 
 /// Parse and validate the raw `ExecuteCommandParams.arguments`
@@ -118,28 +144,44 @@ pub fn parse_evaluate_args(args: &[Value]) -> Result<EvaluateArgs, ResponseError
     })
 }
 
+/// Resolution outcome for [`resolve_response`].
+///
+/// Mirrors the three-variant return shape so the handler can
+/// propagate a missing sidecar as `NoFixture` without inventing a
+/// custom error code or erroring the RPC.
+#[derive(Debug, Clone)]
+pub enum ResolvedResponse {
+    /// Body is available — either inline or read from the sidecar.
+    Body(Value),
+    /// The step reference did not resolve to a recorded response.
+    NoFixture(String),
+}
+
 /// Resolve an [`EvaluateArgs`] to its underlying response body,
 /// pulling the sidecar JSON through `source` for the step-ref branch
 /// and passing inline values straight through otherwise.
 ///
-/// Returns an `InvalidParams` response error on any lookup failure
-/// so the command can surface a precise reason string to the client.
+/// Unlike the original (L3.6) implementation, a missing sidecar is
+/// **not** an RPC error — it is returned as [`ResolvedResponse::NoFixture`]
+/// so the NAZ-254 three-variant payload can surface it to the
+/// client inline with the rest of the evaluation outcome.
 pub fn resolve_response(
     args: &EvaluateArgs,
     source: &dyn RecordedResponseSource,
-) -> Result<Value, ResponseError> {
+) -> Result<ResolvedResponse, ResponseError> {
     match args {
-        EvaluateArgs::Inline { response, .. } => Ok(response.clone()),
+        EvaluateArgs::Inline { response, .. } => Ok(ResolvedResponse::Body(response.clone())),
         EvaluateArgs::StepRef { step, .. } => {
             let path = step_file_to_pathbuf(&step.file);
-            source.read(&path, &step.test, &step.step).ok_or_else(|| {
-                invalid_params(format!(
-                    "tarn.evaluateJsonpath: no recorded response found for step `{}` in test `{}` at `{}`. Run the step at least once to populate the sidecar.",
+            match source.read(&path, &step.test, &step.step) {
+                Some(body) => Ok(ResolvedResponse::Body(body)),
+                None => Ok(ResolvedResponse::NoFixture(format!(
+                    "no fixture recorded for step `{}` in test `{}` at `{}`; run the test once.",
                     step.step,
                     step.test,
                     path.display()
-                ))
-            })
+                ))),
+            }
         }
     }
 }
@@ -157,32 +199,15 @@ fn step_file_to_pathbuf(file: &str) -> PathBuf {
     PathBuf::from(file)
 }
 
-/// Dispatch one `workspace/executeCommand` request to the right
-/// handler.
-///
-/// Today only `tarn.evaluateJsonpath` is registered. Unknown command
-/// IDs fall through to [`ErrorCode::MethodNotFound`] so clients get
-/// a clear "not implemented" signal rather than a silent null.
-pub fn workspace_execute_command(
-    _state: &ServerState,
+/// Entry point for the `tarn.evaluateJsonpath` dispatch used by the
+/// server's `workspace/executeCommand` router. Always returns the
+/// [`crate::envelope`]-wrapped payload on success.
+pub fn dispatch_evaluate_jsonpath(
     params: ExecuteCommandParams,
-) -> Result<Option<Value>, ResponseError> {
-    match params.command.as_str() {
-        EVALUATE_JSONPATH_COMMAND => {
-            let source: Arc<dyn RecordedResponseSource> = Arc::new(DiskResponseSource);
-            let result = execute_evaluate_jsonpath(&params.arguments, source.as_ref())?;
-            Ok(Some(
-                serde_json::to_value(result).map_err(internal_error_from_serde)?,
-            ))
-        }
-        other => Err(ResponseError {
-            code: ErrorCode::MethodNotFound as i32,
-            message: format!(
-                "workspace/executeCommand: unknown command `{other}`. Known commands: [{EVALUATE_JSONPATH_COMMAND}]"
-            ),
-            data: None,
-        }),
-    }
+) -> Result<Value, ResponseError> {
+    let source: Arc<dyn RecordedResponseSource> = Arc::new(DiskResponseSource);
+    let result = execute_evaluate_jsonpath(&params.arguments, source.as_ref())?;
+    envelope::wrap(result).map_err(internal_error_from_serde)
 }
 
 /// Parse + dispatch + evaluate a `tarn.evaluateJsonpath` command.
@@ -198,13 +223,41 @@ pub fn execute_evaluate_jsonpath(
     let path = match &parsed {
         EvaluateArgs::Inline { path, .. } | EvaluateArgs::StepRef { path, .. } => path.clone(),
     };
-    let response = resolve_response(&parsed, source)?;
+    let resolved = resolve_response(&parsed, source)?;
+    let response = match resolved {
+        ResolvedResponse::Body(value) => value,
+        ResolvedResponse::NoFixture(message) => {
+            return Ok(EvaluationResult::NoFixture { message });
+        }
+    };
     let matches = evaluate_path(&path, &response).map_err(|JsonPathError::Parse(msg)| {
         invalid_params(format!(
             "tarn.evaluateJsonpath: invalid JSONPath expression `{path}`: {msg}"
         ))
     })?;
-    Ok(EvaluationResult { matches })
+    Ok(classify_matches(matches, &response))
+}
+
+/// Turn a JSONPath match vector into one of the three
+/// [`EvaluationResult`] variants, populating `available_top_keys`
+/// for the no-match case.
+fn classify_matches(matches: Vec<Value>, response: &Value) -> EvaluationResult {
+    if matches.is_empty() {
+        let available_top_keys = top_keys(response);
+        return EvaluationResult::NoMatch { available_top_keys };
+    }
+    let value = matches[0].clone();
+    EvaluationResult::Match {
+        value,
+        values: matches,
+    }
+}
+
+fn top_keys(value: &Value) -> Vec<String> {
+    match value {
+        Value::Object(map) => map.keys().cloned().collect(),
+        _ => Vec::new(),
+    }
 }
 
 fn invalid_params(message: impl Into<String>) -> ResponseError {
@@ -284,20 +337,33 @@ mod tests {
     }
 
     #[test]
-    fn execute_inline_happy_path_returns_matches() {
+    fn execute_inline_happy_path_returns_match_variant_with_values() {
         let source = InMemoryResponseSource::empty();
         let raw =
             vec![json!({"path": "$.items[*].id", "response": {"items": [{"id": 1}, {"id": 2}]}})];
         let result = execute_evaluate_jsonpath(&raw, &source).expect("ok");
-        assert_eq!(result.matches, vec![json!(1), json!(2)]);
+        match result {
+            EvaluationResult::Match { value, values } => {
+                assert_eq!(value, json!(1));
+                assert_eq!(values, vec![json!(1), json!(2)]);
+            }
+            other => panic!("expected Match variant, got {other:?}"),
+        }
     }
 
     #[test]
-    fn execute_inline_no_match_returns_empty_matches_not_error() {
+    fn execute_inline_no_match_returns_no_match_with_top_keys() {
         let source = InMemoryResponseSource::empty();
-        let raw = vec![json!({"path": "$.missing", "response": {"present": 1}})];
+        let raw = vec![json!({"path": "$.missing", "response": {"present": 1, "other": 2}})];
         let result = execute_evaluate_jsonpath(&raw, &source).expect("ok");
-        assert!(result.matches.is_empty());
+        match result {
+            EvaluationResult::NoMatch { available_top_keys } => {
+                let mut keys = available_top_keys.clone();
+                keys.sort();
+                assert_eq!(keys, vec!["other", "present"]);
+            }
+            other => panic!("expected NoMatch variant, got {other:?}"),
+        }
     }
 
     #[test]
@@ -309,23 +375,30 @@ mod tests {
             "step": { "file": "/tmp/any.tarn.yaml", "test": "main", "step": "list" }
         })];
         let result = execute_evaluate_jsonpath(&raw, &source).expect("ok");
-        assert_eq!(result.matches, vec![json!(42)]);
+        match result {
+            EvaluationResult::Match { value, .. } => assert_eq!(value, json!(42)),
+            other => panic!("expected Match, got {other:?}"),
+        }
     }
 
     #[test]
-    fn execute_step_ref_missing_sidecar_returns_invalid_params() {
+    fn execute_step_ref_missing_sidecar_returns_no_fixture_variant() {
         let source = InMemoryResponseSource::empty();
         let raw = vec![json!({
             "path": "$.x",
             "step": { "file": "/tmp/any.tarn.yaml", "test": "main", "step": "list" }
         })];
-        let err = execute_evaluate_jsonpath(&raw, &source).unwrap_err();
-        assert_eq!(err.code, ErrorCode::InvalidParams as i32);
-        assert!(err.message.contains("no recorded response found"));
+        let result = execute_evaluate_jsonpath(&raw, &source).expect("ok");
+        match result {
+            EvaluationResult::NoFixture { message } => {
+                assert!(message.contains("no fixture"), "message: {message}");
+            }
+            other => panic!("expected NoFixture, got {other:?}"),
+        }
     }
 
     #[test]
-    fn execute_inline_bad_jsonpath_returns_invalid_params() {
+    fn execute_inline_bad_jsonpath_returns_invalid_params_error() {
         let source = InMemoryResponseSource::empty();
         let raw = vec![json!({"path": "$.[not valid", "response": {}})];
         let err = execute_evaluate_jsonpath(&raw, &source).unwrap_err();
@@ -334,11 +407,17 @@ mod tests {
     }
 
     #[test]
-    fn execute_inline_with_scalar_response_still_works() {
+    fn execute_inline_with_scalar_response_matches_root() {
         let source = InMemoryResponseSource::empty();
         let raw = vec![json!({"path": "$", "response": 42})];
         let result = execute_evaluate_jsonpath(&raw, &source).expect("ok");
-        assert_eq!(result.matches, vec![json!(42)]);
+        match result {
+            EvaluationResult::Match { value, values } => {
+                assert_eq!(value, json!(42));
+                assert_eq!(values, vec![json!(42)]);
+            }
+            other => panic!("expected Match, got {other:?}"),
+        }
     }
 
     #[test]
@@ -354,25 +433,34 @@ mod tests {
     }
 
     #[test]
-    fn evaluation_result_serialises_as_matches_envelope() {
-        let r = EvaluationResult {
-            matches: vec![json!("alpha"), json!(true)],
+    fn evaluation_result_match_serialises_with_result_discriminator() {
+        let r = EvaluationResult::Match {
+            value: json!("alpha"),
+            values: vec![json!("alpha"), json!(true)],
         };
         let v = serde_json::to_value(&r).unwrap();
-        assert_eq!(v, json!({"matches": ["alpha", true]}));
+        assert_eq!(v["result"], json!("match"));
+        assert_eq!(v["value"], json!("alpha"));
+        assert_eq!(v["values"], json!(["alpha", true]));
     }
 
     #[test]
-    fn workspace_execute_unknown_command_returns_method_not_found() {
-        let state = ServerState::new();
-        let params = ExecuteCommandParams {
-            command: "tarn.unknownCommand".to_owned(),
-            arguments: Vec::new(),
-            work_done_progress_params: Default::default(),
+    fn evaluation_result_no_match_serialises_with_top_keys() {
+        let r = EvaluationResult::NoMatch {
+            available_top_keys: vec!["a".into(), "b".into()],
         };
-        let err = workspace_execute_command(&state, params).unwrap_err();
-        assert_eq!(err.code, ErrorCode::MethodNotFound as i32);
-        assert!(err.message.contains("tarn.unknownCommand"));
-        assert!(err.message.contains(EVALUATE_JSONPATH_COMMAND));
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["result"], json!("no_match"));
+        assert_eq!(v["available_top_keys"], json!(["a", "b"]));
+    }
+
+    #[test]
+    fn evaluation_result_no_fixture_serialises_with_message() {
+        let r = EvaluationResult::NoFixture {
+            message: "nothing recorded yet".into(),
+        };
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["result"], json!("no_fixture"));
+        assert_eq!(v["message"], json!("nothing recorded yet"));
     }
 }

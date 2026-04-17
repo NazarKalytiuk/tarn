@@ -55,6 +55,11 @@ pub fn tarn_run(params: &Value) -> Result<Value, String> {
         http: HttpTransportConfig::default(),
         cookie_jar_per_test: false,
         fail_fast_within_test: false,
+        // Fixture writing is a CLI-facing feature (NAZ-252). The MCP
+        // tool path drives runs non-interactively against arbitrary
+        // files and has no stable workspace root to anchor fixtures
+        // under, so we leave the writer disabled by default.
+        fixtures: tarn::report::fixture_writer::FixtureWriteConfig::default(),
     };
 
     let start = std::time::Instant::now();

@@ -1,32 +1,31 @@
 //! Pluggable recorded-response source for the **scaffold-assert**
-//! code action (NAZ-304, Phase L3.3).
+//! code action (NAZ-304, Phase L3.3) and every downstream consumer
+//! that needs to read the last recorded response for a step.
 //!
-//! The scaffold-assert refactor needs to read the last recorded
-//! response body for a specific step so it can walk the top-level
-//! fields and emit an `assert.body` block pre-populated with type
-//! assertions. There is no existing on-disk convention anywhere in
-//! tarn or the VS Code extension — `editors/vscode/src/testing/
-//! LastRunCache.ts` persists the last run **in memory only** — so
-//! L3.3 proposes and documents a brand new sidecar layout:
+//! ## On-disk convention (NAZ-252)
+//!
+//! Fixtures are written by `tarn`'s runner into a workspace-relative
+//! directory tree:
 //!
 //! ```text
-//! <file>.tarn.yaml
-//! <file>.tarn.yaml.last-run/
-//!   <test-slug>/
-//!     <step-slug>.response.json
+//! <workspace-root>/.tarn/fixtures/<file-path-hash>/<test-slug>/<step-index>/
+//!   latest-passed.json     # the most recent passing fixture
+//!   <millis>-<nonce>.json  # rolling history (latest N per step)
+//!   _index.json            # history manifest, oldest-first
 //! ```
 //!
-//! Where `<test-slug>` / `<step-slug>` are the URL-safe form of the
-//! test / step `name:` (lowercase, replace whitespace with `-`,
-//! strip everything else that is not `[a-z0-9_-]`). Setup and
-//! teardown steps use the sentinel test slugs `setup` / `teardown`
-//! because they have no enclosing test group.
+//! The `[latest-passed.json]` file is always the LSP's first lookup
+//! target because it represents a known-good response; only when it
+//! is absent does the reader fall back to the newest history entry.
+//! Setup / teardown steps use the sentinel test slugs exported from
+//! [`tarn::fixtures`] (`setup` / `teardown` / `<flat>`).
 //!
-//! Nothing writes these files yet — shipping the writer is a
-//! separate ticket on the runner side. The reader ships now so the
-//! code action is ready as soon as the files start appearing. Until
-//! then the action simply does not trigger, which is the documented
-//! graceful-degradation behaviour from the ticket.
+//! ## Back-compat with the L3.3 sidecar
+//!
+//! Existing tests / fixtures generated during Phase L3.3 still live
+//! at `<file>.tarn.yaml.last-run/<test-slug>/<step-slug>.response.json`.
+//! The disk reader consults that layout last so integration tests
+//! that pre-dated NAZ-252 keep passing without modification.
 //!
 //! ## Why a trait
 //!
@@ -63,19 +62,78 @@ pub trait RecordedResponseSource: Send + Sync {
 
 /// Default on-disk implementation of [`RecordedResponseSource`].
 ///
-/// Reads from `<file>.last-run/<test-slug>/<step-slug>.response.json`
-/// per the module documentation. Every branch folds errors into
-/// `None` — a missing file, a permission denial, and malformed JSON
-/// are all equivalent "no recording available" signals from the
-/// caller's perspective.
+/// Checks, in order:
+///   1. `<workspace-root>/.tarn/fixtures/...` (NAZ-252 layout) via
+///      [`tarn::report::fixture_writer::read_latest_response_value`].
+///      The step index is resolved by parsing `file` — when that
+///      fails the lookup gracefully falls through to the sidecar.
+///   2. `<file>.last-run/<test-slug>/<step-slug>.response.json`
+///      (legacy L3.3 sidecar) — still consulted so existing
+///      fixtures keep working after the layout change.
+///
+/// Every failure mode folds to `None` so LSP callers always see the
+/// same "nothing recorded yet" signal regardless of the root cause.
 pub struct DiskResponseSource;
 
 impl RecordedResponseSource for DiskResponseSource {
     fn read(&self, file: &Path, test: &str, step: &str) -> Option<serde_json::Value> {
+        // NAZ-252 layout. The workspace root is the closest ancestor
+        // that holds a `.tarn/` directory — if none, fall back to
+        // the file's own parent. This keeps the reader usable from
+        // tests that drive it against an absolute tempdir.
+        if let Some(root) = workspace_root_for(file) {
+            if let Some(index) = resolve_step_index(file, test, step) {
+                if let Some(value) = tarn::report::fixture_writer::read_latest_response_value(
+                    &root, file, test, index,
+                ) {
+                    return Some(value);
+                }
+            }
+        }
+
         let path = sidecar_path(file, test, step);
         let bytes = std::fs::read(&path).ok()?;
         serde_json::from_slice::<serde_json::Value>(&bytes).ok()
     }
+}
+
+/// Walk ancestors of `file` looking for a `.tarn` directory, which
+/// we treat as the workspace root marker. Falls back to the file's
+/// parent so callers that point the reader at a tempdir without a
+/// `.tarn` subfolder still get useful behaviour.
+///
+/// Exposed at `pub(crate)` so sibling modules (`crate::fixtures`,
+/// `crate::explain_failure`) reuse the same resolution heuristic —
+/// changing it in one place should be enough to change it
+/// everywhere.
+pub(crate) fn workspace_root_for(file: &Path) -> Option<std::path::PathBuf> {
+    let mut current = file.parent()?;
+    loop {
+        if current.join(".tarn").is_dir() {
+            return Some(current.to_path_buf());
+        }
+        current = current.parent()?;
+    }
+}
+
+/// Map `(test, step-name)` into the numeric step index used by the
+/// fixture layout. Returns `None` when the file cannot be parsed or
+/// the step is not found in the named test / setup / teardown /
+/// flat-steps scope.
+fn resolve_step_index(file: &Path, test: &str, step: &str) -> Option<usize> {
+    let source = std::fs::read_to_string(file).ok()?;
+    let parsed = tarn::parser::parse_str(&source, file).ok()?;
+    let steps = match test {
+        "setup" => &parsed.setup,
+        "teardown" => &parsed.teardown,
+        "<flat>" => &parsed.steps,
+        name => parsed
+            .tests
+            .get(name)
+            .map(|g| &g.steps)
+            .unwrap_or(&parsed.steps),
+    };
+    steps.iter().position(|s| s.name == step)
 }
 
 /// Compute the sidecar path for a given (file, test, step) triple.

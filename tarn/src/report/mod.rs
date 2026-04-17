@@ -1,10 +1,12 @@
 pub mod curl;
+pub mod fixture_writer;
 pub mod html;
 pub mod human;
 pub mod json;
 pub mod junit;
 pub mod progress;
 pub mod redaction;
+pub mod state_writer;
 pub mod tap;
 
 use crate::assert::types::RunResult;

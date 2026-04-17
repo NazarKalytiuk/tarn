@@ -1,5 +1,5 @@
 //! End-to-end integration tests for `workspace/executeCommand` with
-//! the `tarn.evaluateJsonpath` command (NAZ-307, Phase L3.6).
+//! the `tarn.evaluateJsonpath` command.
 //!
 //! Drives the full `initialize → executeCommand → shutdown → exit`
 //! loop over an in-memory `lsp_server::Connection`. Unit tests under
@@ -7,11 +7,10 @@
 //! the capability advertisement, server dispatch, and round-trip
 //! serialisation all behave correctly from a client's perspective.
 //!
-//! Four integration tests ship with L3.6 (per the acceptance criteria):
-//!   1. Inline response + happy-path JSONPath → matches envelope.
-//!   2. Step-ref happy path via a disk sidecar the test populates.
-//!   3. Bad JSONPath expression → `InvalidParams` ResponseError.
-//!   4. Missing sidecar for a step-ref → `InvalidParams` ResponseError.
+//! The response envelope shipped with NAZ-254 is
+//! `{ "schema_version": 1, "data": { "result": ..., ... } }` — every
+//! assertion below checks that exact shape rather than the legacy
+//! `{ "matches": [...] }` form.
 
 use std::thread;
 use std::time::{Duration, Instant};
@@ -40,11 +39,10 @@ fn execute_jsonpath_inline_happy_path_returns_matches_envelope() {
             "response": {"items": [{"id": 1}, {"id": 2}, {"id": 3}]}
         })],
     );
-    assert_eq!(
-        response,
-        serde_json::json!({"matches": [1, 2, 3]}),
-        "inline evaluation must return a matches envelope with every element"
-    );
+    assert_eq!(response["schema_version"], serde_json::json!(1));
+    assert_eq!(response["data"]["result"], serde_json::json!("match"));
+    assert_eq!(response["data"]["value"], serde_json::json!(1));
+    assert_eq!(response["data"]["values"], serde_json::json!([1, 2, 3]));
 
     shutdown_and_join(client_conn, server_thread);
 }
@@ -75,7 +73,8 @@ fn execute_jsonpath_step_ref_happy_path_reads_disk_sidecar() {
         }
     })];
     let response = request_execute_command(&client_conn, "tarn.evaluateJsonpath", args);
-    assert_eq!(response, serde_json::json!({"matches": [42]}));
+    assert_eq!(response["data"]["result"], serde_json::json!("match"));
+    assert_eq!(response["data"]["value"], serde_json::json!(42));
 
     shutdown_and_join(client_conn, server_thread);
 }
@@ -111,7 +110,7 @@ fn execute_jsonpath_bad_path_returns_invalid_params_error() {
 }
 
 #[test]
-fn execute_jsonpath_step_ref_missing_sidecar_returns_invalid_params_error() {
+fn execute_jsonpath_step_ref_missing_sidecar_returns_no_fixture_variant() {
     let (server_conn, client_conn) = Connection::memory();
     let server_thread = thread::spawn(move || {
         tarn_lsp::run_with_connection(server_conn).expect("server loop failed");
@@ -121,9 +120,10 @@ fn execute_jsonpath_step_ref_missing_sidecar_returns_invalid_params_error() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let file = tmp.path().join("fixture.tarn.yaml");
     std::fs::write(&file, "name: fixture\n").unwrap();
-    // No sidecar on disk — the lookup must fail.
+    // No sidecar on disk — the lookup must resolve to the NoFixture
+    // variant of the three-variant return shape (NAZ-254).
 
-    let err = request_execute_command_expect_error(
+    let response = request_execute_command(
         &client_conn,
         "tarn.evaluateJsonpath",
         vec![serde_json::json!({
@@ -135,12 +135,37 @@ fn execute_jsonpath_step_ref_missing_sidecar_returns_invalid_params_error() {
             }
         })],
     );
-    assert_eq!(err.code, ErrorCode::InvalidParams as i32);
-    assert!(
-        err.message.contains("no recorded response"),
-        "error must mention the missing sidecar, got: {}",
-        err.message
+    assert_eq!(response["data"]["result"], serde_json::json!("no_fixture"));
+    assert!(response["data"]["message"].as_str().unwrap().contains("no fixture"));
+
+    shutdown_and_join(client_conn, server_thread);
+}
+
+#[test]
+fn execute_jsonpath_no_match_returns_top_keys() {
+    let (server_conn, client_conn) = Connection::memory();
+    let server_thread = thread::spawn(move || {
+        tarn_lsp::run_with_connection(server_conn).expect("server loop failed");
+    });
+    handshake(&client_conn);
+
+    let response = request_execute_command(
+        &client_conn,
+        "tarn.evaluateJsonpath",
+        vec![serde_json::json!({
+            "path": "$.missing",
+            "response": {"alpha": 1, "beta": 2}
+        })],
     );
+    assert_eq!(response["data"]["result"], serde_json::json!("no_match"));
+    let mut keys: Vec<String> = response["data"]["available_top_keys"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    keys.sort();
+    assert_eq!(keys, vec!["alpha", "beta"]);
 
     shutdown_and_join(client_conn, server_thread);
 }
