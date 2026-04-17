@@ -437,7 +437,14 @@ mod tests {
 
     #[test]
     fn resolve_cwd_rejects_missing_directory() {
-        let params = serde_json::json!({ "cwd": "/definitely/not/a/real/tarn/cwd/xyzzy" });
+        // Use a platform-absolute path that is guaranteed not to exist.
+        // `/definitely/...` is absolute on Unix but not on Windows (no
+        // drive letter), so we build the path by joining a nonexistent
+        // leaf onto an existing TempDir whose absolute form is valid on
+        // every platform.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let missing = tmp.path().join("definitely-not-a-real-tarn-cwd-xyzzy");
+        let params = serde_json::json!({ "cwd": missing.to_string_lossy() });
         let err = resolve_cwd(&params).unwrap_err();
         assert!(err.contains("does not exist"), "got: {}", err);
     }
