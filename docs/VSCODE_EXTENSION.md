@@ -54,9 +54,52 @@ The **user manual** lives at [`editors/vscode/README.md`](../editors/vscode/READ
 └────────────────────────────────────────────────────────────────┘
 ```
 
-Two stacks, one host. `TarnProcessRunner` (`src/backend/`) is the default and only production backend: it spawns the `tarn` CLI for every run, validation, list, format, and environment query. `LspClient` (`src/lsp/`, added in 0.5.1 / 0.6.0) is the experimental language-client front-end that spawns `tarn-lsp` behind the `tarn.experimentalLspClient` setting; as of 0.6.1 it boots side by side with the direct providers but **no language feature has been routed through it yet**. See [Phase V — LSP migration plan](#phase-v--lsp-migration-plan) below.
+Two stacks, one host. `TarnProcessRunner` (`src/backend/`) is the default backend: it spawns the `tarn` CLI for every run, validation, list, format, and environment query. `LspClient` (`src/lsp/`, added in 0.5.1 / 0.6.0) is the experimental language-client front-end that spawns `tarn-lsp` behind the `tarn.experimentalLspClient` setting; as of 0.6.1 it boots side by side with the direct providers but **no language feature has been routed through it yet**. See [Phase V — LSP migration plan](#phase-v--lsp-migration-plan) below.
 
-`tarn-mcp` is not part of the extension. The MCP server is a separate binary used by AI workflows outside VS Code; the extension never spawns it.
+Since NAZ-279 the extension also ships a second, opt-in backend that talks to `tarn-mcp` over JSON-RPC. See [Backends](#backends) for the full contract.
+
+## Backends
+
+The extension picks one of two backends at activation based on the `tarn.backend` setting:
+
+| Setting | Backend | Implementation | Notes |
+|---|---|---|---|
+| `tarn.backend: "cli"` (default) | `TarnProcessRunner` | Spawn `tarn` per command. | Full feature parity; NDJSON streaming, `--select`, `--cookie-jar-per-test`, bench, HTML reports, curl export, `tarn fmt`, `tarn env --json`. |
+| `tarn.backend: "mcp"` | `TarnMcpClient` | Keep one long-lived `tarn-mcp` process per workspace; dispatch JSON-RPC requests over stdio. | Lower per-command overhead (no process spawn); fewer features. |
+
+The MCP backend implements the same `TarnBackend` interface as the CLI backend, so `RunHandler`, `WorkspaceIndex`, `ResultMapper`, and every other consumer stays backend-agnostic.
+
+### JSON-RPC surface
+
+`TarnMcpClient` performs the standard MCP `initialize` handshake once per workspace, then dispatches each operation as a `tools/call` request:
+
+| Extension method | MCP tool | Notes |
+|---|---|---|
+| `run()` | `tarn_run` | `cwd` is threaded through the `arguments` object so the server can resolve relative paths against the workspace root (NAZ-248). |
+| `validateStructured()` / `validate()` | `tarn_validate` | The MCP tool emits a single `error: string` per invalid file; the client maps that into the CLI's `errors: [{ message }]` shape so diagnostics still render. |
+| `listFile()` | delegated to CLI | MCP's `tarn_list` tool does not emit the scoped `{setup, steps, tests, teardown}` envelope required by scoped discovery; falls back to `tarn list --file <path> --format json`. |
+| `runBench`, `runHtmlReport`, `exportCurl`, `initProject`, `importHurl`, `formatDocument`, `envStructured` | delegated to CLI | No MCP tool equivalent exists; `TarnMcpClient` composes over the CLI runner so the user never loses a feature when switching backends. |
+
+Every request includes a `cwd` argument so the server can resolve relative paths against the user's workspace root. `tarn-mcp` accepts the field since NAZ-248; older servers that predate it will simply ignore the extra key.
+
+### NDJSON limitation
+
+MCP's `tools/call` is a single-reply JSON-RPC request — there is no server-side streaming of intermediate events. When the caller asks for `streamNdjson: true` against the MCP backend, `TarnMcpClient` degrades in one of two ways:
+
+1. If the request also uses a feature the MCP tool does not support (`dryRun`, `selectors`, `parallel`, or multi-file runs), the client falls back to `tarn run --ndjson` via the CLI runner so streaming stays live.
+2. Otherwise, the client issues a one-shot `tarn_run` tool call and, once the final report lands, **synthesizes** `file_started` / `step_finished` / `test_finished` / `file_finished` / `done` events from the report before returning. All events fire at once at the end of the run rather than live.
+
+The Test Explorer UI contract is unchanged — all events still arrive through the `onEvent` callback — but the user experience trades live progress for a single final update. Users who care about progress should stay on `tarn.backend: "cli"`.
+
+### Fallback to CLI on failure
+
+`tarn.backend: "mcp"` falls back to the CLI backend (and shows a one-shot `vscode.window.showInformationMessage`) whenever:
+
+- The `tarn-mcp` binary cannot be resolved from `tarn.mcpPath`, `PATH`, or a bundled copy.
+- Spawning the child process fails.
+- The MCP `initialize` handshake rejects or times out.
+
+The fallback notification is latched for the extension-host session so the user is not spammed on every command. `deactivate()` disposes the `tarn-mcp` child process (SIGTERM then SIGKILL after a 2s grace window) in both clean and failure shutdowns.
 
 ### Core services
 

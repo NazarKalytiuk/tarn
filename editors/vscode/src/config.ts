@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 
 export type CookieJarMode = "default" | "per-test";
+export type BackendKind = "cli" | "mcp";
 
 export interface TarnConfig {
   binaryPath: string;
@@ -64,6 +65,39 @@ export function readConfig(scope?: vscode.Uri): TarnConfig {
 export function getExperimentalLspClient(scope?: vscode.Uri): boolean {
   const cfg = vscode.workspace.getConfiguration("tarn", scope);
   return cfg.get<boolean>("experimentalLspClient", false);
+}
+
+/**
+ * Read the `tarn.backend` setting (NAZ-279).
+ *
+ * Controls which backend the extension uses to run tests:
+ *
+ * - `"cli"` (default): spawn the `tarn` CLI per command. Every run
+ *   starts a fresh process; NDJSON streaming is available.
+ * - `"mcp"`: keep a `tarn-mcp` process alive per workspace and dispatch
+ *   each command as a JSON-RPC request over stdio. NDJSON streaming is
+ *   not supported — the backend degrades to returning only the final
+ *   JSON report.
+ *
+ * Unknown values fall back to `"cli"` so a typo in user settings never
+ * leaves the extension without a working backend.
+ */
+export function readBackendKind(scope?: vscode.Uri): BackendKind {
+  const cfg = vscode.workspace.getConfiguration("tarn", scope);
+  const raw = cfg.get<string>("backend", "cli");
+  return raw === "mcp" ? "mcp" : "cli";
+}
+
+/**
+ * Read the raw `tarn.mcpPath` setting value. Unlike {@link readConfig},
+ * this helper returns `undefined` when the key is absent or blank so
+ * {@link resolveMcpCommand} can distinguish "user did not override"
+ * from "user explicitly set an empty string" (both collapse to the
+ * bare `"tarn-mcp"` command resolved via `$PATH`).
+ */
+export function readMcpPath(scope?: vscode.Uri): string | undefined {
+  const cfg = vscode.workspace.getConfiguration("tarn", scope);
+  return cfg.get<string>("mcpPath");
 }
 
 /**

@@ -23,6 +23,68 @@ export class TestMessage {
   constructor(public readonly message: string | MarkdownString) {}
 }
 
+export interface Disposable {
+  dispose(): void;
+}
+
+/**
+ * Minimal `vscode.CancellationToken` implementation good enough for
+ * the NAZ-279 MCP backend unit tests. The real VS Code token fires an
+ * event when `.cancel()` is invoked on the parent `Source`; we mimic
+ * the same contract so `TarnMcpClient.run()` can subscribe and tear
+ * down a pending JSON-RPC request on cancel.
+ */
+class CancellationToken {
+  private _cancelled = false;
+  private listeners: Array<() => void> = [];
+
+  get isCancellationRequested(): boolean {
+    return this._cancelled;
+  }
+
+  onCancellationRequested(listener: () => void): Disposable {
+    if (this._cancelled) {
+      listener();
+      return { dispose: () => {} };
+    }
+    this.listeners.push(listener);
+    return {
+      dispose: () => {
+        const idx = this.listeners.indexOf(listener);
+        if (idx >= 0) {
+          this.listeners.splice(idx, 1);
+        }
+      },
+    };
+  }
+
+  /** Internal helper used by {@link CancellationTokenSource}. */
+  _fire(): void {
+    if (this._cancelled) return;
+    this._cancelled = true;
+    for (const listener of this.listeners) {
+      try {
+        listener();
+      } catch {
+        /* ignore: test mock */
+      }
+    }
+    this.listeners = [];
+  }
+}
+
+export class CancellationTokenSource {
+  readonly token: CancellationToken = new CancellationToken();
+  cancel(): void {
+    this.token._fire();
+  }
+  dispose(): void {
+    // Real VS Code CancellationTokenSource fires cancel on dispose
+    // only when `cancelWhenDisposed` is set; for the unit-test mock
+    // we leave the token in whatever state `cancel()` last put it.
+  }
+}
+
 export const Uri = {
   file(p: string) {
     return { fsPath: p, toString: () => `file://${p}`, path: p };
@@ -32,20 +94,65 @@ export const Uri = {
   },
 };
 
+type ConfigEntries = Record<string, unknown>;
+let mockConfigEntries: ConfigEntries = {};
+
+/**
+ * Test-only helper: seed the fake `vscode.workspace.getConfiguration`
+ * with a map of `"tarn.key" -> value` so unit tests can exercise the
+ * setting-reading helpers in `config.ts` without bootstrapping a full
+ * extension host. Call with `{}` (or no argument) to reset.
+ */
+export function __setMockConfig(entries: ConfigEntries = {}): void {
+  mockConfigEntries = { ...entries };
+}
+
 export const workspace = {
-  getConfiguration(_section?: string): {
+  getConfiguration(section?: string): {
     get<T>(key: string, defaultValue?: T): T | undefined;
   } {
     return {
-      get<T>(_key: string, defaultValue?: T): T | undefined {
+      get<T>(key: string, defaultValue?: T): T | undefined {
+        const fullKey = section ? `${section}.${key}` : key;
+        if (fullKey in mockConfigEntries) {
+          return mockConfigEntries[fullKey] as T;
+        }
         return defaultValue;
       },
     };
   },
 };
 
+const shownInformationMessages: string[] = [];
+
+/**
+ * Test-only helper: inspect the toast queue. Returned array is a
+ * snapshot; tests call this between interactions to assert that a
+ * notification fired exactly once.
+ */
+export function __getShownInformationMessages(): string[] {
+  return [...shownInformationMessages];
+}
+
+export function __clearShownInformationMessages(): void {
+  shownInformationMessages.length = 0;
+}
+
 export const window = {
   async showWarningMessage(
+    _message: string,
+    ..._items: string[]
+  ): Promise<string | undefined> {
+    return undefined;
+  },
+  async showInformationMessage(
+    message: string,
+    ..._items: string[]
+  ): Promise<string | undefined> {
+    shownInformationMessages.push(message);
+    return undefined;
+  },
+  async showErrorMessage(
     _message: string,
     ..._items: string[]
   ): Promise<string | undefined> {
@@ -85,6 +192,7 @@ export default {
   Location,
   MarkdownString,
   TestMessage,
+  CancellationTokenSource,
   Uri,
   workspace,
   window,
