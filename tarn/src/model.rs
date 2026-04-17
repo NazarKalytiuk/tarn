@@ -241,6 +241,16 @@ pub struct Step {
     #[serde(rename = "assert")]
     pub assertions: Option<Assertion>,
 
+    /// Conditionally run this step only when the interpolated expression is
+    /// truthy. Empty / unset / `"false"` / `"0"` / `"null"` are falsy; any
+    /// other non-empty value is truthy. Mutually exclusive with `unless`.
+    #[serde(default, rename = "if")]
+    pub run_if: Option<String>,
+
+    /// Conditionally run this step only when the interpolated expression is
+    /// falsy (inverse of `if`). Mutually exclusive with `if`.
+    pub unless: Option<String>,
+
     /// Number of retries on failure (0 = no retries)
     #[serde(default)]
     pub retries: Option<u32>,
@@ -315,13 +325,21 @@ impl<'de> Deserialize<'de> for StepCookies {
 }
 
 /// Capture specification: either a simple JSONPath string or an extended capture.
+///
+/// The extended variant is boxed so [`CaptureSpec`] itself stays
+/// pointer-sized. Without the box, clippy's `large_enum_variant`
+/// check fires because every `JsonPath(String)` value would reserve
+/// space for the much larger [`ExtendedCapture`] struct. Boxing
+/// keeps the discriminant slot small and leaves extension room for
+/// future capture fields without every simple capture paying the
+/// price in memory.
 #[derive(Debug, Deserialize, Clone)]
 #[serde(untagged)]
 pub enum CaptureSpec {
     /// Simple JSONPath: "$.token"
     JsonPath(String),
     /// Extended capture: from header or JSONPath with optional regex
-    Extended(ExtendedCapture),
+    Extended(Box<ExtendedCapture>),
 }
 
 /// Extended capture specification supporting multiple response sources with optional regex extraction.
@@ -349,6 +367,86 @@ pub struct ExtendedCapture {
     /// identity-based selection (NAZ-341).
     #[serde(default, rename = "where")]
     pub where_predicate: Option<serde_yaml::Value>,
+    /// When true, a missing source (JSONPath with no match, header not
+    /// present, regex with no match, etc.) leaves the capture explicitly
+    /// unset instead of failing the step. Downstream interpolation of
+    /// `{{ capture.X }}` where X was optional-and-unset produces a
+    /// distinct "declared optional and not set" error instead of the
+    /// generic unresolved-template error.
+    #[serde(default)]
+    pub optional: Option<bool>,
+    /// Default value used when the source yields no match. Implies
+    /// `optional: true` — if a default is supplied, missing values never
+    /// fail the step.
+    ///
+    /// Deserialized through [`deserialize_default_value`] so that
+    /// `default: null` in YAML becomes `Some(DefaultValue(Null))` —
+    /// a bare `Option<serde_yaml::Value>` would treat YAML null the
+    /// same way it treats "field absent" and silently drop the user's
+    /// "I want a literal null fallback" intent.
+    #[serde(default, deserialize_with = "deserialize_default_value")]
+    pub default: Option<DefaultValue>,
+    /// Only attempt the capture when the response matches this gate.
+    /// When present and unmet, the capture is skipped the same way an
+    /// optional-unset capture would be (variable unset, no error).
+    #[serde(default)]
+    pub when: Option<CaptureWhen>,
+}
+
+/// Response-shape predicate used by `capture.when` to decide whether a
+/// capture should attempt extraction. Today this only gates on status
+/// code (reusing the existing `StatusAssertion`), but the struct shape
+/// leaves room for future dimensions (e.g. header matchers) without a
+/// breaking YAML change.
+#[derive(Debug, Deserialize, Clone)]
+pub struct CaptureWhen {
+    /// Status matcher identical in shape to the assertion `status:`
+    /// field — exact code (`201`), shorthand range (`"2xx"`), or
+    /// complex spec (`{ in: [200, 201] }`, `{ gte: 400, lt: 500 }`).
+    pub status: Option<StatusAssertion>,
+}
+
+/// Transparent wrapper around the raw `serde_yaml::Value` a user
+/// supplies for a `default:`. The wrapper exists so that `default:
+/// null` deserializes to `Some(DefaultValue(Null))` — a bare
+/// `Option<serde_yaml::Value>` field collapses the YAML null into
+/// serde's `None`, which would silently drop the user's intent.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DefaultValue(pub serde_yaml::Value);
+
+impl<'de> Deserialize<'de> for DefaultValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = serde_yaml::Value::deserialize(deserializer)?;
+        Ok(DefaultValue(value))
+    }
+}
+
+impl DefaultValue {
+    /// Borrow the inner YAML value. Runtime code converts it to a
+    /// JSON value via the capture module's `yaml_to_json` helper.
+    pub fn as_value(&self) -> &serde_yaml::Value {
+        &self.0
+    }
+}
+
+/// Custom deserializer for `default:` that treats a literal YAML null
+/// as `Some(DefaultValue(Null))` rather than `None`. Without this,
+/// `Option::deserialize` would collapse both "field absent" and
+/// "field present but null" into the same `None`, silently dropping
+/// the user's "I want a literal null fallback" intent.
+fn deserialize_default_value<'de, D>(deserializer: D) -> Result<Option<DefaultValue>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    // When a `default:` key appears, always return `Some(...)`.
+    // `#[serde(default)]` on the field still covers the "key absent"
+    // path, so this deserializer only ever runs when the user wrote
+    // `default: <anything>` in their YAML.
+    let value = serde_yaml::Value::deserialize(deserializer)?;
+    Ok(Some(DefaultValue(value)))
 }
 
 /// Polling configuration: re-execute step until a condition is met.
@@ -1354,5 +1452,195 @@ steps:
         // Empty merge must not drop anything.
         redaction.merge_headers(std::iter::empty::<String>());
         assert_eq!(redaction.headers, vec!["authorization", "cookie"]);
+    }
+
+    // --- NAZ-242: optional / default / when on captures, if / unless on steps ---
+
+    #[test]
+    fn deserialize_capture_with_optional_flag() {
+        let yaml = r#"
+name: Optional capture
+steps:
+  - name: maybe capture
+    request:
+      method: GET
+      url: "http://localhost:3000/users/1"
+    capture:
+      middle_name:
+        jsonpath: "$.middle_name"
+        optional: true
+"#;
+        let tf: TestFile = serde_yaml::from_str(yaml).unwrap();
+        match tf.steps[0].capture.get("middle_name") {
+            Some(CaptureSpec::Extended(ext)) => {
+                assert_eq!(ext.optional, Some(true));
+                assert_eq!(ext.default, None);
+                assert!(ext.when.is_none());
+            }
+            other => panic!("expected Extended capture, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn deserialize_capture_with_default_value_of_various_types() {
+        let yaml = r#"
+name: Default capture
+steps:
+  - name: step
+    request:
+      method: GET
+      url: "http://localhost:3000"
+    capture:
+      count:
+        jsonpath: "$.count"
+        default: 0
+      label:
+        jsonpath: "$.label"
+        default: "unnamed"
+      deleted:
+        jsonpath: "$.deleted"
+        default: null
+"#;
+        let tf: TestFile = serde_yaml::from_str(yaml).unwrap();
+        let caps = &tf.steps[0].capture;
+
+        let count = match caps.get("count") {
+            Some(CaptureSpec::Extended(ext)) => ext,
+            other => panic!("expected Extended, got {:?}", other),
+        };
+        assert_eq!(
+            count.default.as_ref().and_then(|v| v.as_value().as_i64()),
+            Some(0),
+            "numeric default preserved"
+        );
+
+        let label = match caps.get("label") {
+            Some(CaptureSpec::Extended(ext)) => ext,
+            other => panic!("expected Extended, got {:?}", other),
+        };
+        assert_eq!(
+            label.default.as_ref().and_then(|v| v.as_value().as_str()),
+            Some("unnamed"),
+            "string default preserved"
+        );
+
+        let deleted = match caps.get("deleted") {
+            Some(CaptureSpec::Extended(ext)) => ext,
+            other => panic!("expected Extended, got {:?}", other),
+        };
+        assert!(
+            deleted
+                .default
+                .as_ref()
+                .map(|v| v.as_value().is_null())
+                .unwrap_or(false),
+            "null default preserved (got {:?})",
+            deleted.default
+        );
+    }
+
+    #[test]
+    fn deserialize_capture_with_when_status_exact() {
+        let yaml = r#"
+name: Conditional capture
+steps:
+  - name: create if missing
+    request:
+      method: PUT
+      url: "http://localhost:3000/widgets/1"
+    capture:
+      created_id:
+        jsonpath: "$.id"
+        when:
+          status: 201
+"#;
+        let tf: TestFile = serde_yaml::from_str(yaml).unwrap();
+        let ext = match tf.steps[0].capture.get("created_id") {
+            Some(CaptureSpec::Extended(e)) => e,
+            other => panic!("expected Extended, got {:?}", other),
+        };
+        let when = ext.when.as_ref().expect("when present");
+        match when.status.as_ref().unwrap() {
+            StatusAssertion::Exact(201) => {}
+            other => panic!("expected Exact(201), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn deserialize_capture_with_when_status_set_and_range() {
+        let yaml = r#"
+name: Conditional capture sets
+steps:
+  - name: pick
+    request:
+      method: GET
+      url: "http://localhost:3000/x"
+    capture:
+      ok_id:
+        jsonpath: "$.id"
+        when:
+          status:
+            in: [200, 201]
+      err_code:
+        jsonpath: "$.error.code"
+        when:
+          status:
+            gte: 400
+            lt: 500
+"#;
+        let tf: TestFile = serde_yaml::from_str(yaml).unwrap();
+        let caps = &tf.steps[0].capture;
+
+        let ok = match caps.get("ok_id") {
+            Some(CaptureSpec::Extended(e)) => e,
+            other => panic!("expected Extended, got {:?}", other),
+        };
+        match ok.when.as_ref().unwrap().status.as_ref().unwrap() {
+            StatusAssertion::Complex(spec) => {
+                assert_eq!(spec.in_set.as_ref().unwrap(), &vec![200, 201]);
+            }
+            other => panic!("expected Complex in, got {:?}", other),
+        }
+
+        let err = match caps.get("err_code") {
+            Some(CaptureSpec::Extended(e)) => e,
+            other => panic!("expected Extended, got {:?}", other),
+        };
+        match err.when.as_ref().unwrap().status.as_ref().unwrap() {
+            StatusAssertion::Complex(spec) => {
+                assert_eq!(spec.gte, Some(400));
+                assert_eq!(spec.lt, Some(500));
+            }
+            other => panic!("expected Complex range, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn deserialize_step_with_if_and_unless_fields() {
+        let yaml = r#"
+name: Conditional steps
+steps:
+  - name: run only if set
+    if: "{{ capture.request_uuid }}"
+    request:
+      method: GET
+      url: "http://localhost:3000/a"
+  - name: run only if unset
+    unless: "{{ capture.request_uuid }}"
+    request:
+      method: GET
+      url: "http://localhost:3000/b"
+"#;
+        let tf: TestFile = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(
+            tf.steps[0].run_if.as_deref(),
+            Some("{{ capture.request_uuid }}")
+        );
+        assert!(tf.steps[0].unless.is_none());
+        assert!(tf.steps[1].run_if.is_none());
+        assert_eq!(
+            tf.steps[1].unless.as_deref(),
+            Some("{{ capture.request_uuid }}")
+        );
     }
 }

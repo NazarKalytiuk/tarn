@@ -21,6 +21,13 @@ pub enum FailureCategory {
     /// The step was not executed because `fail_fast_within_test` is on
     /// and an earlier step in the same test already failed.
     SkippedDueToFailFast,
+    /// The step was not executed because its inline `if:` / `unless:`
+    /// predicate evaluated falsy / truthy respectively. Distinct from
+    /// the other skipped categories because there is no underlying
+    /// failure — the skip is a feature, not fallout. Steps carrying
+    /// this category are reported with `passed: true` so tests don't
+    /// fail when a conditional branch legitimately skips.
+    SkippedByCondition,
 }
 
 /// Stable machine-readable failure code for programmatic handling.
@@ -199,6 +206,11 @@ impl StepResult {
             Some(FailureCategory::UnresolvedTemplate) => Some(ErrorCode::InterpolationFailed),
             Some(FailureCategory::SkippedDueToFailedCapture)
             | Some(FailureCategory::SkippedDueToFailFast) => Some(ErrorCode::SkippedDependency),
+            // `SkippedByCondition` is an intentional, non-failure skip.
+            // Steps in this state carry `passed: true` and return no
+            // error code — downstream consumers should treat them as
+            // observational, not as cascade fallout.
+            Some(FailureCategory::SkippedByCondition) => None,
             Some(FailureCategory::ParseError) => {
                 if lower.contains("interpolation") {
                     Some(ErrorCode::InterpolationFailed)
