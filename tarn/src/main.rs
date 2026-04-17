@@ -2141,9 +2141,11 @@ fn run_result_exit_code(run_result: &RunResult) -> i32 {
             // code above 1 — the root-cause step already set the
             // correct category (usually CaptureError → 3). Treating
             // a skip as a fresh runtime error would double-count the
-            // same failure.
+            // same failure. `SkippedByCondition` is a passing skip
+            // (inline `if:` / `unless:`), so it is also a no-op here.
             Some(FailureCategory::SkippedDueToFailedCapture)
             | Some(FailureCategory::SkippedDueToFailFast)
+            | Some(FailureCategory::SkippedByCondition)
             | Some(FailureCategory::AssertionFailed)
             | None => {}
         }

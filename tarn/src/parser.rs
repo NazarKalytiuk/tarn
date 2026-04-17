@@ -50,6 +50,8 @@ const STEP_FIELDS: &[(&str, &str)] = &[
     ("request", "request"),
     ("capture", "capture"),
     ("assert", "assert"),
+    ("if", "if"),
+    ("unless", "unless"),
     ("retries", "retries"),
     ("timeout", "timeout"),
     ("connect_timeout", "connect_timeout"),
@@ -114,6 +116,8 @@ const STATUS_ASSERT_FIELDS: &[(&str, &str)] = &[
     ("lte", "lte"),
     ("lt", "lt"),
 ];
+// Extending this list? Also extend `CAPTURE_EXT_FIELDS` above so
+// capture-side validation stays in lockstep with assertion-side.
 const CAPTURE_EXT_FIELDS: &[(&str, &str)] = &[
     ("header", "header"),
     ("cookie", "cookie"),
@@ -122,7 +126,15 @@ const CAPTURE_EXT_FIELDS: &[(&str, &str)] = &[
     ("status", "status"),
     ("url", "url"),
     ("regex", "regex"),
+    ("where", "where"),
+    ("optional", "optional"),
+    ("default", "default"),
+    ("when", "when"),
 ];
+/// Valid keys inside a `capture.when:` gate. Kept narrow so a typo
+/// like `statuus: 201` fails validation with a fuzzy hint instead of
+/// silently letting every response pass the gate.
+const CAPTURE_WHEN_FIELDS: &[(&str, &str)] = &[("status", "status")];
 
 /// Parse a .tarn.yaml file into a TestFile struct.
 pub fn parse_file(path: &Path) -> Result<TestFile, TarnError> {
@@ -713,12 +725,27 @@ fn validate_capture_map(
     for (capture_name, capture_spec) in captures {
         let capture_name = yaml_key_as_string(capture_name).unwrap_or("<capture>");
         if capture_spec.is_mapping() {
-            validate_known_mapping(
-                capture_spec,
-                CAPTURE_EXT_FIELDS,
-                &format!("{context}.{capture_name}"),
-                path,
-            )?;
+            let cap_context = format!("{context}.{capture_name}");
+            validate_known_mapping(capture_spec, CAPTURE_EXT_FIELDS, &cap_context, path)?;
+
+            if let Some(when) = mapping_value(capture_spec.as_mapping().unwrap(), "when") {
+                validate_known_mapping(
+                    when,
+                    CAPTURE_WHEN_FIELDS,
+                    &format!("{cap_context}.when"),
+                    path,
+                )?;
+                if let Some(status) = mapping_value(when.as_mapping().unwrap(), "status") {
+                    if status.is_mapping() {
+                        validate_known_mapping(
+                            status,
+                            STATUS_ASSERT_FIELDS,
+                            &format!("{cap_context}.when.status"),
+                            path,
+                        )?;
+                    }
+                }
+            }
         }
     }
     Ok(())
@@ -1387,6 +1414,18 @@ fn validate_test_file(tf: &TestFile, path: &Path) -> Result<(), TarnError> {
             )));
         }
 
+        // Reject `if:` + `unless:` on the same step — their semantics are
+        // exact inverses, so mixing them is always a typo / copy-paste
+        // bug. Skipping both cases at once yields undefined behavior
+        // worth failing loud for.
+        if step.run_if.is_some() && step.unless.is_some() {
+            return Err(TarnError::Validation(format!(
+                "{}: Step '{}' cannot have both 'if' and 'unless' — use one (they are exact inverses)",
+                path.display(),
+                step.name
+            )));
+        }
+
         for (capture_name, spec) in &step.capture {
             let CaptureSpec::Extended(ext) = spec else {
                 continue;
@@ -1402,6 +1441,23 @@ fn validate_test_file(tf: &TestFile, path: &Path) -> Result<(), TarnError> {
             if source_count != 1 {
                 return Err(TarnError::Validation(format!(
                     "{}: Step '{}' capture '{}' must specify exactly one source: header, cookie, jsonpath, body, status, or url",
+                    path.display(),
+                    step.name,
+                    capture_name
+                )));
+            }
+
+            // `optional: false` while also providing `default:` or
+            // `when:` is contradictory — both features exist to make a
+            // missing value legal. A `false` here explicitly says
+            // "fail on missing", which negates the other two fields
+            // and is guaranteed to be a user mistake.
+            if matches!(ext.optional, Some(false))
+                && (ext.default.is_some() || ext.when.is_some())
+            {
+                return Err(TarnError::Validation(format!(
+                    "{}: Step '{}' capture '{}' has 'optional: false' but also 'default:' or 'when:' — \
+                     those fields imply optional capture; either drop 'optional: false' or remove 'default:'/'when:'",
                     path.display(),
                     step.name,
                     capture_name
@@ -2322,5 +2378,158 @@ steps:
             .unwrap_err()
             .to_string()
             .contains("Include file not found"));
+    }
+
+    // --- NAZ-242: parser validation for new fields ---
+
+    #[test]
+    fn parser_rejects_if_plus_unless_on_same_step() {
+        // Exact inverses — accepting both is always a user mistake
+        // with undefined semantics. Validation must stop the run at
+        // parse time rather than silently running or silently
+        // skipping.
+        let yaml = r#"
+name: Conflict
+steps:
+  - name: confused
+    if: "{{ capture.a }}"
+    unless: "{{ capture.b }}"
+    request:
+      method: GET
+      url: "http://localhost:3000"
+"#;
+        let err = parse_yaml(yaml).unwrap_err().to_string();
+        assert!(
+            err.contains("cannot have both 'if' and 'unless'"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn parser_rejects_optional_false_plus_default() {
+        // `optional: false` contradicts `default:` — either drop one
+        // or the user intent is ambiguous. Validation catches it.
+        let yaml = r#"
+name: Contradiction
+steps:
+  - name: step
+    request:
+      method: GET
+      url: "http://localhost:3000"
+    capture:
+      x:
+        jsonpath: "$.x"
+        optional: false
+        default: 0
+"#;
+        let err = parse_yaml(yaml).unwrap_err().to_string();
+        assert!(
+            err.contains("optional: false") && err.contains("default"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn parser_rejects_optional_false_plus_when() {
+        // Same class of contradiction as optional+default.
+        let yaml = r#"
+name: Contradiction
+steps:
+  - name: step
+    request:
+      method: GET
+      url: "http://localhost:3000"
+    capture:
+      x:
+        jsonpath: "$.x"
+        optional: false
+        when:
+          status: 200
+"#;
+        let err = parse_yaml(yaml).unwrap_err().to_string();
+        assert!(
+            err.contains("optional: false") && err.contains("when"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn parser_rejects_unknown_field_under_capture_when() {
+        // Guard against typos silently making the gate pass on every
+        // response. `statuus:` (typo) must fail validation.
+        let yaml = r#"
+name: Typo
+steps:
+  - name: step
+    request:
+      method: GET
+      url: "http://localhost:3000"
+    capture:
+      x:
+        jsonpath: "$.x"
+        when:
+          statuus: 200
+"#;
+        let err = parse_yaml(yaml).unwrap_err().to_string();
+        assert!(
+            err.contains("statuus") || err.contains("unknown"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn parser_accepts_where_inside_extended_capture() {
+        // `where:` was previously missing from the parser's allowed
+        // keys for extended captures (pre-existing gap surfaced by
+        // NAZ-242). Locking in the fix so future field-list edits
+        // don't regress array-filter captures.
+        let yaml = r#"
+name: Where
+steps:
+  - name: step
+    request:
+      method: GET
+      url: "http://localhost:3000"
+    capture:
+      admins:
+        jsonpath: "$.users"
+        where:
+          role: admin
+"#;
+        assert!(parse_yaml(yaml).is_ok());
+    }
+
+    #[test]
+    fn parser_accepts_full_feature_combination() {
+        // Whole-stack smoke test: optional + default + when on a
+        // capture plus if: on a step must all parse together.
+        let yaml = r#"
+name: Combined
+steps:
+  - name: conditional
+    if: "{{ capture.do_it }}"
+    request:
+      method: GET
+      url: "http://localhost:3000"
+    capture:
+      id:
+        jsonpath: "$.id"
+        optional: true
+        default: ""
+        when:
+          status:
+            in: [200, 201]
+"#;
+        let tf = parse_yaml(yaml).expect("should parse");
+        assert!(tf.steps[0].run_if.is_some());
+        let spec = tf.steps[0].capture.get("id").unwrap();
+        match spec {
+            CaptureSpec::Extended(ext) => {
+                assert_eq!(ext.optional, Some(true));
+                assert!(ext.default.is_some());
+                assert!(ext.when.is_some());
+            }
+            other => panic!("expected Extended, got {:?}", other),
+        }
     }
 }

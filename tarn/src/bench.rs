@@ -157,6 +157,7 @@ pub fn run_bench(
     let ctx = Context {
         env: env.clone(),
         captures: HashMap::new(),
+        optional_unset: std::collections::HashSet::new(),
     };
 
     // Interpolate the request once (captures won't work in bench mode)

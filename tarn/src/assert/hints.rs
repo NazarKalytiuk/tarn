@@ -515,6 +515,7 @@ mod tests {
     ) -> StepResult {
         StepResult {
             name: "call".into(),
+            description: None,
             passed: false,
             duration_ms: 10,
             assertion_results: vec![AssertionResult::fail(

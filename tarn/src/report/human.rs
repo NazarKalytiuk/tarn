@@ -511,6 +511,7 @@ mod tests {
                     duration_ms: 12,
                     step_results: vec![StepResult {
                         name: "POST /orders/approve".into(),
+                        description: None,
                         passed: false,
                         duration_ms: 12,
                         assertion_results: vec![AssertionResult::fail(
@@ -581,6 +582,7 @@ mod tests {
                     duration_ms: 5,
                     step_results: vec![StepResult {
                         name: "POST /orders/approve".into(),
+                        description: None,
                         passed: false,
                         duration_ms: 5,
                         assertion_results: vec![AssertionResult::fail(
@@ -645,6 +647,7 @@ mod tests {
                     duration_ms: 5,
                     step_results: vec![StepResult {
                         name: "POST /orders/approve".into(),
+                        description: None,
                         passed: false,
                         duration_ms: 5,
                         assertion_results: vec![AssertionResult::fail(

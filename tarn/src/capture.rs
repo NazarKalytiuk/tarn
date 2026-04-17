@@ -1,10 +1,29 @@
 use crate::error::TarnError;
 use crate::interpolation::{self, Context};
-use crate::model::{CaptureSpec, ExtendedCapture};
+use crate::model::{CaptureSpec, ExtendedCapture, StatusAssertion, StatusSpec};
 use crate::regex_cache;
 use serde_json::Value;
 use serde_json_path::JsonPath;
 use std::collections::HashMap;
+
+/// Outcome of extracting a single capture. Distinguishes between a real
+/// value and an intentional opt-out (optional/when-gated miss) so the
+/// runner can record the capture as "explicitly unset" and interpolation
+/// can later emit a precise
+/// `"declared optional and not set"` error rather than the generic
+/// unresolved-template fallback.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CaptureOutcome {
+    /// The source produced a concrete value. The runner stores this in
+    /// the shared captures map like a regular capture.
+    Set(Value),
+    /// The source was missing but the capture is declared `optional`
+    /// (or was gated out by a `when:` that did not match, or was
+    /// declared `optional` with no `default:`). No error — the name is
+    /// recorded in the context's `optional_unset` set so downstream
+    /// interpolation can refer to it without failing the run.
+    OptionalUnset,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValueTransform {
@@ -67,8 +86,21 @@ pub struct ResponseView<'a> {
     pub raw_headers: &'a [(String, String)],
 }
 
+/// Bundled extraction result: successful concrete captures plus the
+/// names of captures that were intentionally left unset via
+/// `optional:`, `default:` (absent path), or a `when:` gate that did
+/// not match. The runner forwards both into the next step's
+/// interpolation [`Context`] so downstream `{{ capture.X }}`
+/// references can be classified precisely.
+#[derive(Debug, Default, Clone)]
+pub struct CaptureExtraction {
+    pub values: HashMap<String, Value>,
+    pub optional_unset: std::collections::HashSet<String>,
+}
+
 /// Extract captures from an HTTP response using JSONPath or extended sources.
-/// Returns a map of capture_name -> extracted JSON value (type-preserving).
+/// Returns concrete captures plus names that were explicitly opted out
+/// via `optional:` / `default:` / `when:`.
 ///
 /// `ctx` supplies `env` + previously captured values so that `capture.jsonpath`,
 /// `capture.regex`, `capture.header`, and `capture.cookie` can reference
@@ -81,34 +113,192 @@ pub fn extract_captures(
     response: &ResponseView<'_>,
     capture_map: &HashMap<String, CaptureSpec>,
     ctx: &Context,
-) -> Result<HashMap<String, Value>, TarnError> {
-    let mut captures = HashMap::new();
+) -> Result<CaptureExtraction, TarnError> {
+    let mut out = CaptureExtraction::default();
 
     for (name, spec) in capture_map {
-        let value = extract_capture(response, name, spec, ctx)?;
-        captures.insert(name.clone(), value);
+        match extract_capture(response, name, spec, ctx)? {
+            CaptureOutcome::Set(value) => {
+                out.values.insert(name.clone(), value);
+            }
+            CaptureOutcome::OptionalUnset => {
+                out.optional_unset.insert(name.clone());
+            }
+        }
     }
 
-    Ok(captures)
+    Ok(out)
 }
 
 /// Extract a single named capture while preserving the existing error messages.
+/// Returns [`CaptureOutcome::Set`] on success, or
+/// [`CaptureOutcome::OptionalUnset`] when the source was missing but
+/// the capture is optional / default-backed / gated-out by `when:`.
 pub fn extract_capture(
     response: &ResponseView<'_>,
     name: &str,
     spec: &CaptureSpec,
     ctx: &Context,
-) -> Result<Value, TarnError> {
+) -> Result<CaptureOutcome, TarnError> {
     let resolved = resolve_capture_spec(name, spec, ctx)?;
     match &resolved {
-        CaptureSpec::JsonPath(path_str) => extract_jsonpath(response.body, path_str).map_err(|e| {
-            TarnError::Capture(format!(
-                "Failed to capture '{}' with path '{}': {}",
-                name, path_str, e
-            ))
-        }),
-        CaptureSpec::Extended(ext) => extract_extended(response, ext)
-            .map_err(|e| TarnError::Capture(format!("Failed to capture '{}': {}", name, e))),
+        CaptureSpec::JsonPath(path_str) => extract_jsonpath(response.body, path_str)
+            .map(CaptureOutcome::Set)
+            .map_err(|e| {
+                TarnError::Capture(format!(
+                    "Failed to capture '{}' with path '{}': {}",
+                    name, path_str, e
+                ))
+            }),
+        CaptureSpec::Extended(ext) => extract_extended_with_options(response, name, ext),
+    }
+}
+
+/// Extended-capture extraction with `optional:`, `default:`, and `when:`
+/// semantics layered on top of the raw source pull. Ordering:
+///
+///   1. `when:` gate — if present and the response does not match, the
+///      capture is skipped entirely (optional-unset), no error.
+///   2. Run the source extraction (jsonpath / header / cookie / ...).
+///   3. On a "missing source" failure (path matched nothing, header
+///      absent, regex no-match, cookie absent):
+///        - `default:` wins if set (value coerced from YAML → JSON).
+///        - otherwise `optional: true` produces optional-unset.
+///        - otherwise the original error bubbles up so the runner marks
+///          the step as a capture failure.
+///   4. On success, the value flows through unchanged.
+fn extract_extended_with_options(
+    response: &ResponseView<'_>,
+    name: &str,
+    ext: &ExtendedCapture,
+) -> Result<CaptureOutcome, TarnError> {
+    // Gate: `when: { status: ... }`. When unmet, the capture is
+    // treated exactly like an optional-unset miss — no error, variable
+    // recorded as optional-unset in the context. Any `default:` is
+    // intentionally ignored here: a caller who wants a default across
+    // all responses simply omits `when:`.
+    if let Some(ref when) = ext.when {
+        if !when_matches(when, response.status) {
+            return Ok(CaptureOutcome::OptionalUnset);
+        }
+    }
+
+    match extract_extended(response, ext) {
+        Ok(value) => Ok(CaptureOutcome::Set(value)),
+        Err(err) => {
+            if let Some(default) = &ext.default {
+                return Ok(CaptureOutcome::Set(yaml_to_json(default.as_value())));
+            }
+            if ext.optional.unwrap_or(false) {
+                return Ok(CaptureOutcome::OptionalUnset);
+            }
+            Err(TarnError::Capture(format!(
+                "Failed to capture '{}': {}",
+                name, err
+            )))
+        }
+    }
+}
+
+/// Evaluate a `capture.when` predicate against the observed response.
+/// Today only `status:` is supported, reusing the assertion-side
+/// [`StatusAssertion`] matcher so the grammar stays exactly consistent
+/// with `assert.status`.
+fn when_matches(when: &crate::model::CaptureWhen, actual_status: u16) -> bool {
+    when.status
+        .as_ref()
+        .map(|matcher| status_matches(matcher, actual_status))
+        .unwrap_or(true)
+}
+
+/// Evaluate a [`StatusAssertion`] directly as a boolean match, without
+/// constructing an [`crate::assert::types::AssertionResult`]. Mirrors
+/// the assertion-side logic exactly so any future extension to the
+/// status grammar stays in sync by deliberate duplication rather than
+/// a `contains("Expected")` string sniff on the assertion result.
+fn status_matches(matcher: &StatusAssertion, actual: u16) -> bool {
+    match matcher {
+        StatusAssertion::Exact(code) => *code == actual,
+        StatusAssertion::Shorthand(pattern) => shorthand_matches(pattern, actual),
+        StatusAssertion::Complex(spec) => complex_matches(spec, actual),
+    }
+}
+
+fn shorthand_matches(pattern: &str, actual: u16) -> bool {
+    let lower = pattern.to_lowercase();
+    let Some(class) = lower.chars().next().and_then(|c| c.to_digit(10)) else {
+        return false;
+    };
+    if !lower.ends_with("xx") {
+        return false;
+    }
+    (actual / 100) as u32 == class
+}
+
+fn complex_matches(spec: &StatusSpec, actual: u16) -> bool {
+    if let Some(ref set) = spec.in_set {
+        if !set.contains(&actual) {
+            return false;
+        }
+    }
+    if let Some(gte) = spec.gte {
+        if actual < gte {
+            return false;
+        }
+    }
+    if let Some(gt) = spec.gt {
+        if actual <= gt {
+            return false;
+        }
+    }
+    if let Some(lte) = spec.lte {
+        if actual > lte {
+            return false;
+        }
+    }
+    if let Some(lt) = spec.lt {
+        if actual >= lt {
+            return false;
+        }
+    }
+    true
+}
+
+/// Convert a `serde_yaml::Value` (from `default:`) into a
+/// `serde_json::Value` so the captured default matches the type that
+/// an extracted capture would have produced. We lose YAML-specific
+/// types (tags, anchors) — those aren't meaningful as capture values.
+fn yaml_to_json(value: &serde_yaml::Value) -> Value {
+    match value {
+        serde_yaml::Value::Null => Value::Null,
+        serde_yaml::Value::Bool(b) => Value::Bool(*b),
+        serde_yaml::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Value::Number(i.into())
+            } else if let Some(u) = n.as_u64() {
+                Value::Number(u.into())
+            } else if let Some(f) = n.as_f64() {
+                serde_json::Number::from_f64(f)
+                    .map(Value::Number)
+                    .unwrap_or(Value::Null)
+            } else {
+                Value::Null
+            }
+        }
+        serde_yaml::Value::String(s) => Value::String(s.clone()),
+        serde_yaml::Value::Sequence(seq) => Value::Array(seq.iter().map(yaml_to_json).collect()),
+        serde_yaml::Value::Mapping(map) => {
+            let mut obj = serde_json::Map::new();
+            for (k, v) in map {
+                let key = match k {
+                    serde_yaml::Value::String(s) => s.clone(),
+                    other => serde_yaml::to_string(other).unwrap_or_default().trim().to_string(),
+                };
+                obj.insert(key, yaml_to_json(v));
+            }
+            Value::Object(obj)
+        }
+        serde_yaml::Value::Tagged(tagged) => yaml_to_json(&tagged.value),
     }
 }
 
@@ -716,7 +906,7 @@ mod tests {
             &Context::new(),
         )
         .unwrap();
-        assert_eq!(captures.get("user_name").unwrap(), &json!("Alice"));
+        assert_eq!(captures.values.get("user_name").unwrap(), &json!("Alice"));
     }
 
     #[test]
@@ -738,7 +928,7 @@ mod tests {
             &Context::new(),
         )
         .unwrap();
-        assert_eq!(captures.get("user_age").unwrap(), &json!(30));
+        assert_eq!(captures.values.get("user_age").unwrap(), &json!(30));
     }
 
     #[test]
@@ -760,7 +950,7 @@ mod tests {
             &Context::new(),
         )
         .unwrap();
-        assert_eq!(captures.get("is_active").unwrap(), &json!(true));
+        assert_eq!(captures.values.get("is_active").unwrap(), &json!(true));
     }
 
     #[test]
@@ -782,7 +972,7 @@ mod tests {
             &Context::new(),
         )
         .unwrap();
-        assert_eq!(captures.get("deleted").unwrap(), &json!(null));
+        assert_eq!(captures.values.get("deleted").unwrap(), &json!(null));
     }
 
     #[test]
@@ -807,7 +997,7 @@ mod tests {
             &Context::new(),
         )
         .unwrap();
-        assert_eq!(captures.get("email").unwrap(), &json!("alice@test.com"));
+        assert_eq!(captures.values.get("email").unwrap(), &json!("alice@test.com"));
     }
 
     #[test]
@@ -832,7 +1022,7 @@ mod tests {
             &Context::new(),
         )
         .unwrap();
-        assert_eq!(captures.get("first_id").unwrap(), &json!("first"));
+        assert_eq!(captures.values.get("first_id").unwrap(), &json!("first"));
     }
 
     #[test]
@@ -905,10 +1095,10 @@ mod tests {
             &Context::new(),
         )
         .unwrap();
-        assert_eq!(captures.len(), 3);
-        assert_eq!(captures.get("id").unwrap(), &json!("usr_123"));
-        assert_eq!(captures.get("tok").unwrap(), &json!("abc"));
-        assert_eq!(captures.get("code").unwrap(), &json!(200));
+        assert_eq!(captures.values.len(), 3);
+        assert_eq!(captures.values.get("id").unwrap(), &json!("usr_123"));
+        assert_eq!(captures.values.get("tok").unwrap(), &json!("abc"));
+        assert_eq!(captures.values.get("code").unwrap(), &json!(200));
     }
 
     #[test]
@@ -930,7 +1120,7 @@ mod tests {
             &Context::new(),
         )
         .unwrap();
-        assert_eq!(captures.get("tags").unwrap(), &json!(["a", "b"]));
+        assert_eq!(captures.values.get("tags").unwrap(), &json!(["a", "b"]));
     }
 
     #[test]
@@ -1089,7 +1279,7 @@ mod tests {
             &Context::new(),
         )
         .unwrap();
-        assert!(captures.is_empty());
+        assert!(captures.values.is_empty());
     }
 
     // --- Header capture tests ---
@@ -1106,7 +1296,7 @@ mod tests {
         let mut map = HashMap::new();
         map.insert(
             "session".into(),
-            CaptureSpec::Extended(ExtendedCapture {
+            CaptureSpec::Extended(Box::new(ExtendedCapture {
                 header: Some("set-cookie".to_string()),
                 cookie: None,
                 jsonpath: None,
@@ -1115,7 +1305,10 @@ mod tests {
                 url: None,
                 regex: Some("session=([^;]+)".to_string()),
                 where_predicate: None,
-            }),
+                optional: None,
+                default: None,
+                when: None,
+            })),
         );
         let raw_headers = raw_headers(&[("set-cookie", "session=abc123; Path=/; HttpOnly")]);
 
@@ -1131,7 +1324,7 @@ mod tests {
             &Context::new(),
         )
         .unwrap();
-        assert_eq!(captures.get("session").unwrap(), &json!("abc123"));
+        assert_eq!(captures.values.get("session").unwrap(), &json!("abc123"));
     }
 
     #[test]
@@ -1143,7 +1336,7 @@ mod tests {
         let mut map = HashMap::new();
         map.insert(
             "req_id".into(),
-            CaptureSpec::Extended(ExtendedCapture {
+            CaptureSpec::Extended(Box::new(ExtendedCapture {
                 header: Some("x-request-id".to_string()),
                 cookie: None,
                 jsonpath: None,
@@ -1152,7 +1345,10 @@ mod tests {
                 url: None,
                 regex: None,
                 where_predicate: None,
-            }),
+                optional: None,
+                default: None,
+                when: None,
+            })),
         );
         let raw_headers = raw_headers(&[("x-request-id", "req-12345")]);
 
@@ -1168,7 +1364,7 @@ mod tests {
             &Context::new(),
         )
         .unwrap();
-        assert_eq!(captures.get("req_id").unwrap(), &json!("req-12345"));
+        assert_eq!(captures.values.get("req_id").unwrap(), &json!("req-12345"));
     }
 
     #[test]
@@ -1180,7 +1376,7 @@ mod tests {
         let mut map = HashMap::new();
         map.insert(
             "ct".into(),
-            CaptureSpec::Extended(ExtendedCapture {
+            CaptureSpec::Extended(Box::new(ExtendedCapture {
                 header: Some("content-type".to_string()),
                 cookie: None,
                 jsonpath: None,
@@ -1189,7 +1385,10 @@ mod tests {
                 url: None,
                 regex: None,
                 where_predicate: None,
-            }),
+                optional: None,
+                default: None,
+                when: None,
+            })),
         );
         let raw_headers = raw_headers(&[("Content-Type", "application/json")]);
 
@@ -1205,7 +1404,7 @@ mod tests {
             &Context::new(),
         )
         .unwrap();
-        assert_eq!(captures.get("ct").unwrap(), &json!("application/json"));
+        assert_eq!(captures.values.get("ct").unwrap(), &json!("application/json"));
     }
 
     #[test]
@@ -1215,7 +1414,7 @@ mod tests {
         let mut map = HashMap::new();
         map.insert(
             "missing".into(),
-            CaptureSpec::Extended(ExtendedCapture {
+            CaptureSpec::Extended(Box::new(ExtendedCapture {
                 header: Some("x-nonexistent".to_string()),
                 cookie: None,
                 jsonpath: None,
@@ -1224,7 +1423,10 @@ mod tests {
                 url: None,
                 regex: None,
                 where_predicate: None,
-            }),
+                optional: None,
+                default: None,
+                when: None,
+            })),
         );
 
         let result = extract_captures(
@@ -1251,7 +1453,7 @@ mod tests {
         let mut map = HashMap::new();
         map.insert(
             "session".into(),
-            CaptureSpec::Extended(ExtendedCapture {
+            CaptureSpec::Extended(Box::new(ExtendedCapture {
                 header: Some("set-cookie".to_string()),
                 cookie: None,
                 jsonpath: None,
@@ -1260,7 +1462,10 @@ mod tests {
                 url: None,
                 regex: Some("session=([^;]+)".to_string()),
                 where_predicate: None,
-            }),
+                optional: None,
+                default: None,
+                when: None,
+            })),
         );
         let raw_headers = raw_headers(&[
             ("set-cookie", "other=value"),
@@ -1289,7 +1494,7 @@ mod tests {
         let mut map = HashMap::new();
         map.insert(
             "user_id".into(),
-            CaptureSpec::Extended(ExtendedCapture {
+            CaptureSpec::Extended(Box::new(ExtendedCapture {
                 header: None,
                 cookie: None,
                 jsonpath: Some("$.message".to_string()),
@@ -1298,7 +1503,10 @@ mod tests {
                 url: None,
                 regex: Some("ID: (\\w+)".to_string()),
                 where_predicate: None,
-            }),
+                optional: None,
+                default: None,
+                when: None,
+            })),
         );
 
         let captures = extract_captures(
@@ -1313,7 +1521,7 @@ mod tests {
             &Context::new(),
         )
         .unwrap();
-        assert_eq!(captures.get("user_id").unwrap(), &json!("usr_42"));
+        assert_eq!(captures.values.get("user_id").unwrap(), &json!("usr_42"));
     }
 
     #[test]
@@ -1322,7 +1530,7 @@ mod tests {
         let headers = HashMap::new();
         let spec = CaptureSpec::JsonPath("$.token".into());
 
-        let value = extract_capture(
+        let outcome = extract_capture(
             &ResponseView {
                 status: 200,
                 url: "http://example.com/final",
@@ -1335,7 +1543,7 @@ mod tests {
             &Context::new(),
         )
         .unwrap();
-        assert_eq!(value, json!("abc123"));
+        assert_eq!(outcome, CaptureOutcome::Set(json!("abc123")));
     }
 
     #[test]
@@ -1345,7 +1553,7 @@ mod tests {
         let mut map = HashMap::new();
         map.insert(
             "status_code".into(),
-            CaptureSpec::Extended(ExtendedCapture {
+            CaptureSpec::Extended(Box::new(ExtendedCapture {
                 header: None,
                 cookie: None,
                 jsonpath: None,
@@ -1354,7 +1562,10 @@ mod tests {
                 url: None,
                 regex: None,
                 where_predicate: None,
-            }),
+                optional: None,
+                default: None,
+                when: None,
+            })),
         );
 
         let captures = extract_captures(
@@ -1369,7 +1580,7 @@ mod tests {
             &Context::new(),
         )
         .unwrap();
-        assert_eq!(captures.get("status_code").unwrap(), &json!(204));
+        assert_eq!(captures.values.get("status_code").unwrap(), &json!(204));
     }
 
     #[test]
@@ -1379,7 +1590,7 @@ mod tests {
         let mut map = HashMap::new();
         map.insert(
             "status_class".into(),
-            CaptureSpec::Extended(ExtendedCapture {
+            CaptureSpec::Extended(Box::new(ExtendedCapture {
                 header: None,
                 cookie: None,
                 jsonpath: None,
@@ -1388,7 +1599,10 @@ mod tests {
                 url: None,
                 regex: Some("^(\\d)".to_string()),
                 where_predicate: None,
-            }),
+                optional: None,
+                default: None,
+                when: None,
+            })),
         );
 
         let captures = extract_captures(
@@ -1403,7 +1617,7 @@ mod tests {
             &Context::new(),
         )
         .unwrap();
-        assert_eq!(captures.get("status_class").unwrap(), &json!("2"));
+        assert_eq!(captures.values.get("status_class").unwrap(), &json!("2"));
     }
 
     #[test]
@@ -1413,7 +1627,7 @@ mod tests {
         let mut map = HashMap::new();
         map.insert(
             "final_url".into(),
-            CaptureSpec::Extended(ExtendedCapture {
+            CaptureSpec::Extended(Box::new(ExtendedCapture {
                 header: None,
                 cookie: None,
                 jsonpath: None,
@@ -1422,7 +1636,10 @@ mod tests {
                 url: Some(true),
                 regex: None,
                 where_predicate: None,
-            }),
+                optional: None,
+                default: None,
+                when: None,
+            })),
         );
 
         let captures = extract_captures(
@@ -1438,7 +1655,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            captures.get("final_url").unwrap(),
+            captures.values.get("final_url").unwrap(),
             &json!("http://example.com/health")
         );
     }
@@ -1450,7 +1667,7 @@ mod tests {
         let mut map = HashMap::new();
         map.insert(
             "final_path".into(),
-            CaptureSpec::Extended(ExtendedCapture {
+            CaptureSpec::Extended(Box::new(ExtendedCapture {
                 header: None,
                 cookie: None,
                 jsonpath: None,
@@ -1459,7 +1676,10 @@ mod tests {
                 url: Some(true),
                 regex: Some("https?://[^/]+(/.+)$".to_string()),
                 where_predicate: None,
-            }),
+                optional: None,
+                default: None,
+                when: None,
+            })),
         );
 
         let captures = extract_captures(
@@ -1475,7 +1695,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            captures.get("final_path").unwrap(),
+            captures.values.get("final_path").unwrap(),
             &json!("/redirected/path")
         );
     }
@@ -1491,7 +1711,7 @@ mod tests {
         let mut map = HashMap::new();
         map.insert(
             "session_cookie".into(),
-            CaptureSpec::Extended(ExtendedCapture {
+            CaptureSpec::Extended(Box::new(ExtendedCapture {
                 header: None,
                 cookie: Some("session".to_string()),
                 jsonpath: None,
@@ -1500,7 +1720,10 @@ mod tests {
                 url: None,
                 regex: None,
                 where_predicate: None,
-            }),
+                optional: None,
+                default: None,
+                when: None,
+            })),
         );
 
         let captures = extract_captures(
@@ -1515,7 +1738,7 @@ mod tests {
             &Context::new(),
         )
         .unwrap();
-        assert_eq!(captures.get("session_cookie").unwrap(), &json!("abc123"));
+        assert_eq!(captures.values.get("session_cookie").unwrap(), &json!("abc123"));
     }
 
     #[test]
@@ -1529,7 +1752,7 @@ mod tests {
         let mut map = HashMap::new();
         map.insert(
             "missing_cookie".into(),
-            CaptureSpec::Extended(ExtendedCapture {
+            CaptureSpec::Extended(Box::new(ExtendedCapture {
                 header: None,
                 cookie: Some("csrf".to_string()),
                 jsonpath: None,
@@ -1538,7 +1761,10 @@ mod tests {
                 url: None,
                 regex: None,
                 where_predicate: None,
-            }),
+                optional: None,
+                default: None,
+                when: None,
+            })),
         );
 
         let err = extract_captures(
@@ -1566,7 +1792,7 @@ mod tests {
         let mut map = HashMap::new();
         map.insert(
             "body_word".into(),
-            CaptureSpec::Extended(ExtendedCapture {
+            CaptureSpec::Extended(Box::new(ExtendedCapture {
                 header: None,
                 cookie: None,
                 jsonpath: None,
@@ -1575,7 +1801,10 @@ mod tests {
                 url: None,
                 regex: Some("plain (text)".to_string()),
                 where_predicate: None,
-            }),
+                optional: None,
+                default: None,
+                when: None,
+            })),
         );
 
         let captures = extract_captures(
@@ -1590,7 +1819,7 @@ mod tests {
             &Context::new(),
         )
         .unwrap();
-        assert_eq!(captures.get("body_word").unwrap(), &json!("text"));
+        assert_eq!(captures.values.get("body_word").unwrap(), &json!("text"));
     }
 
     #[test]
@@ -1627,7 +1856,7 @@ mod tests {
             &ctx,
         )
         .unwrap();
-        assert_eq!(captures.get("matched_label").unwrap(), &json!("two"));
+        assert_eq!(captures.values.get("matched_label").unwrap(), &json!("two"));
     }
 
     #[test]
@@ -1640,7 +1869,7 @@ mod tests {
         let mut map = HashMap::new();
         map.insert(
             "rid".into(),
-            CaptureSpec::Extended(ExtendedCapture {
+            CaptureSpec::Extended(Box::new(ExtendedCapture {
                 header: Some("{{ env.request_id_header }}".into()),
                 cookie: None,
                 jsonpath: None,
@@ -1649,7 +1878,10 @@ mod tests {
                 url: None,
                 regex: Some("{{ env.id_prefix }}-(.+)".into()),
                 where_predicate: None,
-            }),
+                optional: None,
+                default: None,
+                when: None,
+            })),
         );
 
         let mut ctx = Context::new();
@@ -1669,7 +1901,7 @@ mod tests {
             &ctx,
         )
         .unwrap();
-        assert_eq!(captures.get("rid").unwrap(), &json!("42"));
+        assert_eq!(captures.values.get("rid").unwrap(), &json!("42"));
     }
 
     #[test]
@@ -1689,7 +1921,7 @@ mod tests {
         let mut map = HashMap::new();
         map.insert(
             "admins".into(),
-            CaptureSpec::Extended(ExtendedCapture {
+            CaptureSpec::Extended(Box::new(ExtendedCapture {
                 header: None,
                 cookie: None,
                 jsonpath: Some("$.users".to_string()),
@@ -1698,7 +1930,10 @@ mod tests {
                 url: None,
                 regex: None,
                 where_predicate: Some(serde_yaml::from_str("role: admin").unwrap()),
-            }),
+                optional: None,
+                default: None,
+                when: None,
+            })),
         );
 
         let captures = extract_captures(
@@ -1714,7 +1949,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            captures.get("admins").unwrap(),
+            captures.values.get("admins").unwrap(),
             &json!([{"id": "b", "role": "admin"}, {"id": "c", "role": "admin"}])
         );
     }
@@ -1731,7 +1966,7 @@ mod tests {
         let mut map = HashMap::new();
         map.insert(
             "picked".into(),
-            CaptureSpec::Extended(ExtendedCapture {
+            CaptureSpec::Extended(Box::new(ExtendedCapture {
                 header: None,
                 cookie: None,
                 jsonpath: Some("$.items".to_string()),
@@ -1742,7 +1977,10 @@ mod tests {
                 where_predicate: Some(
                     serde_yaml::from_str("id: '{{ capture.target_id }}'").unwrap(),
                 ),
-            }),
+                optional: None,
+                default: None,
+                when: None,
+            })),
         );
 
         let mut ctx = Context::new();
@@ -1762,7 +2000,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            captures.get("picked").unwrap(),
+            captures.values.get("picked").unwrap(),
             &json!([{"id": "xyz", "label": "two"}])
         );
     }
@@ -1798,5 +2036,242 @@ mod tests {
             err.contains("unresolved template variable(s)") && err.contains("capture.missing"),
             "expected unresolved-template error, got {err}"
         );
+    }
+
+    // --- NAZ-242: optional / default / when semantics ---
+
+    fn extended_capture(ext: ExtendedCapture) -> CaptureSpec {
+        CaptureSpec::Extended(Box::new(ext))
+    }
+
+    fn response_view<'a>(
+        status: u16,
+        body: &'a Value,
+        headers: &'a HashMap<String, String>,
+    ) -> ResponseView<'a> {
+        ResponseView {
+            status,
+            url: "http://example.com/final",
+            body,
+            headers,
+            raw_headers: &[],
+        }
+    }
+
+    #[test]
+    fn optional_capture_missing_path_is_classified_as_unset() {
+        // Author intent: "grab middle_name if present, otherwise skip.".
+        // Must NOT fail the step, and the name must land in
+        // `optional_unset` (not `values`) so interpolation can classify
+        // later references distinctly.
+        let body = json!({"first": "Alice"});
+        let headers = HashMap::new();
+        let mut map = HashMap::new();
+        map.insert(
+            "middle_name".into(),
+            extended_capture(ExtendedCapture {
+                jsonpath: Some("$.middle_name".into()),
+                optional: Some(true),
+                ..Default::default()
+            }),
+        );
+
+        let extraction =
+            extract_captures(&response_view(200, &body, &headers), &map, &Context::new())
+                .expect("optional miss must not error");
+        assert!(
+            !extraction.values.contains_key("middle_name"),
+            "optional miss should not produce a concrete value"
+        );
+        assert!(
+            extraction.optional_unset.contains("middle_name"),
+            "optional miss should be tracked as optional-unset"
+        );
+    }
+
+    #[test]
+    fn default_value_used_when_path_missing() {
+        // `default:` supplies a concrete value, so the capture lands
+        // in `values` just like a successful extraction did. Numeric
+        // type must be preserved end-to-end.
+        let body = json!({});
+        let headers = HashMap::new();
+        let mut map = HashMap::new();
+        map.insert(
+            "count".into(),
+            extended_capture(ExtendedCapture {
+                jsonpath: Some("$.count".into()),
+                default: Some(crate::model::DefaultValue(serde_yaml::Value::Number(
+                    serde_yaml::Number::from(0),
+                ))),
+                ..Default::default()
+            }),
+        );
+
+        let extraction =
+            extract_captures(&response_view(200, &body, &headers), &map, &Context::new()).unwrap();
+        assert_eq!(extraction.values.get("count"), Some(&json!(0)));
+        assert!(extraction.optional_unset.is_empty());
+    }
+
+    #[test]
+    fn default_value_preserves_null_and_string_types() {
+        let body = json!({});
+        let headers = HashMap::new();
+        let mut map = HashMap::new();
+        map.insert(
+            "deleted_at".into(),
+            extended_capture(ExtendedCapture {
+                jsonpath: Some("$.deleted_at".into()),
+                default: Some(crate::model::DefaultValue(serde_yaml::Value::Null)),
+                ..Default::default()
+            }),
+        );
+        map.insert(
+            "label".into(),
+            extended_capture(ExtendedCapture {
+                jsonpath: Some("$.label".into()),
+                default: Some(crate::model::DefaultValue(serde_yaml::Value::String(
+                    "unnamed".into(),
+                ))),
+                ..Default::default()
+            }),
+        );
+
+        let extraction =
+            extract_captures(&response_view(200, &body, &headers), &map, &Context::new()).unwrap();
+        assert_eq!(extraction.values.get("deleted_at"), Some(&json!(null)));
+        assert_eq!(extraction.values.get("label"), Some(&json!("unnamed")));
+    }
+
+    #[test]
+    fn when_status_exact_captures_only_on_match() {
+        // `when: { status: 201 }` → capture on 201, skip-with-unset
+        // otherwise. Both paths must be free of errors.
+        let body = json!({"id": "widget-1"});
+        let headers = HashMap::new();
+        let mut map = HashMap::new();
+        map.insert(
+            "created_id".into(),
+            extended_capture(ExtendedCapture {
+                jsonpath: Some("$.id".into()),
+                when: Some(crate::model::CaptureWhen {
+                    status: Some(StatusAssertion::Exact(201)),
+                }),
+                ..Default::default()
+            }),
+        );
+
+        let on_201 =
+            extract_captures(&response_view(201, &body, &headers), &map, &Context::new()).unwrap();
+        assert_eq!(on_201.values.get("created_id"), Some(&json!("widget-1")));
+        assert!(on_201.optional_unset.is_empty());
+
+        let on_200 =
+            extract_captures(&response_view(200, &body, &headers), &map, &Context::new()).unwrap();
+        assert!(!on_200.values.contains_key("created_id"));
+        assert!(on_200.optional_unset.contains("created_id"));
+    }
+
+    #[test]
+    fn when_status_set_and_range_forms() {
+        let body = json!({"id": 7});
+        let headers = HashMap::new();
+        let mut map = HashMap::new();
+        map.insert(
+            "id".into(),
+            extended_capture(ExtendedCapture {
+                jsonpath: Some("$.id".into()),
+                when: Some(crate::model::CaptureWhen {
+                    status: Some(StatusAssertion::Complex(StatusSpec {
+                        in_set: Some(vec![200, 201]),
+                        gte: None,
+                        gt: None,
+                        lte: None,
+                        lt: None,
+                    })),
+                }),
+                ..Default::default()
+            }),
+        );
+        let hit = extract_captures(&response_view(201, &body, &headers), &map, &Context::new())
+            .unwrap();
+        assert_eq!(hit.values.get("id"), Some(&json!(7)));
+        let miss = extract_captures(&response_view(202, &body, &headers), &map, &Context::new())
+            .unwrap();
+        assert!(miss.optional_unset.contains("id"));
+
+        let mut range_map = HashMap::new();
+        range_map.insert(
+            "err".into(),
+            extended_capture(ExtendedCapture {
+                jsonpath: Some("$.id".into()),
+                when: Some(crate::model::CaptureWhen {
+                    status: Some(StatusAssertion::Complex(StatusSpec {
+                        in_set: None,
+                        gte: Some(400),
+                        gt: None,
+                        lte: None,
+                        lt: Some(500),
+                    })),
+                }),
+                ..Default::default()
+            }),
+        );
+        let range_hit =
+            extract_captures(&response_view(422, &body, &headers), &range_map, &Context::new())
+                .unwrap();
+        assert_eq!(range_hit.values.get("err"), Some(&json!(7)));
+        let range_miss =
+            extract_captures(&response_view(500, &body, &headers), &range_map, &Context::new())
+                .unwrap();
+        assert!(range_miss.optional_unset.contains("err"));
+    }
+
+    #[test]
+    fn optional_capture_missing_without_optional_still_errors() {
+        // Control: dropping `optional:` restores the pre-NAZ-242
+        // "missing path → step fails" behavior. Regression guard for
+        // the generic capture-failure branch.
+        let body = json!({"other": 1});
+        let headers = HashMap::new();
+        let mut map = HashMap::new();
+        map.insert(
+            "x".into(),
+            extended_capture(ExtendedCapture {
+                jsonpath: Some("$.missing".into()),
+                ..Default::default()
+            }),
+        );
+
+        let err = extract_captures(&response_view(200, &body, &headers), &map, &Context::new())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("matched no values"), "got: {err}");
+    }
+
+    #[test]
+    fn default_beats_optional_when_both_present() {
+        // `default:` wins over `optional:` on a miss — users writing
+        // both expect a concrete fallback, not an unset variable.
+        let body = json!({});
+        let headers = HashMap::new();
+        let mut map = HashMap::new();
+        map.insert(
+            "x".into(),
+            extended_capture(ExtendedCapture {
+                jsonpath: Some("$.missing".into()),
+                optional: Some(true),
+                default: Some(crate::model::DefaultValue(serde_yaml::Value::String(
+                    "fallback".into(),
+                ))),
+                ..Default::default()
+            }),
+        );
+
+        let extraction =
+            extract_captures(&response_view(200, &body, &headers), &map, &Context::new()).unwrap();
+        assert_eq!(extraction.values.get("x"), Some(&json!("fallback")));
+        assert!(extraction.optional_unset.is_empty());
     }
 }

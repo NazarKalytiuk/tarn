@@ -273,6 +273,16 @@
             { "type": "string", "minLength": 1 }
           ],
           "default": true
+        },
+        "if": {
+          "type": "string",
+          "description": "Conditionally run this step only when the interpolated expression is truthy. Empty / unset / 'false' / '0' / 'null' are falsy; any other non-empty value is truthy. Mutually exclusive with 'unless'.",
+          "examples": ["{{ capture.request_uuid }}", "{{ env.run_cleanup }}"]
+        },
+        "unless": {
+          "type": "string",
+          "description": "Conditionally run this step only when the interpolated expression is falsy (inverse of 'if'). Mutually exclusive with 'if'.",
+          "examples": ["{{ capture.already_provisioned }}"]
         }
       },
       "additionalProperties": false
@@ -313,6 +323,17 @@
           "type": "object",
           "description": "Predicate filter applied to a JSONPath array result. Keeps only elements whose fields match the { field: value } pairs here. Combine with the `first` transform to capture an object by stable identifier instead of `$[0]`.",
           "additionalProperties": true
+        },
+        "optional": {
+          "type": "boolean",
+          "description": "When true, a missing source (path no-match, header absent, regex no-match, etc.) leaves the capture unset instead of failing the step. Downstream {{ capture.X }} references where X was optional and unset produce a distinct 'declared optional and not set' error instead of the generic unresolved-template error."
+        },
+        "default": {
+          "description": "Value used when the source yields no match. Implies optional: missing values never fail the step when a default is supplied. Any JSON-compatible YAML value (string, number, boolean, null, array, object) is accepted."
+        },
+        "when": {
+          "$ref": "#/$defs/CaptureWhen",
+          "description": "Only attempt this capture when the response matches the predicate. When present and unmet, the capture is skipped (variable unset, no error) the same way optional/default captures are when their source is missing."
         }
       },
       "oneOf": [
@@ -323,6 +344,34 @@
         { "required": ["status"] },
         { "required": ["url"] }
       ],
+      "additionalProperties": false
+    },
+    "CaptureWhen": {
+      "type": "object",
+      "description": "Response-shape gate for a capture. Currently supports gating on status code using the same grammar as assert.status (exact value, shorthand range '2xx', or { in / gte / gt / lte / lt } spec).",
+      "properties": {
+        "status": {
+          "description": "Status matcher: exact code, shorthand range ('2xx'), or complex spec.",
+          "oneOf": [
+            { "type": "integer", "minimum": 100, "maximum": 599 },
+            { "type": "string", "pattern": "^[1-5]xx$" },
+            {
+              "type": "object",
+              "properties": {
+                "in": {
+                  "type": "array",
+                  "items": { "type": "integer", "minimum": 100, "maximum": 599 }
+                },
+                "gte": { "type": "integer" },
+                "gt": { "type": "integer" },
+                "lte": { "type": "integer" },
+                "lt": { "type": "integer" }
+              },
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
       "additionalProperties": false
     },
     "PollConfig": {

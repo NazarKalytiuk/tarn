@@ -2,7 +2,7 @@ use crate::builtin;
 use crate::capture;
 use indexmap::IndexMap;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
 fn interpolation_regex() -> &'static regex::Regex {
@@ -11,10 +11,20 @@ fn interpolation_regex() -> &'static regex::Regex {
 }
 
 /// Interpolation context holding all available variables.
+///
+/// `optional_unset` tracks capture names that were declared with
+/// `optional: true` (or a `when:` gate that did not match, or a missing
+/// source without a `default:`) and therefore intentionally have no
+/// value. Distinguishing this from "never declared" lets downstream
+/// interpolation surface a precise
+/// `"template variable 'X' was declared optional and not set"` error
+/// instead of the generic unresolved-template fallback — which would
+/// hide a real typo behind an already-handled optional miss.
 #[derive(Default)]
 pub struct Context {
     pub env: HashMap<String, String>,
     pub captures: HashMap<String, serde_json::Value>,
+    pub optional_unset: HashSet<String>,
 }
 
 impl Context {
@@ -90,6 +100,60 @@ pub fn find_unresolved_in_json(value: &serde_json::Value) -> Vec<String> {
         serde_json::Value::Object(obj) => obj.values().flat_map(find_unresolved_in_json).collect(),
         _ => vec![],
     }
+}
+
+/// Partition a raw list of unresolved `{{ expr }}` names into two
+/// categories against a live [`Context`]:
+///
+/// * `optional_unset_refs`: `capture.X` references where X was declared
+///   with `optional: true` (or a `when:` that did not match) earlier in
+///   the run. Surfacing these separately lets the runner emit a
+///   distinct
+///   `"template variable 'X' was declared optional and not set"` error
+///   instead of the generic unresolved-template fallback, which would
+///   otherwise hide a real typo behind an already-handled optional miss.
+/// * `unresolved`: every other still-unresolved name, i.e. references
+///   to variables that were never declared at all (typos, forgotten
+///   setup steps, missing env vars).
+///
+/// Order is preserved and duplicates are kept — the caller typically
+/// sorts and dedups when producing a diagnostic.
+pub fn classify_unresolved(raw: &[String], ctx: &Context) -> UnresolvedClassification {
+    let mut optional_unset_refs = Vec::new();
+    let mut unresolved = Vec::new();
+    for expr in raw {
+        match expr.strip_prefix("capture.") {
+            Some(name_expr) => {
+                // Pipeline: the capture name is the token before the
+                // first `|`. Everything after is a transform that only
+                // matters once a value is present.
+                let name = name_expr.split('|').next().unwrap_or("").trim();
+                if !name.is_empty() && ctx.optional_unset.contains(name) {
+                    optional_unset_refs.push(name.to_string());
+                } else {
+                    unresolved.push(expr.clone());
+                }
+            }
+            None => unresolved.push(expr.clone()),
+        }
+    }
+    UnresolvedClassification {
+        optional_unset_refs,
+        unresolved,
+    }
+}
+
+/// Result of [`classify_unresolved`]: optional-unset references are
+/// separated from truly-unresolved ones so the runner can emit a
+/// distinct diagnostic for each class.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct UnresolvedClassification {
+    /// `capture.X` references where X was explicitly declared optional
+    /// and has no value, in the order they were encountered.
+    pub optional_unset_refs: Vec<String>,
+    /// Template expressions that remain unresolved for a non-optional
+    /// reason (typo, forgotten setup step, missing env var).
+    pub unresolved: Vec<String>,
 }
 
 /// Interpolate all strings in an ordered string map.
@@ -219,6 +283,7 @@ mod tests {
                 .iter()
                 .map(|(k, v)| (k.to_string(), v.clone()))
                 .collect(),
+            optional_unset: HashSet::new(),
         }
     }
 
@@ -232,6 +297,7 @@ mod tests {
                 .iter()
                 .map(|(k, v)| (k.to_string(), json!(v)))
                 .collect(),
+            optional_unset: HashSet::new(),
         }
     }
 
@@ -586,5 +652,47 @@ mod tests {
     fn find_unresolved_in_json_no_templates() {
         let val = json!({"name": "Alice", "count": 42, "active": true});
         assert!(find_unresolved_in_json(&val).is_empty());
+    }
+
+    // --- NAZ-242: classify_unresolved splits generic vs optional-unset ---
+
+    #[test]
+    fn classify_unresolved_separates_optional_unset_references() {
+        let mut ctx = make_string_ctx(&[("base_url", "http://localhost")], &[]);
+        ctx.optional_unset.insert("maybe".into());
+
+        let raw = vec![
+            "env.base_url".to_string(),
+            "capture.maybe".to_string(),
+            "capture.typo".to_string(),
+        ];
+        let classification = classify_unresolved(&raw, &ctx);
+        assert_eq!(classification.optional_unset_refs, vec!["maybe"]);
+        assert_eq!(
+            classification.unresolved,
+            vec!["env.base_url", "capture.typo"]
+        );
+    }
+
+    #[test]
+    fn classify_unresolved_sees_through_pipeline_transforms() {
+        // `{{ capture.maybe | to_string }}` must still classify on the
+        // base name `maybe` — transforms don't change which variable
+        // was referenced.
+        let mut ctx = make_string_ctx(&[], &[]);
+        ctx.optional_unset.insert("maybe".into());
+        let raw = vec!["capture.maybe | to_string".to_string()];
+        let c = classify_unresolved(&raw, &ctx);
+        assert_eq!(c.optional_unset_refs, vec!["maybe"]);
+        assert!(c.unresolved.is_empty());
+    }
+
+    #[test]
+    fn classify_unresolved_without_optional_returns_all_as_unresolved() {
+        let ctx = make_string_ctx(&[], &[]);
+        let raw = vec!["env.missing".to_string(), "capture.none".to_string()];
+        let c = classify_unresolved(&raw, &ctx);
+        assert!(c.optional_unset_refs.is_empty());
+        assert_eq!(c.unresolved, vec!["env.missing", "capture.none"]);
     }
 }

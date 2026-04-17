@@ -17,7 +17,7 @@ use crate::scripting;
 use crate::selector::{self, Selector};
 use base64::Engine;
 use indexmap::IndexMap;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -151,8 +151,18 @@ pub fn run_file_with_cookie_jars(
         });
     }
 
-    // Build interpolation context with resolved env
+    // Build interpolation context with resolved env.
+    //
+    // `optional_unset` tracks captures that were declared `optional:`,
+    // backed by `default:` on a missed path, or gated out by `when:` —
+    // i.e. the ones that should produce a distinct "declared optional
+    // and not set" error when referenced downstream. Kept next to
+    // `captures` (not merged into a single enum map) so the existing
+    // `HashMap<String, serde_json::Value>` type on `TestResult` and the
+    // `Context` stays source-compatible with consumers that serialize
+    // the final captures.
     let mut captures: HashMap<String, serde_json::Value> = HashMap::new();
+    let mut optional_unset: HashSet<String> = HashSet::new();
 
     // Cookie jars: enabled by default, disabled with `cookies: "off"`.
     // `per-test` (file-level) or `--cookie-jar-per-test` (CLI override) clear
@@ -175,6 +185,7 @@ pub fn run_file_with_cookie_jars(
         &test_file.setup,
         env,
         &mut captures,
+        &mut optional_unset,
         test_file,
         &redaction,
         &mut redacted_values,
@@ -206,10 +217,12 @@ pub fn run_file_with_cookie_jars(
             let selected_steps =
                 filter_steps(&test_file.steps, selectors, file_path, &test_file.name);
             let mut step_captures = captures.clone();
+            let mut step_optional_unset = optional_unset.clone();
             let step_results = run_steps(
                 &selected_steps,
                 env,
                 &mut step_captures,
+                &mut step_optional_unset,
                 test_file,
                 &redaction,
                 &mut redacted_values,
@@ -270,10 +283,12 @@ pub fn run_file_with_cookie_jars(
 
             let selected_steps = filter_steps(&test_group.steps, selectors, file_path, name);
             let mut test_captures = captures.clone();
+            let mut test_optional_unset = optional_unset.clone();
             let step_results = run_steps(
                 &selected_steps,
                 env,
                 &mut test_captures,
+                &mut test_optional_unset,
                 test_file,
                 &redaction,
                 &mut redacted_values,
@@ -310,6 +325,7 @@ pub fn run_file_with_cookie_jars(
         &test_file.teardown,
         env,
         &mut captures,
+        &mut optional_unset,
         test_file,
         &redaction,
         &mut redacted_values,
@@ -382,6 +398,7 @@ fn run_steps(
     steps: &[Step],
     env: &HashMap<String, String>,
     captures: &mut HashMap<String, serde_json::Value>,
+    optional_unset: &mut HashSet<String>,
     test_file: &TestFile,
     redaction: &RedactionConfig,
     redacted_values: &mut BTreeSet<String>,
@@ -431,6 +448,7 @@ fn run_steps(
             step,
             env,
             captures,
+            optional_unset,
             test_file,
             redaction,
             redacted_values,
@@ -569,6 +587,215 @@ fn fail_fast_skipped_step(step: &Step) -> StepResult {
     }
 }
 
+/// Produce a passing skipped-step result when an inline `if:` /
+/// `unless:` predicate selected the skip branch. `passed: true` is
+/// deliberate: the step's conditional author asked for the skip, so
+/// the test as a whole stays green.
+fn condition_skipped_step(step: &Step, message: String) -> StepResult {
+    StepResult {
+        name: step.name.clone(),
+        description: step.description.clone(),
+        passed: true,
+        duration_ms: 0,
+        assertion_results: vec![AssertionResult::pass("condition", "skip", message)],
+        request_info: None,
+        response_info: None,
+        error_category: Some(FailureCategory::SkippedByCondition),
+        response_status: None,
+        response_summary: None,
+        captures_set: vec![],
+        location: step.location.clone(),
+    }
+}
+
+/// Evaluate inline `if:` / `unless:` conditions against the current
+/// interpolation context. Returns `Some(StepResult)` when the step
+/// should be skipped (already populated with the skip-category
+/// result), or `None` when the step should run.
+///
+/// Truthy rules mirror the user-facing contract in `model::Step`:
+///   - unset / missing / optional-unset capture → falsy
+///   - empty string → falsy
+///   - `"false"` / `"0"` / `"null"` (case-insensitive) → falsy
+///   - anything else (including whitespace, non-empty strings,
+///     numbers rendered as strings) → truthy
+fn evaluate_step_condition(
+    step: &Step,
+    env: &HashMap<String, String>,
+    captures: &HashMap<String, serde_json::Value>,
+    optional_unset: &HashSet<String>,
+) -> Option<StepResult> {
+    if step.run_if.is_none() && step.unless.is_none() {
+        return None;
+    }
+    let ctx = Context {
+        env: env.clone(),
+        captures: captures.clone(),
+        optional_unset: optional_unset.clone(),
+    };
+
+    if let Some(ref expr) = step.run_if {
+        let rendered = interpolation::interpolate(expr, &ctx);
+        let truthy = is_truthy(&rendered);
+        if !truthy {
+            return Some(condition_skipped_step(
+                step,
+                format!("`if:` expression {} evaluated falsy; step skipped.", quote(expr)),
+            ));
+        }
+    }
+    if let Some(ref expr) = step.unless {
+        let rendered = interpolation::interpolate(expr, &ctx);
+        let truthy = is_truthy(&rendered);
+        if truthy {
+            return Some(condition_skipped_step(
+                step,
+                format!(
+                    "`unless:` expression {} evaluated truthy; step skipped.",
+                    quote(expr)
+                ),
+            ));
+        }
+    }
+    None
+}
+
+/// Tarn's cross-the-board truthy rule. Centralizing it here keeps
+/// `if:` and `unless:` semantically exact inverses and documents the
+/// exact behavior in one place so parity with docs is easy to verify.
+fn is_truthy(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    // An unresolved capture/env placeholder that passed through
+    // interpolation unchanged is also falsy — users writing
+    // `if: "{{ capture.x }}"` expect "if x is set" behavior, which
+    // the optional-unset code path already maps to an empty string;
+    // but generic missing-capture / missing-env cases leave the
+    // literal `{{ ... }}` in place and should behave identically.
+    if is_unresolved_placeholder(trimmed) {
+        return false;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    !matches!(lower.as_str(), "false" | "0" | "null")
+}
+
+/// `true` when the entire string is a single unresolved `{{ expr }}`
+/// template. Used by [`is_truthy`] so an `if:` referencing an unset
+/// variable evaluates falsy without the user having to pre-default it.
+fn is_unresolved_placeholder(s: &str) -> bool {
+    let trimmed = s.trim();
+    if !trimmed.starts_with("{{") || !trimmed.ends_with("}}") {
+        return false;
+    }
+    // Conservative: only single-expression strings with no surrounding
+    // literals. Anything else is user-provided literal-plus-template
+    // and should go through the normal truthy rule.
+    let inner = &trimmed[2..trimmed.len() - 2];
+    !inner.contains("{{") && !inner.contains("}}")
+}
+
+fn quote(expr: &str) -> String {
+    format!("'{}'", expr)
+}
+
+/// Generate a "unresolved template" step result if the request still
+/// contains `{{ ... }}` placeholders after interpolation. Splits the
+/// diagnostic between two classes — generic unresolved variables
+/// (typos, forgotten setup) and variables explicitly declared
+/// `optional:` / `when:`-gated in an earlier step — so the user sees
+/// the actionable root cause instead of one umbrella message.
+fn unresolved_template_step(
+    step: &Step,
+    request: &PreparedRequest,
+    request_info: &RequestInfo,
+    ctx: &Context,
+) -> Option<StepResult> {
+    let mut raw = interpolation::find_unresolved(&request.url);
+    for v in request.headers.values() {
+        raw.extend(interpolation::find_unresolved(v));
+    }
+    if let Some(ref body) = request.body {
+        raw.extend(interpolation::find_unresolved_in_json(body));
+    }
+    if let Some(ref form) = request.form {
+        for v in form.values() {
+            raw.extend(interpolation::find_unresolved(v));
+        }
+    }
+    if raw.is_empty() {
+        return None;
+    }
+
+    let mut classification = interpolation::classify_unresolved(&raw, ctx);
+    classification.optional_unset_refs.sort();
+    classification.optional_unset_refs.dedup();
+    classification.unresolved.sort();
+    classification.unresolved.dedup();
+
+    // Optional-unset references wear a distinct message wording and
+    // error category. The runner rule is "optional-unset wins" —
+    // when both classes are present, a reference to an optional
+    // capture is the more actionable signal (the user made an
+    // explicit contract; the next step must handle the absence).
+    if !classification.optional_unset_refs.is_empty() {
+        let names = classification.optional_unset_refs.join(", ");
+        let primary = classification
+            .optional_unset_refs
+            .first()
+            .cloned()
+            .unwrap_or_default();
+        return Some(StepResult {
+            name: step.name.clone(),
+            description: step.description.clone(),
+            passed: false,
+            duration_ms: 0,
+            assertion_results: vec![AssertionResult::fail(
+                "interpolation",
+                "optional capture is set".to_string(),
+                format!("unset: {}", names),
+                format!(
+                    "template variable '{}' was declared optional and not set. \
+                     Gate this step with `if:`/`unless:` or provide a `default:` on the capture.",
+                    primary
+                ),
+            )],
+            request_info: Some(request_info.clone()),
+            response_info: None,
+            error_category: Some(FailureCategory::UnresolvedTemplate),
+            response_status: None,
+            response_summary: None,
+            captures_set: vec![],
+            location: step.location.clone(),
+        });
+    }
+
+    let names = classification.unresolved.join(", ");
+    Some(StepResult {
+        name: step.name.clone(),
+        description: step.description.clone(),
+        passed: false,
+        duration_ms: 0,
+        assertion_results: vec![AssertionResult::fail(
+            "interpolation",
+            "all templates resolved",
+            format!("unresolved: {}", names),
+            format!(
+                "Unresolved template variables: {}. Check that prior captures succeeded and env vars are set.",
+                names
+            ),
+        )],
+        request_info: Some(request_info.clone()),
+        response_info: None,
+        error_category: Some(FailureCategory::UnresolvedTemplate),
+        response_status: None,
+        response_summary: None,
+        captures_set: vec![],
+        location: step.location.clone(),
+    })
+}
+
 /// Stamp each `AssertionResult` with its source `Location` (if the
 /// parser recorded one for that operator key on this step). The lookup
 /// is keyed on the same label the assertion modules emit — `"status"`,
@@ -698,7 +925,9 @@ fn record_redacted_capture_candidates(
             headers: &response.headers,
             raw_headers: &response.raw_headers,
         };
-        if let Ok(value) = capture::extract_capture(&view, name, spec, ctx) {
+        if let Ok(capture::CaptureOutcome::Set(value)) =
+            capture::extract_capture(&view, name, spec, ctx)
+        {
             insert_redacted_value(&capture::value_to_string(&value), redacted_values);
         }
     }
@@ -814,12 +1043,14 @@ fn prepare_request(
     step: &Step,
     env: &HashMap<String, String>,
     captures: &HashMap<String, serde_json::Value>,
+    optional_unset: &HashSet<String>,
     test_file: &TestFile,
     cookie_jar: Option<&CookieJar>,
 ) -> PreparedRequest {
     let ctx = Context {
         env: env.clone(),
         captures: captures.clone(),
+        optional_unset: optional_unset.clone(),
     };
 
     let url = interpolation::interpolate(&step.request.url, &ctx);
@@ -963,6 +1194,7 @@ fn run_step(
     step: &Step,
     env: &HashMap<String, String>,
     captures: &mut HashMap<String, serde_json::Value>,
+    optional_unset: &mut HashSet<String>,
     test_file: &TestFile,
     redaction: &RedactionConfig,
     redacted_values: &mut BTreeSet<String>,
@@ -972,6 +1204,17 @@ fn run_step(
     cookie_jars: &mut HashMap<String, CookieJar>,
     base_dir: &Path,
 ) -> Result<StepResult, TarnError> {
+    // Evaluate `if:` / `unless:` before anything else so a falsy gate
+    // produces a clean skipped step without spending a delay or
+    // preparing a request. Interpolation uses the same context as a
+    // normal request so `{{ capture.x }}` / `{{ env.y }}` work, and
+    // `optional_unset` is honored — an optional capture that never set
+    // correctly evaluates to a falsy empty string rather than the raw
+    // `{{ capture.x }}` placeholder.
+    if let Some(skipped) = evaluate_step_condition(step, env, captures, optional_unset) {
+        return Ok(skipped);
+    }
+
     // Apply delay: step-level > defaults > none
     let delay_spec = step
         .delay
@@ -997,6 +1240,7 @@ fn run_step(
             poll,
             env,
             captures,
+            optional_unset,
             test_file,
             redaction,
             redacted_values,
@@ -1012,6 +1256,7 @@ fn run_step(
         step,
         env,
         captures,
+        optional_unset,
         test_file,
         jar_name
             .as_ref()
@@ -1019,40 +1264,14 @@ fn run_step(
     );
     let request_info = build_request_info(step, &request, base_dir);
 
-    // Check for unresolved template expressions (e.g. failed captures, missing env vars)
-    let mut unresolved = interpolation::find_unresolved(&request.url);
-    for v in request.headers.values() {
-        unresolved.extend(interpolation::find_unresolved(v));
-    }
-    if let Some(ref body) = request.body {
-        unresolved.extend(interpolation::find_unresolved_in_json(body));
-    }
-    if !unresolved.is_empty() {
-        unresolved.sort();
-        unresolved.dedup();
-        let names = unresolved.join(", ");
-        return Ok(StepResult {
-            name: step.name.clone(),
-            description: step.description.clone(),
-            passed: false,
-            duration_ms: 0,
-            assertion_results: vec![AssertionResult::fail(
-                "interpolation",
-                "all templates resolved",
-                format!("unresolved: {}", names),
-                format!(
-                    "Unresolved template variables: {}. Check that prior captures succeeded and env vars are set.",
-                    names
-                ),
-            )],
-            request_info: Some(request_info),
-            response_info: None,
-            error_category: Some(FailureCategory::UnresolvedTemplate),
-            response_status: None,
-            response_summary: None,
-            captures_set: vec![],
-            location: step.location.clone(),
-        });
+    // Check for unresolved template expressions (e.g. failed captures, missing env vars).
+    // Classify against the live context so a reference to an
+    // optional-and-unset capture surfaces a distinct error message
+    // instead of the generic "unresolved template" fallback — the
+    // shape of the report's failure message is load-bearing for users
+    // debugging missing captures.
+    if let Some(result) = unresolved_template_step(step, &request, &request_info, &request.ctx) {
+        return Ok(result);
     }
 
     // Verbose: print request details
@@ -1148,7 +1367,11 @@ fn run_step(
             let resp_status = response.status;
             let resp_summary = summarize_response(&response);
 
-            // Extract captures on success — graceful failure (P0 fix)
+            // Extract captures on success — graceful failure (P0 fix).
+            // `optional:` / `default:` / `when:` captures that legally
+            // miss come back in `optional_unset` so later steps can
+            // reference them without triggering an unresolved-template
+            // failure.
             let mut captured_keys = Vec::new();
             let capture_result = if !step.capture.is_empty() {
                 match capture::extract_captures(
@@ -1162,10 +1385,22 @@ fn run_step(
                     &step.capture,
                     &request.ctx,
                 ) {
-                    Ok(new_captures) => {
-                        captured_keys = new_captures.keys().cloned().collect();
-                        record_redacted_named_values(&new_captures, redaction, redacted_values);
-                        captures.extend(new_captures);
+                    Ok(extraction) => {
+                        captured_keys = extraction.values.keys().cloned().collect();
+                        record_redacted_named_values(
+                            &extraction.values,
+                            redaction,
+                            redacted_values,
+                        );
+                        captures.extend(extraction.values);
+                        for name in extraction.optional_unset {
+                            // New optional-unset declarations shadow any
+                            // stale concrete value from an earlier step
+                            // — the contract is "this step's optional
+                            // capture produced no value".
+                            captures.remove(&name);
+                            optional_unset.insert(name);
+                        }
                         None
                     }
                     Err(e) => Some(e),
@@ -1268,6 +1503,7 @@ fn run_step_poll(
     poll: &PollConfig,
     env: &HashMap<String, String>,
     captures: &mut HashMap<String, serde_json::Value>,
+    optional_unset: &mut HashSet<String>,
     test_file: &TestFile,
     redaction: &RedactionConfig,
     redacted_values: &mut BTreeSet<String>,
@@ -1303,6 +1539,7 @@ fn run_step_poll(
             step,
             env,
             captures,
+            optional_unset,
             test_file,
             jar_name
                 .as_ref()
@@ -1310,40 +1547,13 @@ fn run_step_poll(
         );
         let request_info = build_request_info(step, &request, base_dir);
 
-        // Check for unresolved template expressions before sending
-        let mut unresolved = interpolation::find_unresolved(&request.url);
-        for v in request.headers.values() {
-            unresolved.extend(interpolation::find_unresolved(v));
-        }
-        if let Some(ref body) = request.body {
-            unresolved.extend(interpolation::find_unresolved_in_json(body));
-        }
-        if !unresolved.is_empty() {
-            unresolved.sort();
-            unresolved.dedup();
-            let names = unresolved.join(", ");
-            return Ok(StepResult {
-                name: step.name.clone(),
-                description: step.description.clone(),
-                passed: false,
-                duration_ms: 0,
-                assertion_results: vec![AssertionResult::fail(
-                    "interpolation",
-                    "all templates resolved",
-                    format!("unresolved: {}", names),
-                    format!(
-                        "Unresolved template variables: {}. Check that prior captures succeeded and env vars are set.",
-                        names
-                    ),
-                )],
-                request_info: Some(request_info),
-                response_info: None,
-                error_category: Some(FailureCategory::UnresolvedTemplate),
-                response_status: None,
-                response_summary: None,
-                captures_set: vec![],
-                location: step.location.clone(),
-            });
+        // Check for unresolved template expressions before sending.
+        // Shares its classification with the non-poll path so a single
+        // optional-unset message wording serves both entry points.
+        if let Some(result) =
+            unresolved_template_step(step, &request, &request_info, &request.ctx)
+        {
+            return Ok(result);
         }
 
         if opts.verbose {
@@ -1432,10 +1642,18 @@ fn run_step_poll(
                     &step.capture,
                     &request.ctx,
                 ) {
-                    Ok(new_captures) => {
-                        captured_keys = new_captures.keys().cloned().collect();
-                        record_redacted_named_values(&new_captures, redaction, redacted_values);
-                        captures.extend(new_captures);
+                    Ok(extraction) => {
+                        captured_keys = extraction.values.keys().cloned().collect();
+                        record_redacted_named_values(
+                            &extraction.values,
+                            redaction,
+                            redacted_values,
+                        );
+                        captures.extend(extraction.values);
+                        for name in extraction.optional_unset {
+                            captures.remove(&name);
+                            optional_unset.insert(name);
+                        }
                     }
                     Err(e) => {
                         let mut all_assertions = assertion_results;
@@ -2386,6 +2604,7 @@ steps:
             &tf.steps[0],
             &HashMap::new(),
             &HashMap::new(),
+            &HashSet::new(),
             &tf,
             Some(&jar),
         );
@@ -2414,6 +2633,7 @@ steps:
             &tf.steps[0],
             &HashMap::from([("email".to_string(), "user@example.com".to_string())]),
             &HashMap::from([("password".to_string(), serde_json::json!("secret"))]),
+            &HashSet::new(),
             &tf,
             None,
         );
@@ -2453,7 +2673,14 @@ steps:
         email: "user@example.com"
 "#;
         let tf: crate::model::TestFile = serde_yaml::from_str(yaml).unwrap();
-        let request = prepare_request(&tf.steps[0], &HashMap::new(), &HashMap::new(), &tf, None);
+        let request = prepare_request(
+            &tf.steps[0],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &tf,
+            None,
+        );
 
         assert_eq!(
             request.headers.get("Content-Type"),
@@ -2478,6 +2705,7 @@ steps:
             &tf.steps[0],
             &HashMap::from([("token".to_string(), "secret-token".to_string())]),
             &HashMap::new(),
+            &HashSet::new(),
             &tf,
             None,
         );
@@ -2507,6 +2735,7 @@ steps:
             &tf.steps[0],
             &HashMap::from([("token".to_string(), "secret-token".to_string())]),
             &HashMap::new(),
+            &HashSet::new(),
             &tf,
             None,
         );
@@ -2617,5 +2846,119 @@ steps:
         assert_eq!(tf.steps[0].connect_timeout, Some(222));
         assert_eq!(tf.steps[0].follow_redirects, Some(true));
         assert_eq!(tf.steps[0].max_redirs, Some(3));
+    }
+
+    // --- NAZ-242: inline if: / unless: truthy semantics ---
+
+    fn build_step_with_condition(run_if: Option<&str>, unless: Option<&str>) -> Step {
+        let yaml = r#"
+name: Gate
+steps:
+  - name: step
+    request:
+      method: GET
+      url: "http://localhost:3000"
+"#;
+        let mut tf: crate::model::TestFile = serde_yaml::from_str(yaml).unwrap();
+        let step = &mut tf.steps[0];
+        step.run_if = run_if.map(str::to_string);
+        step.unless = unless.map(str::to_string);
+        step.clone()
+    }
+
+    #[test]
+    fn is_truthy_rules_match_spec() {
+        // Central rule: empty / 0 / false / null / whitespace-only /
+        // unresolved placeholder → falsy; everything else truthy.
+        for falsy in ["", "   ", "false", "FALSE", "0", "null", "Null"] {
+            assert!(!is_truthy(falsy), "expected {:?} to be falsy", falsy);
+        }
+        for truthy in ["true", "1", "ok", " anything ", "00", "false-but-not"] {
+            assert!(is_truthy(truthy), "expected {:?} to be truthy", truthy);
+        }
+        // Unresolved `{{ capture.X }}` placeholders pass through
+        // interpolation unchanged and must read as falsy.
+        assert!(!is_truthy("{{ capture.missing }}"));
+        assert!(!is_truthy("{{env.unset}}"));
+    }
+
+    #[test]
+    fn if_expression_truthy_runs_the_step() {
+        // Sanity: truthy expression means `evaluate_step_condition`
+        // returns None so the step proceeds.
+        let step = build_step_with_condition(Some("{{ capture.request_uuid }}"), None);
+        let mut captures = HashMap::new();
+        captures.insert("request_uuid".into(), serde_json::json!("abc-123"));
+        assert!(
+            evaluate_step_condition(&step, &HashMap::new(), &captures, &HashSet::new()).is_none()
+        );
+    }
+
+    #[test]
+    fn if_expression_falsy_unset_skips_the_step() {
+        // Unresolved `{{ capture.X }}` is falsy — no capture, no env.
+        let step = build_step_with_condition(Some("{{ capture.request_uuid }}"), None);
+        let result =
+            evaluate_step_condition(&step, &HashMap::new(), &HashMap::new(), &HashSet::new())
+                .expect("falsy condition must produce a skip");
+        assert!(result.passed, "skip-by-condition is not a failure");
+        assert_eq!(
+            result.error_category,
+            Some(FailureCategory::SkippedByCondition)
+        );
+        assert_eq!(result.error_code(), None);
+    }
+
+    #[test]
+    fn if_expression_falsy_optional_unset_skips_the_step() {
+        // Optional-unset captures interpolate to `{{ capture.X }}`
+        // (the literal placeholder remains) when referenced in an
+        // `if:`; `is_unresolved_placeholder` classifies those as
+        // falsy so users don't need to combine `default:` with `if:`.
+        let step = build_step_with_condition(Some("{{ capture.maybe }}"), None);
+        let mut optional_unset = HashSet::new();
+        optional_unset.insert("maybe".to_string());
+        let result = evaluate_step_condition(
+            &step,
+            &HashMap::new(),
+            &HashMap::new(),
+            &optional_unset,
+        )
+        .expect("falsy optional-unset must produce a skip");
+        assert_eq!(
+            result.error_category,
+            Some(FailureCategory::SkippedByCondition)
+        );
+    }
+
+    #[test]
+    fn unless_is_the_inverse_of_if() {
+        // `unless: truthy` → skip, `unless: falsy` → run. Matches
+        // `if:` but flipped.
+        let step = build_step_with_condition(None, Some("{{ capture.request_uuid }}"));
+        let mut captures = HashMap::new();
+        captures.insert("request_uuid".into(), serde_json::json!("abc-123"));
+        let skipped =
+            evaluate_step_condition(&step, &HashMap::new(), &captures, &HashSet::new())
+                .expect("truthy unless must skip");
+        assert_eq!(
+            skipped.error_category,
+            Some(FailureCategory::SkippedByCondition)
+        );
+
+        // Empty capture → unless evaluates falsy → run.
+        assert!(
+            evaluate_step_condition(&step, &HashMap::new(), &HashMap::new(), &HashSet::new())
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn no_condition_means_no_short_circuit() {
+        let step = build_step_with_condition(None, None);
+        assert!(
+            evaluate_step_condition(&step, &HashMap::new(), &HashMap::new(), &HashSet::new())
+                .is_none()
+        );
     }
 }
