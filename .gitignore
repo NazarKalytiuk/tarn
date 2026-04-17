@@ -8,3 +8,13 @@ tarn.env.local.yaml
 # Claude Code session-private state (auto-memory, scheduled-task locks,
 # per-session settings). These must never land in the repo.
 /.claude/
+
+# Tarn-generated state lives under .tarn/ at the workspace root. The
+# directory is safe to delete at any time — `tarn run` rebuilds
+# last-run.json, state.json, and fixtures/ on the next invocation.
+# Keeping them out of git avoids committing response bodies and
+# captures that may contain secrets.
+.tarn/fixtures/
+.tarn/last-run.json
+.tarn/state.json
+.tarn/state.json.tmp

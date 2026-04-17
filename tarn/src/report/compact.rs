@@ -278,6 +278,7 @@ mod tests {
         StepResult {
             name: name.into(),
             description: None,
+            debug: false,
             passed: true,
             duration_ms: 20,
             assertion_results: vec![AssertionResult::pass("status", "200", "200")],
@@ -295,6 +296,7 @@ mod tests {
         StepResult {
             name: name.into(),
             description: None,
+            debug: false,
             passed: false,
             duration_ms: 30,
             assertion_results: vec![AssertionResult::fail(

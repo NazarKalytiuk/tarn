@@ -44,13 +44,13 @@ use lsp_types::{
 use crate::capabilities::server_capabilities;
 use crate::code_actions;
 use crate::code_lens;
+use crate::commands;
 use crate::completion;
 use crate::debounce::DebounceTracker;
 use crate::definition;
 use crate::diagnostics;
 use crate::formatting;
 use crate::hover;
-use crate::jsonpath_eval;
 use crate::references;
 use crate::rename;
 use crate::symbols;
@@ -461,16 +461,17 @@ fn dispatch_request(req: Request, state: &mut ServerState) -> Response {
         ExecuteCommand::METHOD => match req.extract::<ExecuteCommandParams>(ExecuteCommand::METHOD)
         {
             Ok((req_id, params)) => {
-                // L3.6 (NAZ-307): `workspace/executeCommand` dispatches
-                // every client-invoked command through one pure handler.
-                // Today only `tarn.evaluateJsonpath` is registered; see
-                // `jsonpath_eval::workspace_execute_command` for the
-                // argument shape and return envelope. Unknown command
-                // IDs bubble back as a `MethodNotFound` ResponseError.
-                match jsonpath_eval::workspace_execute_command(state, params) {
+                // NAZ-257: every `workspace/executeCommand` request
+                // goes through the central dispatcher in
+                // `crate::commands::dispatch`, which knows every
+                // advertised command id (including stubs for the
+                // commands NAZ-256 will flesh in) and returns
+                // payloads already wrapped in the standard
+                // `{ schema_version, data }` envelope.
+                match commands::dispatch(state, params) {
                     Ok(result) => Response {
                         id: req_id,
-                        result: Some(result.unwrap_or(serde_json::Value::Null)),
+                        result: Some(result),
                         error: None,
                     },
                     Err(err) => Response {

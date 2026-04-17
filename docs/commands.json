@@ -1,0 +1,174 @@
+{
+  "schema_version": 1,
+  "envelope": {
+    "description": "Every command returns { \"schema_version\": <int>, \"data\": <payload> } when successful. Soft failures are represented inside `data` (e.g. result: no_fixture, error: no-fixture, error: not_yet_implemented). RPC-level errors (malformed arguments, unknown command) bubble back as JSON-RPC ResponseError with InvalidParams or MethodNotFound codes.",
+    "schema_version": 1
+  },
+  "commands": [
+    {
+      "id": "tarn.runTest",
+      "title": "Run test",
+      "status": "stub",
+      "params": {
+        "file": "string (path to .tarn.yaml)",
+        "test": "string (test name)"
+      },
+      "returns": "RunOutcome v1",
+      "implementation": "NAZ-256: emits `not_yet_implemented` stub today"
+    },
+    {
+      "id": "tarn.runStep",
+      "title": "Run step",
+      "status": "stub",
+      "params": {
+        "file": "string (path)",
+        "test": "string",
+        "step": "string | number (name or 0-based index)"
+      },
+      "returns": "RunOutcome v1",
+      "implementation": "NAZ-256"
+    },
+    {
+      "id": "tarn.runFile",
+      "title": "Run file",
+      "status": "stub",
+      "params": {
+        "file": "string (path)"
+      },
+      "returns": "RunOutcome v1",
+      "implementation": "NAZ-256"
+    },
+    {
+      "id": "tarn.debugTest",
+      "title": "Debug test",
+      "status": "stub",
+      "params": {
+        "file": "string (path)",
+        "test": "string",
+        "step": "string | number (optional)"
+      },
+      "returns": "DebugSession v1",
+      "implementation": "NAZ-256"
+    },
+    {
+      "id": "tarn.runLastFailures",
+      "title": "Rerun last failures",
+      "status": "stub",
+      "params": {},
+      "returns": "RunOutcome v1",
+      "implementation": "NAZ-256"
+    },
+    {
+      "id": "tarn.explainFailure",
+      "title": "Explain failure",
+      "status": "implemented",
+      "params": {
+        "file": "string (path)",
+        "test": "string (optional — falls back to first failure in .tarn/last-run.json)",
+        "step": "string | number (optional)"
+      },
+      "returns": "Explanation v1 { test, step, expected, actual, failure_message, preceding_steps[], root_cause_hint, backend_logs }"
+    },
+    {
+      "id": "tarn.diffLastPassing",
+      "title": "Diff against last passing",
+      "status": "stub",
+      "params": {
+        "file": "string (path)",
+        "test": "string",
+        "step": "string | number"
+      },
+      "returns": "Diff v1",
+      "implementation": "NAZ-256"
+    },
+    {
+      "id": "tarn.evaluateJsonpath",
+      "title": "Evaluate JSONPath against recorded response",
+      "status": "implemented",
+      "params": {
+        "one_of": [
+          {
+            "path": "string (JSONPath)",
+            "response": "any (inline JSON value)"
+          },
+          {
+            "path": "string (JSONPath)",
+            "step": {
+              "file": "string (path)",
+              "test": "string",
+              "step": "string (step name)"
+            }
+          }
+        ]
+      },
+      "returns": "EvaluationResult v1 — one of: { result: \"match\", value, values[] }, { result: \"no_match\", available_top_keys[] }, { result: \"no_fixture\", message }"
+    },
+    {
+      "id": "tarn.getCaptureState",
+      "title": "Get capture state",
+      "status": "stub",
+      "params": {
+        "file": "string (path)",
+        "test": "string"
+      },
+      "returns": "CaptureState v1 { captures: { name: value } }",
+      "implementation": "NAZ-256"
+    },
+    {
+      "id": "tarn.captureField",
+      "title": "Capture this field",
+      "status": "stub-via-codeaction",
+      "params": {
+        "uri": "string (file URI)",
+        "position": "Position",
+        "path": "string (JSONPath)",
+        "asName": "string (new capture name)"
+      },
+      "returns": "WorkspaceEdit",
+      "notes": "The LSP already exposes this refactor through `textDocument/codeAction` (see `capture_field_code_action`). The `tarn.captureField` executeCommand id is reserved so tarn-mcp can invoke the refactor directly."
+    },
+    {
+      "id": "tarn.scaffoldAssertFromResponse",
+      "title": "Scaffold assert from last response",
+      "status": "stub-via-codeaction",
+      "params": {
+        "uri": "string (file URI)",
+        "position": "Position"
+      },
+      "returns": "WorkspaceEdit",
+      "notes": "Shipped as a `textDocument/codeAction` provider (see `scaffold_assert_code_action`). The executeCommand id is reserved for direct invocation by tarn-mcp."
+    },
+    {
+      "id": "tarn.renameCapture",
+      "title": "Rename capture",
+      "status": "stub",
+      "params": {
+        "uri": "string (file URI)",
+        "position": "Position",
+        "newName": "string"
+      },
+      "returns": "WorkspaceEdit",
+      "implementation": "NAZ-256"
+    },
+    {
+      "id": "tarn.getFixture",
+      "title": "Get fixture for step",
+      "status": "implemented",
+      "params": {
+        "file": "string (path)",
+        "test": "string (test name or setup/teardown/<flat>)",
+        "step": "string | number (name or 0-based index)"
+      },
+      "returns": "Fixture v1 — either { recorded_at, request, response, captures, passed, failure_message?, duration_ms } or { error: \"no-fixture\", message }"
+    },
+    {
+      "id": "tarn.clearFixtures",
+      "title": "Clear fixtures",
+      "status": "implemented",
+      "params": {
+        "file": "string (path, optional — omit to clear the entire workspace fixture tree)"
+      },
+      "returns": "{ cleared: boolean, scope: string }"
+    }
+  ]
+}

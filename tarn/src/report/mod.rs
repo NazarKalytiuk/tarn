@@ -1,6 +1,7 @@
 pub mod compact;
 pub mod curl;
 pub mod failure;
+pub mod fixture_writer;
 pub mod html;
 pub mod human;
 pub mod json;
@@ -9,6 +10,7 @@ pub mod junit;
 pub mod llm;
 pub mod progress;
 pub mod redaction;
+pub mod state_writer;
 pub mod tap;
 
 use crate::assert::types::RunResult;
@@ -25,6 +27,11 @@ pub struct RenderOptions {
     /// When true, skip ANSI color escapes in the output. Used by the
     /// llm format whenever stdout is not a TTY (pipes, files, CI logs).
     pub no_color: bool,
+    /// When true, include request/response payloads for passing steps
+    /// (in addition to failing steps). Mirrors the `--verbose-responses`
+    /// CLI flag (NAZ-244). Step-level `debug: true` overrides this at
+    /// the per-step level.
+    pub verbose_responses: bool,
 }
 
 /// Output format for test results.

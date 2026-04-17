@@ -444,6 +444,7 @@ mod tests {
             step_results: vec![StepResult {
                 name: format!("{}/step", name),
                 description: None,
+                debug: false,
                 passed,
                 duration_ms: 10,
                 assertion_results: if passed {

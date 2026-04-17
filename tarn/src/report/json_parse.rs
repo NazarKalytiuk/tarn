@@ -183,6 +183,7 @@ fn parse_step(value: &Value) -> Result<StepResult, ParseError> {
     Ok(StepResult {
         name,
         description,
+        debug: false,
         passed,
         duration_ms,
         assertion_results,
@@ -302,6 +303,7 @@ mod tests {
             step_results: vec![StepResult {
                 name: "bad".into(),
                 description: None,
+                debug: false,
                 passed: false,
                 duration_ms: 50,
                 assertion_results: vec![AssertionResult::fail(

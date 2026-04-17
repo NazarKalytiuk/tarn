@@ -187,6 +187,22 @@ enum Commands {
         /// runs where persisting the result on disk is undesirable.
         #[arg(long = "no-last-run-json")]
         no_last_run_json: bool,
+
+        /// Skip writing per-step fixtures under `.tarn/fixtures/`.
+        /// Fixtures are what `tarn.getFixture` / `tarn.evaluateJsonpath`
+        /// / `tarn.explainFailure` in tarn-lsp consume, so disabling
+        /// them means LLM clients cannot answer "what did this step
+        /// last return?" until the next run without `--no-fixtures`.
+        #[arg(long = "no-fixtures")]
+        no_fixtures: bool,
+
+        /// Override the rolling-history retention cap for per-step
+        /// fixtures. Defaults to 5. Setting this to 1 keeps only the
+        /// most recent fixture (plus the always-on
+        /// `latest-passed.json`). Higher values trade disk for
+        /// deeper history — helpful for debugging flaky steps.
+        #[arg(long = "fixture-retention", value_name = "N", default_value_t = tarn::fixtures::DEFAULT_RETENTION)]
+        fixture_retention: usize,
     },
 
     /// Validate test files without running
@@ -405,6 +421,8 @@ fn main() {
             no_default_excludes,
             report_json,
             no_last_run_json,
+            no_fixtures,
+            fixture_retention,
         } => run_command(
             path,
             &format,
@@ -439,6 +457,8 @@ fn main() {
             no_default_excludes,
             report_json.as_deref(),
             no_last_run_json,
+            no_fixtures,
+            fixture_retention,
         ),
         Commands::Bench {
             path,
@@ -546,6 +566,8 @@ fn run_command(
     no_default_excludes: bool,
     report_json_path: Option<&Path>,
     no_last_run_json: bool,
+    no_fixtures: bool,
+    fixture_retention: usize,
 ) -> i32 {
     let project =
         match load_project_context(path.as_deref().map(Path::new).unwrap_or(Path::new("."))) {
@@ -664,6 +686,11 @@ fn run_command(
         }
     }
 
+    let fixture_config = tarn::report::fixture_writer::FixtureWriteConfig {
+        enabled: !no_fixtures,
+        workspace_root: project.root_dir.clone(),
+        retention: fixture_retention.max(1),
+    };
     let run_opts = runner::RunOptions {
         verbose,
         dry_run,
@@ -672,6 +699,7 @@ fn run_command(
         fail_fast_within_test: project.config.fail_fast_within_test,
         verbose_responses,
         max_body_bytes: max_body,
+        fixtures: fixture_config,
     };
     let effective_parallel = parallel || project.config.parallel;
 
@@ -693,6 +721,7 @@ fn run_command(
         only_failed,
         verbose,
         no_color: !stdout_is_tty,
+        verbose_responses,
     };
 
     // Validate --ndjson does not collide with a non-human stdout format.
@@ -712,6 +741,21 @@ fn run_command(
         }
     }
 
+    // argv (minus the binary name) drives the reproducible command
+    // hint in `state.json`. We capture it here, before the run
+    // closure borrows it, so watch-mode reruns keep a stable record.
+    let argv_tail: Vec<String> = std::env::args().skip(1).collect();
+    let base_url_guess = cli_vars
+        .iter()
+        .find(|(k, _)| k == "base_url")
+        .map(|(_, v)| v.clone());
+    let state_ctx = StateContext {
+        workspace_root: project.root_dir.clone(),
+        args: argv_tail,
+        env_name: env_name.map(|s| s.to_string()),
+        base_url: base_url_guess,
+    };
+
     // Build the run closure (used by both normal and watch mode)
     let do_run = |run_files: &[String]| {
         execute_run(
@@ -730,6 +774,7 @@ fn run_command(
             effective_parallel,
             jobs,
             extra_redact_headers,
+            &state_ctx,
         )
     };
 
@@ -757,7 +802,9 @@ fn execute_run(
     parallel: bool,
     jobs: Option<usize>,
     extra_redact_headers: &[String],
+    state_context: &StateContext,
 ) -> i32 {
+    let started_at = chrono::Utc::now();
     let start = std::time::Instant::now();
 
     let human_on_stdout = output_targets.iter().any(|t| {
@@ -840,10 +887,60 @@ fn execute_run(
         suppress_stdout_outputs,
     ) {
         eprintln!("Error: {}", e);
+        // Still flush `state.json` so the LLM can observe the
+        // failed run even when report emission blew up.
+        write_state_sidecar(&run_result, started_at, 3, state_context);
         return 3;
     }
 
-    run_result_exit_code(&run_result)
+    let exit_code = run_result_exit_code(&run_result);
+    write_state_sidecar(&run_result, started_at, exit_code, state_context);
+    exit_code
+}
+
+/// Non-test-result metadata `execute_run` needs to produce a
+/// [`tarn::report::state_writer::StateDoc`]. Grouped into a struct so
+/// future additions (e.g. "profile" when NAZ-260 lands) do not bloat
+/// the already-long `execute_run` signature.
+#[derive(Debug, Clone)]
+struct StateContext {
+    /// Absolute workspace root. `.tarn/state.json` lives under this
+    /// directory.
+    workspace_root: PathBuf,
+    /// argv for the current process, minus the binary name.
+    args: Vec<String>,
+    /// Resolved named environment, if any.
+    env_name: Option<String>,
+    /// Effective `base_url` for the run, when we can detect one.
+    base_url: Option<String>,
+}
+
+/// Persist `.tarn/state.json` atomically. Failures are logged to
+/// stderr; the caller never bubbles them up because `state.json` is
+/// a convenience sidecar, not a correctness signal.
+fn write_state_sidecar(
+    run_result: &RunResult,
+    started_at: chrono::DateTime<chrono::Utc>,
+    exit_code: i32,
+    ctx: &StateContext,
+) {
+    let ended_at = chrono::Utc::now();
+    let state = tarn::report::state_writer::build_state(
+        run_result,
+        started_at,
+        ended_at,
+        exit_code,
+        &ctx.args,
+        ctx.env_name.clone(),
+        ctx.base_url.clone(),
+    );
+    if let Err(err) = tarn::report::state_writer::write_state(&ctx.workspace_root, &state) {
+        eprintln!(
+            "tarn: failed to write .tarn/state.json under {}: {}",
+            ctx.workspace_root.display(),
+            err
+        );
+    }
 }
 
 /// Build the appropriate streaming progress reporter based on mode and which
@@ -903,6 +1000,7 @@ fn summary_command(path: &str, format: &str) -> i32 {
         only_failed: false,
         verbose: false,
         no_color: !stdout_is_tty,
+        verbose_responses: false,
     };
 
     let output = match format.to_ascii_lowercase().as_str() {
@@ -2728,6 +2826,7 @@ steps:
         let make_step = |category| StepResult {
             name: "step".into(),
             description: None,
+            debug: false,
             passed: false,
             duration_ms: 0,
             assertion_results: vec![AssertionResult::fail("runtime", "ok", "error", "boom")],

@@ -5,6 +5,7 @@ use crate::assert::types::{
 use crate::capture;
 use crate::cookie::CookieJar;
 use crate::error::TarnError;
+use crate::fixtures;
 use crate::http;
 use crate::interpolation::{self, Context};
 use crate::model::{
@@ -12,6 +13,7 @@ use crate::model::{
     StepCookies, TestFile,
 };
 use crate::parser;
+use crate::report::fixture_writer::{self, FixtureWriteConfig};
 use crate::report::progress::{ProgressReporter, ReportContext};
 use crate::scripting;
 use crate::selector::{self, Selector};
@@ -49,6 +51,10 @@ pub struct RunOptions {
     /// larger than this are truncated and a `"...<truncated: N bytes>"`
     /// marker is appended. Defaults to 8 KiB.
     pub max_body_bytes: usize,
+    /// Per-step fixture writer settings. When
+    /// [`FixtureWriteConfig::enabled`] is false no fixtures are
+    /// persisted — this is the `--no-fixtures` CLI path.
+    pub fixtures: FixtureWriteConfig,
 }
 
 /// Default cap for verbose/debug response body embedding.
@@ -64,12 +70,24 @@ impl Default for RunOptions {
             fail_fast_within_test: false,
             verbose_responses: false,
             max_body_bytes: DEFAULT_MAX_BODY_BYTES,
+            fixtures: FixtureWriteConfig::default(),
         }
     }
 }
 
 /// Name of the default cookie jar used when no `cookies: <name>` is set on a step.
 const DEFAULT_JAR_NAME: &str = "default";
+
+/// Location metadata used by the fixture writer so every step knows
+/// which `(file, test)` directory to persist under. Setup / teardown
+/// use the sentinel test slugs from [`crate::fixtures`].
+#[derive(Debug, Clone)]
+struct FixtureScope<'a> {
+    /// Absolute path of the test file that owns the scope.
+    file_path: &'a str,
+    /// Test name or sentinel (`"setup"` / `"teardown"` / `"<flat>"`).
+    test_label: &'a str,
+}
 
 /// Scheduling metadata extracted from a `.tarn.yaml` file before the
 /// scheduler decides where the file belongs. Kept deliberately small so
@@ -329,6 +347,10 @@ pub fn run_file_with_cookie_jars(
         cookies_enabled,
         cookie_jars,
         &base_dir,
+        FixtureScope {
+            file_path,
+            test_label: fixtures::SETUP_TEST_SLUG,
+        },
     )?;
     let setup_failed = setup_results.iter().any(|s| !s.passed);
 
@@ -366,6 +388,10 @@ pub fn run_file_with_cookie_jars(
                 cookies_enabled,
                 cookie_jars,
                 &base_dir,
+                FixtureScope {
+                    file_path,
+                    test_label: fixtures::FLAT_TEST_SLUG,
+                },
             )?;
             let passed = step_results.iter().all(|s| s.passed);
             let duration_ms = step_results.iter().map(|s| s.duration_ms).sum();
@@ -432,6 +458,10 @@ pub fn run_file_with_cookie_jars(
                 cookies_enabled,
                 cookie_jars,
                 &base_dir,
+                FixtureScope {
+                    file_path,
+                    test_label: name,
+                },
             )?;
             let passed = step_results.iter().all(|s| s.passed);
             let duration_ms = step_results.iter().map(|s| s.duration_ms).sum();
@@ -469,6 +499,10 @@ pub fn run_file_with_cookie_jars(
         cookies_enabled,
         cookie_jars,
         &base_dir,
+        FixtureScope {
+            file_path,
+            test_label: fixtures::TEARDOWN_TEST_SLUG,
+        },
     )?;
 
     if let Some(p) = progress {
@@ -542,6 +576,7 @@ fn run_steps(
     cookies_enabled: bool,
     cookie_jars: &mut HashMap<String, CookieJar>,
     base_dir: &Path,
+    fixture_scope: FixtureScope<'_>,
 ) -> Result<Vec<StepResult>, TarnError> {
     let mut results = Vec::new();
     // Track which capture names this scope failed to produce so that
@@ -553,7 +588,7 @@ fn run_steps(
     let mut failed_captures: BTreeSet<String> = BTreeSet::new();
     let mut any_step_failed = false;
 
-    for step in steps {
+    for (step_index, step) in steps.iter().enumerate() {
         // `fail_fast_within_test`: once any step in this scope has
         // failed, short-circuit the remaining ones so reports stop at
         // the root cause.
@@ -593,6 +628,20 @@ fn run_steps(
             cookie_jars,
             base_dir,
         )?;
+
+        // Persist the fixture if enabled. Dry runs, unresolved
+        // templates and cascade skips never produce enough data to
+        // be worth recording, so we gate the write on the presence
+        // of a real `request_info`.
+        persist_fixture_for_step(
+            opts,
+            &fixture_scope,
+            step_index,
+            &result,
+            captures,
+            redaction,
+            redacted_values,
+        );
 
         if !result.passed {
             any_step_failed = true;
@@ -673,6 +722,62 @@ fn step_references_failed_captures(step: &Step, failed_captures: &BTreeSet<Strin
     refs.into_iter().collect()
 }
 
+/// Persist a fixture for a freshly-completed step, if fixture
+/// writing is enabled.
+///
+/// Dry-runs and cascade skips never hit this path because the caller
+/// gates on either the presence of real `request_info` or the
+/// `error_category` of the result. Write failures are logged to
+/// stderr; a missing fixture must never block the run itself.
+fn persist_fixture_for_step(
+    opts: &RunOptions,
+    scope: &FixtureScope<'_>,
+    step_index: usize,
+    result: &StepResult,
+    captures: &HashMap<String, serde_json::Value>,
+    redaction: &RedactionConfig,
+    redacted_values: &BTreeSet<String>,
+) {
+    if !opts.fixtures.enabled {
+        return;
+    }
+    // Dry runs never produce a fixture worth inspecting — the
+    // request was never sent, the response never existed.
+    if opts.dry_run {
+        return;
+    }
+    // Skipped steps (`SkippedDueToFailedCapture`, `SkippedDueToFailFast`)
+    // carry no request info; recording a fixture for them would
+    // overwrite the most recent real fixture with a placeholder.
+    if result.request_info.is_none() {
+        return;
+    }
+
+    let secret_vec: Vec<String> = redacted_values.iter().cloned().collect();
+    let mut fixture = fixture_writer::build_fixture(result, redaction, &secret_vec);
+    fixture_writer::attach_captures(
+        &mut fixture,
+        captures,
+        &result.captures_set,
+        redaction,
+        &secret_vec,
+    );
+
+    let file_path = Path::new(scope.file_path);
+    if let Err(err) = fixture_writer::write_step_fixture(
+        &opts.fixtures,
+        file_path,
+        scope.test_label,
+        step_index,
+        &fixture,
+    ) {
+        eprintln!(
+            "tarn: fixture write failed for {}::{}::{}: {}",
+            scope.file_path, scope.test_label, result.name, err
+        );
+    }
+}
+
 fn skipped_due_to_failed_capture(step: &Step, failed_refs: &[String]) -> StepResult {
     let message = format!(
         "Skipped: step references capture(s) that failed earlier in this test: {}. \
@@ -682,6 +787,7 @@ fn skipped_due_to_failed_capture(step: &Step, failed_refs: &[String]) -> StepRes
     StepResult {
         name: step.name.clone(),
         description: step.description.clone(),
+        debug: step.debug,
         passed: false,
         duration_ms: 0,
         assertion_results: vec![AssertionResult::fail(
@@ -704,6 +810,7 @@ fn fail_fast_skipped_step(step: &Step) -> StepResult {
     StepResult {
         name: step.name.clone(),
         description: step.description.clone(),
+        debug: step.debug,
         passed: false,
         duration_ms: 0,
         assertion_results: vec![AssertionResult::fail(
@@ -730,6 +837,7 @@ fn condition_skipped_step(step: &Step, message: String) -> StepResult {
     StepResult {
         name: step.name.clone(),
         description: step.description.clone(),
+        debug: step.debug,
         passed: true,
         duration_ms: 0,
         assertion_results: vec![AssertionResult::pass("condition", "skip", message)],
@@ -884,6 +992,7 @@ fn unresolved_template_step(
         return Some(StepResult {
             name: step.name.clone(),
             description: step.description.clone(),
+        debug: step.debug,
             passed: false,
             duration_ms: 0,
             assertion_results: vec![AssertionResult::fail(
@@ -910,6 +1019,7 @@ fn unresolved_template_step(
     Some(StepResult {
         name: step.name.clone(),
         description: step.description.clone(),
+        debug: step.debug,
         passed: false,
         duration_ms: 0,
         assertion_results: vec![AssertionResult::fail(
@@ -969,6 +1079,7 @@ fn runtime_failure_step(
     StepResult {
         name: step.name.clone(),
         description: step.description.clone(),
+        debug: step.debug,
         passed: false,
         duration_ms,
         assertion_results: vec![AssertionResult::fail(
@@ -1468,6 +1579,7 @@ fn run_step(
         return Ok(StepResult {
             name: step.name.clone(),
             description: step.description.clone(),
+        debug: step.debug,
             passed: true,
             duration_ms: 0,
             assertion_results: vec![],
@@ -1596,6 +1708,7 @@ fn run_step(
                 return Ok(StepResult {
                     name: step.name.clone(),
                     description: step.description.clone(),
+        debug: step.debug,
                     passed: false,
                     duration_ms: response.duration_ms,
                     assertion_results: all_assertions,
@@ -1623,20 +1736,18 @@ fn run_step(
                 redacted_values,
             )?;
 
-            // Preserve response_info on passing steps when the caller
-            // asked for verbose responses globally, when the step has
-            // `debug: true`, or (if a script flipped the step to failed)
-            // always — failed steps already embed the response.
-            let include_response = opts.verbose_responses || step.debug || !all_passed;
-            let response_info = if include_response {
-                Some(build_response_info(&response, opts.max_body_bytes))
-            } else {
-                None
-            };
+            // Always populate response_info so the fixture writer can
+            // persist passing responses (for debug / diff / hover in the
+            // LSP). Render-time gates in the JSON/LLM formatters decide
+            // whether a passing step actually surfaces its response in
+            // the CLI output (honors `--verbose-responses` and
+            // step-level `debug: true`).
+            let response_info = Some(build_response_info(&response, opts.max_body_bytes));
 
             return Ok(StepResult {
                 name: step.name.clone(),
                 description: step.description.clone(),
+        debug: step.debug,
                 passed: all_passed,
                 duration_ms: response.duration_ms,
                 assertion_results: all_assertions,
@@ -1669,6 +1780,7 @@ fn run_step(
     Ok(StepResult {
         name: step.name.clone(),
         description: step.description.clone(),
+        debug: step.debug,
         passed: false,
         duration_ms: response.duration_ms,
         assertion_results,
@@ -1856,6 +1968,7 @@ fn run_step_poll(
                         return Ok(StepResult {
                             name: step.name.clone(),
                             description: step.description.clone(),
+        debug: step.debug,
                             passed: false,
                             duration_ms: response.duration_ms,
                             assertion_results: all_assertions,
@@ -1885,19 +1998,15 @@ fn run_step_poll(
                 redacted_values,
             )?;
 
-            // Preserve response_info on passing polled steps when the
-            // caller asked for verbose responses or the step is marked
-            // `debug: true`, mirroring the non-polling path.
-            let include_response = opts.verbose_responses || step.debug || !all_passed;
-            let response_info = if include_response {
-                Some(build_response_info(&response, opts.max_body_bytes))
-            } else {
-                None
-            };
+            // Always populate response_info so the fixture writer has
+            // data for passing polled steps too. Render-time gates
+            // decide whether the CLI output surfaces the response.
+            let response_info = Some(build_response_info(&response, opts.max_body_bytes));
 
             return Ok(StepResult {
                 name: step.name.clone(),
                 description: step.description.clone(),
+        debug: step.debug,
                 passed: all_passed,
                 duration_ms: response.duration_ms,
                 assertion_results: all_assertions,
@@ -1928,6 +2037,7 @@ fn run_step_poll(
             return Ok(StepResult {
                 name: step.name.clone(),
                 description: step.description.clone(),
+        debug: step.debug,
                 passed: false,
                 duration_ms: 0,
                 assertion_results: vec![AssertionResult::fail(
@@ -2012,6 +2122,7 @@ fn run_step_poll(
     Ok(StepResult {
         name: step.name.clone(),
         description: step.description.clone(),
+        debug: step.debug,
         passed: false,
         duration_ms: 0,
         assertion_results,

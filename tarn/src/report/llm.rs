@@ -243,6 +243,7 @@ mod tests {
                     step_results: vec![StepResult {
                         name: "Create".into(),
                         description: None,
+                        debug: false,
                         passed: false,
                         duration_ms: 100,
                         assertion_results: vec![AssertionResult::fail(
@@ -306,6 +307,7 @@ mod tests {
                     step_results: vec![StepResult {
                         name: "ok".into(),
                         description: None,
+                        debug: false,
                         passed: true,
                         duration_ms: 120,
                         assertion_results: vec![AssertionResult::pass("status", "200", "200")],
@@ -363,6 +365,7 @@ mod tests {
                 step_results: vec![StepResult {
                     name: "s".into(),
                     description: None,
+                    debug: false,
                     passed: false,
                     duration_ms: 10,
                     assertion_results: vec![AssertionResult::fail(
@@ -406,6 +409,7 @@ mod tests {
             .push(StepResult {
                 name: "step_dep_a".into(),
                 description: None,
+                debug: false,
                 passed: false,
                 duration_ms: 0,
                 assertion_results: vec![AssertionResult::fail(
@@ -427,6 +431,7 @@ mod tests {
             .push(StepResult {
                 name: "step_dep_b".into(),
                 description: None,
+                debug: false,
                 passed: false,
                 duration_ms: 0,
                 assertion_results: vec![AssertionResult::fail(

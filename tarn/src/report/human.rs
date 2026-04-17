@@ -294,6 +294,7 @@ mod tests {
                     step_results: vec![StepResult {
                         name: "Check status".into(),
                         description: None,
+                        debug: false,
                         passed,
                         duration_ms: 50,
                         assertion_results: if passed {
@@ -352,6 +353,7 @@ mod tests {
                 setup_results: vec![StepResult {
                     name: "Auth".into(),
                     description: None,
+                    debug: false,
                     passed: true,
                     duration_ms: 50,
                     assertion_results: vec![],
@@ -367,6 +369,7 @@ mod tests {
                 teardown_results: vec![StepResult {
                     name: "Cleanup".into(),
                     description: None,
+                    debug: false,
                     passed: true,
                     duration_ms: 30,
                     assertion_results: vec![],
@@ -407,6 +410,7 @@ mod tests {
                     step_results: vec![StepResult {
                         name: "step".into(),
                         description: None,
+                        debug: false,
                         passed: false,
                         duration_ms: 50,
                         assertion_results: vec![
@@ -456,6 +460,7 @@ mod tests {
                     step_results: vec![StepResult {
                         name: "step".into(),
                         description: None,
+                        debug: false,
                         passed: false,
                         duration_ms: 50,
                         assertion_results: vec![AssertionResult::fail_with_diff(
@@ -512,6 +517,7 @@ mod tests {
                     step_results: vec![StepResult {
                         name: "POST /orders/approve".into(),
                         description: None,
+                        debug: false,
                         passed: false,
                         duration_ms: 12,
                         assertion_results: vec![AssertionResult::fail(
@@ -583,6 +589,7 @@ mod tests {
                     step_results: vec![StepResult {
                         name: "POST /orders/approve".into(),
                         description: None,
+                        debug: false,
                         passed: false,
                         duration_ms: 5,
                         assertion_results: vec![AssertionResult::fail(
@@ -648,6 +655,7 @@ mod tests {
                     step_results: vec![StepResult {
                         name: "POST /orders/approve".into(),
                         description: None,
+                        debug: false,
                         passed: false,
                         duration_ms: 5,
                         assertion_results: vec![AssertionResult::fail(
@@ -708,6 +716,7 @@ mod tests {
                     step_results: vec![StepResult {
                         name: "step".into(),
                         description: None,
+                        debug: false,
                         passed: false,
                         duration_ms: 10,
                         assertion_results: vec![AssertionResult::fail(
@@ -788,6 +797,7 @@ mod tests {
                     step_results: vec![StepResult {
                         name: "Step name".into(),
                         description: description.map(str::to_string),
+                        debug: false,
                         passed,
                         duration_ms: 5,
                         assertion_results: if passed {

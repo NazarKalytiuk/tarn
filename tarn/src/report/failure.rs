@@ -295,6 +295,7 @@ mod tests {
         StepResult {
             name: name.into(),
             description: None,
+            debug: false,
             passed: false,
             duration_ms: 10,
             assertion_results: vec![AssertionResult::fail(

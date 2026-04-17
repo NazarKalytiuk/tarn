@@ -62,7 +62,7 @@ use lsp_types::{
     ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind, WorkDoneProgressOptions,
 };
 
-use crate::jsonpath_eval::EVALUATE_JSONPATH_COMMAND;
+use crate::commands::ALL_COMMAND_IDS;
 
 /// Return the `ServerCapabilities` this server currently advertises.
 ///
@@ -180,7 +180,7 @@ pub fn server_capabilities() -> ServerCapabilities {
         // (VS Code extension migration onto tarn-lsp) is the next
         // coordinated initiative.
         execute_command_provider: Some(ExecuteCommandOptions {
-            commands: vec![EVALUATE_JSONPATH_COMMAND.to_owned()],
+            commands: ALL_COMMAND_IDS.iter().map(|s| (*s).to_owned()).collect(),
             work_done_progress_options: WorkDoneProgressOptions::default(),
         }),
 

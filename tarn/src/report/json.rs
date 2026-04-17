@@ -84,7 +84,7 @@ fn render_file(file: &FileResult, mode: JsonOutputMode, opts: RenderOptions) -> 
         .setup_results
         .iter()
         .filter(|step| !(opts.only_failed && step.passed))
-        .map(|step| render_step(step, &file.redaction, &file.redacted_values, mode))
+        .map(|step| render_step(step, &file.redaction, &file.redacted_values, mode, opts))
         .collect();
 
     let tests_json: Vec<Value> = file
@@ -96,7 +96,7 @@ fn render_file(file: &FileResult, mode: JsonOutputMode, opts: RenderOptions) -> 
                 .step_results
                 .iter()
                 .filter(|step| !(opts.only_failed && step.passed))
-                .map(|step| render_step(step, &file.redaction, &file.redacted_values, mode))
+                .map(|step| render_step(step, &file.redaction, &file.redacted_values, mode, opts))
                 .collect();
             let mut test_obj = json!({
                 "name": t.name,
@@ -116,7 +116,7 @@ fn render_file(file: &FileResult, mode: JsonOutputMode, opts: RenderOptions) -> 
         .teardown_results
         .iter()
         .filter(|step| !(opts.only_failed && step.passed))
-        .map(|step| render_step(step, &file.redaction, &file.redacted_values, mode))
+        .map(|step| render_step(step, &file.redaction, &file.redacted_values, mode, opts))
         .collect();
 
     json!({
@@ -140,6 +140,7 @@ fn render_step(
     redaction: &crate::model::RedactionConfig,
     secret_values: &[String],
     mode: JsonOutputMode,
+    opts: RenderOptions,
 ) -> Value {
     let details_source: Vec<_> = match mode {
         JsonOutputMode::Verbose => step.assertion_results.iter().collect(),
@@ -246,12 +247,13 @@ fn render_step(
     }
 
     // Include request/response when available. Failed steps always
-    // populate `response_info`, so the pre-existing contract holds. For
-    // passing steps, `--verbose-responses` and step-level `debug: true`
-    // are what cause the runner to preserve these fields — this branch
-    // is the knob that lets those flags show up in the report (NAZ-244).
-    if let Some(ref req) = step.request_info {
-        if !step.passed || step.response_info.is_some() {
+    // embed these. Passing steps embed only when the caller asked via
+    // `--verbose-responses` (RenderOptions) or the step itself opted in
+    // with `debug: true` (NAZ-244). Fixtures still get the data
+    // unconditionally via the runner — this gate is render-side only.
+    let embed_response = !step.passed || opts.verbose_responses || step.debug;
+    if embed_response {
+        if let Some(ref req) = step.request_info {
             obj["request"] = json!({
                 "method": req.method,
                 "url": sanitize_string(&req.url, &redaction.replacement, secret_values),
@@ -259,21 +261,21 @@ fn render_step(
                 "body": req.body.as_ref().map(|body| sanitize_json(body, &redaction.replacement, secret_values)),
             });
         }
-    }
-    if let Some(ref resp) = step.response_info {
-        let body = resp.body.as_ref().map(|body| {
-            let sanitized = sanitize_json(body, &redaction.replacement, secret_values);
-            if mode == JsonOutputMode::Compact {
-                truncate_json_body(&sanitized, 200)
-            } else {
-                sanitized
-            }
-        });
-        obj["response"] = json!({
-            "status": resp.status,
-            "headers": redact_headers(&resp.headers, redaction, secret_values),
-            "body": body,
-        });
+        if let Some(ref resp) = step.response_info {
+            let body = resp.body.as_ref().map(|body| {
+                let sanitized = sanitize_json(body, &redaction.replacement, secret_values);
+                if mode == JsonOutputMode::Compact {
+                    truncate_json_body(&sanitized, 200)
+                } else {
+                    sanitized
+                }
+            });
+            obj["response"] = json!({
+                "status": resp.status,
+                "headers": redact_headers(&resp.headers, redaction, secret_values),
+                "body": body,
+            });
+        }
     }
 
     obj
@@ -470,6 +472,7 @@ mod tests {
                     step_results: vec![StepResult {
                         name: "step1".into(),
                         description: None,
+                        debug: false,
                         passed: true,
                         duration_ms: 50,
                         assertion_results: vec![AssertionResult::pass("status", "200", "200")],
@@ -511,6 +514,7 @@ mod tests {
                     step_results: vec![StepResult {
                         name: "bad_step".into(),
                         description: None,
+                        debug: false,
                         passed: false,
                         duration_ms: 100,
                         assertion_results: vec![AssertionResult::fail(
@@ -628,6 +632,7 @@ mod tests {
                     step_results: vec![StepResult {
                         name: "step".into(),
                         description: None,
+                        debug: false,
                         passed: false,
                         duration_ms: 10,
                         assertion_results: vec![AssertionResult::fail_with_diff(
@@ -747,6 +752,7 @@ mod tests {
                     step_results: vec![StepResult {
                         name: "step".into(),
                         description: None,
+                        debug: false,
                         passed: false,
                         duration_ms: 10,
                         assertion_results: vec![AssertionResult::fail(
@@ -832,6 +838,7 @@ mod tests {
                     step_results: vec![StepResult {
                         name: "POST /orders/approve".into(),
                         description: None,
+                        debug: false,
                         passed: false,
                         duration_ms: 10,
                         assertion_results: vec![AssertionResult::fail(
@@ -956,6 +963,7 @@ mod tests {
                     step_results: vec![StepResult {
                         name: "step".into(),
                         description: description.map(str::to_string),
+                        debug: false,
                         passed: true,
                         duration_ms: 5,
                         assertion_results: vec![AssertionResult::pass("status", "200", "200")],

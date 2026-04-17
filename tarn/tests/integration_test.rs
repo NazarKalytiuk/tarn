@@ -385,6 +385,7 @@ fn golden_run_result() -> RunResult {
             setup_results: vec![StepResult {
                 name: "Authenticate".into(),
                 description: None,
+                debug: false,
                 passed: true,
                 duration_ms: 12,
                 assertion_results: vec![AssertionResult::pass("status", "200", "200")],
@@ -405,6 +406,7 @@ fn golden_run_result() -> RunResult {
                     StepResult {
                         name: "Create item".into(),
                         description: None,
+                        debug: false,
                         passed: true,
                         duration_ms: 34,
                         assertion_results: vec![
@@ -422,6 +424,7 @@ fn golden_run_result() -> RunResult {
                     StepResult {
                         name: "Fetch item".into(),
                         description: None,
+                        debug: false,
                         passed: false,
                         duration_ms: 56,
                         assertion_results: vec![
@@ -465,6 +468,7 @@ fn golden_run_result() -> RunResult {
             teardown_results: vec![StepResult {
                 name: "Cleanup".into(),
                 description: None,
+                debug: false,
                 passed: true,
                 duration_ms: 8,
                 assertion_results: vec![],
