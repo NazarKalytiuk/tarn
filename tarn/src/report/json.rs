@@ -1,3 +1,4 @@
+use crate::assert::hints::step_hints;
 use crate::assert::types::{ErrorCode, FileResult, RunResult, StepResult};
 use crate::model::Location;
 use crate::report::redaction::{
@@ -199,6 +200,10 @@ fn render_step(
 
     // Include failures shortcut list
     if !step.passed {
+        // Compute diagnostic hints once per step; we attach them to the
+        // failed `status` assertion so consumers see the hint alongside
+        // the mismatch that triggered it.
+        let diagnostic_hints = step_hints(step);
         let failures: Vec<Value> = step
             .failures()
             .iter()
@@ -213,6 +218,9 @@ fn render_step(
                 });
                 if let Some(location) = &f.location {
                     obj["location"] = location_json(location);
+                }
+                if f.assertion == "status" && !diagnostic_hints.is_empty() {
+                    obj["hints"] = json!(diagnostic_hints);
                 }
                 obj
             })
@@ -788,6 +796,74 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("assertions.failures"));
+    }
+
+    #[test]
+    fn json_failure_includes_route_ordering_hint_when_body_signals_it() {
+        let run = RunResult {
+            duration_ms: 10,
+            file_results: vec![FileResult {
+                file: "test.tarn.yaml".into(),
+                name: "Suite".into(),
+                passed: false,
+                duration_ms: 10,
+                redaction: crate::model::RedactionConfig::default(),
+                redacted_values: vec![],
+                setup_results: vec![],
+                test_results: vec![TestResult {
+                    name: "approve".into(),
+                    description: None,
+                    passed: false,
+                    duration_ms: 10,
+                    step_results: vec![StepResult {
+                        name: "POST /orders/approve".into(),
+                        passed: false,
+                        duration_ms: 10,
+                        assertion_results: vec![AssertionResult::fail(
+                            "status",
+                            "201",
+                            "400",
+                            "Expected HTTP status 201, got 400",
+                        )],
+                        request_info: Some(RequestInfo {
+                            method: "POST".into(),
+                            url: "http://api.example.com/orders/approve".into(),
+                            headers: HashMap::new(),
+                            body: None,
+                            multipart: None,
+                        }),
+                        response_info: Some(ResponseInfo {
+                            status: 400,
+                            headers: HashMap::new(),
+                            body: Some(json!({"message": "Validation failed (uuid is expected)"})),
+                        }),
+                        error_category: Some(FailureCategory::AssertionFailed),
+                        response_status: Some(400),
+                        response_summary: None,
+                        captures_set: vec![],
+                        location: None,
+                    }],
+                    captures: HashMap::new(),
+                }],
+                teardown_results: vec![],
+            }],
+        };
+
+        let parsed: Value = serde_json::from_str(&render(&run)).unwrap();
+        let failure = &parsed["files"][0]["tests"][0]["steps"][0]["assertions"]["failures"][0];
+        let hints = failure["hints"].as_array().expect("hints must be an array");
+        assert_eq!(hints.len(), 1);
+        assert!(hints[0]
+            .as_str()
+            .unwrap()
+            .contains("docs/TROUBLESHOOTING.md#route-ordering"));
+    }
+
+    #[test]
+    fn json_failure_omits_hints_when_no_signal() {
+        let parsed: Value = serde_json::from_str(&render(&make_failing_run())).unwrap();
+        let failure = &parsed["files"][0]["tests"][0]["steps"][0]["assertions"]["failures"][0];
+        assert!(failure.get("hints").is_none());
     }
 
     #[test]

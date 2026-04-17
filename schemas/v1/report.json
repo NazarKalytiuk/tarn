@@ -99,7 +99,12 @@
         "actual": { "type": "string" },
         "message": { "type": "string" },
         "diff": { "type": ["string", "null"] },
-        "location": { "$ref": "#/$defs/location" }
+        "location": { "$ref": "#/$defs/location" },
+        "hints": {
+          "type": "array",
+          "description": "Optional single-line diagnostic hints that surface a likely root cause (e.g. NestJS-style route-ordering collisions). Emitted only when Tarn is confident about the signal.",
+          "items": { "type": "string" }
+        }
       }
     },
     "assertionSummary": {

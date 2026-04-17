@@ -1,6 +1,7 @@
 pub mod body;
 pub mod duration;
 pub mod headers;
+pub mod hints;
 pub mod redirect;
 pub mod status;
 pub mod types;

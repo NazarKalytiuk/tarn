@@ -1,3 +1,4 @@
+use crate::assert::hints::step_hints;
 use crate::assert::types::{FailureCategory, FileResult, RunResult, StepResult, TestResult};
 use crate::model::RedactionConfig;
 use crate::report::redaction::sanitize_assertion;
@@ -208,13 +209,15 @@ fn render_step_into(
         ));
         // Show failure details
         let failures = step.failures();
+        let hints = step_hints(step);
+        let failure_count = failures.len();
+        let hint_count = hints.len();
         for (i, failure) in failures.iter().enumerate() {
             let failure = sanitize_assertion(failure, redaction, redacted_values);
-            let connector = if i == failures.len() - 1 {
-                "└─"
-            } else {
-                "├─"
-            };
+            // Reserve the closing `└─` for the very last line we emit
+            // (the final hint if present, otherwise the final failure).
+            let is_last_line = i == failure_count - 1 && hint_count == 0;
+            let connector = if is_last_line { "└─" } else { "├─" };
             output.push_str(&format!(
                 "     {} {}\n",
                 connector.dimmed(),
@@ -234,6 +237,16 @@ fn render_step_into(
                     output.push_str(&format!("       {}\n", colored));
                 }
             }
+        }
+
+        // Emit optional diagnostic hints (e.g. route-ordering) after
+        // the raw failure messages. Each hint renders as a dimmed
+        // `note:` line so it's visibly separate from the failure
+        // itself and does not masquerade as a new assertion failure.
+        for (i, hint) in hints.iter().enumerate() {
+            let is_last_line = i == hint_count - 1;
+            let connector = if is_last_line { "└─" } else { "├─" };
+            output.push_str(&format!("     {} {}\n", connector.dimmed(), hint.dimmed()));
         }
     }
 }
@@ -446,6 +459,204 @@ mod tests {
         assert!(output.contains("whole body mismatch"));
         assert!(output.contains("--- expected"));
         assert!(output.contains("+++ actual"));
+    }
+
+    #[test]
+    fn route_ordering_hint_rendered_example_snapshot() {
+        // Snapshot-style test: captures the exact rendered output
+        // (without ANSI color codes) so doc examples can't drift from
+        // the real formatter.
+        colored::control::set_override(false);
+
+        let mut headers = HashMap::new();
+        headers.insert("Content-Type".into(), "application/json".into());
+
+        let run = RunResult {
+            duration_ms: 12,
+            file_results: vec![FileResult {
+                file: "orders.tarn.yaml".into(),
+                name: "Orders API".into(),
+                passed: false,
+                duration_ms: 12,
+                redaction: crate::model::RedactionConfig::default(),
+                redacted_values: vec![],
+                setup_results: vec![],
+                test_results: vec![TestResult {
+                    name: "approve_order".into(),
+                    description: None,
+                    passed: false,
+                    duration_ms: 12,
+                    step_results: vec![StepResult {
+                        name: "POST /orders/approve".into(),
+                        passed: false,
+                        duration_ms: 12,
+                        assertion_results: vec![AssertionResult::fail(
+                            "status",
+                            "201",
+                            "400",
+                            "Expected HTTP status 201, got 400",
+                        )],
+                        request_info: Some(RequestInfo {
+                            method: "POST".into(),
+                            url: "http://api.example.com/orders/approve".into(),
+                            headers,
+                            body: None,
+                            multipart: None,
+                        }),
+                        response_info: Some(ResponseInfo {
+                            status: 400,
+                            headers: HashMap::new(),
+                            body: Some(serde_json::json!({
+                                "statusCode": 400,
+                                "message": "Validation failed (uuid is expected)",
+                                "error": "Bad Request"
+                            })),
+                        }),
+                        error_category: Some(FailureCategory::AssertionFailed),
+                        response_status: Some(400),
+                        response_summary: None,
+                        captures_set: vec![],
+                        location: None,
+                    }],
+                    captures: HashMap::new(),
+                }],
+                teardown_results: vec![],
+            }],
+        };
+
+        let output = render(&run);
+        // Intentionally match on exact substrings rather than the
+        // full banner so we don't break on cosmetic whitespace.
+        assert!(output.contains("✗ POST /orders/approve (12ms)"));
+        assert!(output.contains("├─ Expected HTTP status 201, got 400"));
+        assert!(output.contains(
+            "└─ note: the server may have matched this path to a dynamic route (e.g. /foo/:id); check for route ordering conflicts (see docs/TROUBLESHOOTING.md#route-ordering)."
+        ));
+
+        colored::control::unset_override();
+    }
+
+    #[test]
+    fn render_emits_route_ordering_hint_when_body_signals_it() {
+        let mut headers = HashMap::new();
+        headers.insert("Content-Type".into(), "application/json".into());
+
+        let run = RunResult {
+            duration_ms: 5,
+            file_results: vec![FileResult {
+                file: "test.tarn.yaml".into(),
+                name: "Suite".into(),
+                passed: false,
+                duration_ms: 5,
+                redaction: crate::model::RedactionConfig::default(),
+                redacted_values: vec![],
+                setup_results: vec![],
+                test_results: vec![TestResult {
+                    name: "approve_order".into(),
+                    description: None,
+                    passed: false,
+                    duration_ms: 5,
+                    step_results: vec![StepResult {
+                        name: "POST /orders/approve".into(),
+                        passed: false,
+                        duration_ms: 5,
+                        assertion_results: vec![AssertionResult::fail(
+                            "status",
+                            "201",
+                            "400",
+                            "Expected HTTP status 201, got 400",
+                        )],
+                        request_info: Some(RequestInfo {
+                            method: "POST".into(),
+                            url: "http://api.example.com/orders/approve".into(),
+                            headers,
+                            body: None,
+                            multipart: None,
+                        }),
+                        response_info: Some(ResponseInfo {
+                            status: 400,
+                            headers: HashMap::new(),
+                            body: Some(serde_json::json!({
+                                "statusCode": 400,
+                                "message": "Validation failed (uuid is expected)",
+                                "error": "Bad Request"
+                            })),
+                        }),
+                        error_category: Some(FailureCategory::AssertionFailed),
+                        response_status: Some(400),
+                        response_summary: None,
+                        captures_set: vec![],
+                        location: None,
+                    }],
+                    captures: HashMap::new(),
+                }],
+                teardown_results: vec![],
+            }],
+        };
+
+        let output = render(&run);
+        assert!(
+            output.contains("route ordering"),
+            "expected route-ordering hint in output, got:\n{}",
+            output
+        );
+        assert!(output.contains("docs/TROUBLESHOOTING.md#route-ordering"));
+    }
+
+    #[test]
+    fn render_does_not_emit_route_ordering_hint_without_signal() {
+        let run = RunResult {
+            duration_ms: 5,
+            file_results: vec![FileResult {
+                file: "test.tarn.yaml".into(),
+                name: "Suite".into(),
+                passed: false,
+                duration_ms: 5,
+                redaction: crate::model::RedactionConfig::default(),
+                redacted_values: vec![],
+                setup_results: vec![],
+                test_results: vec![TestResult {
+                    name: "approve_order".into(),
+                    description: None,
+                    passed: false,
+                    duration_ms: 5,
+                    step_results: vec![StepResult {
+                        name: "POST /orders/approve".into(),
+                        passed: false,
+                        duration_ms: 5,
+                        assertion_results: vec![AssertionResult::fail(
+                            "status",
+                            "201",
+                            "400",
+                            "Expected HTTP status 201, got 400",
+                        )],
+                        request_info: Some(RequestInfo {
+                            method: "POST".into(),
+                            url: "http://api.example.com/orders/approve".into(),
+                            headers: HashMap::new(),
+                            body: None,
+                            multipart: None,
+                        }),
+                        response_info: Some(ResponseInfo {
+                            status: 400,
+                            headers: HashMap::new(),
+                            body: Some(serde_json::json!({"message": "Insufficient funds"})),
+                        }),
+                        error_category: Some(FailureCategory::AssertionFailed),
+                        response_status: Some(400),
+                        response_summary: None,
+                        captures_set: vec![],
+                        location: None,
+                    }],
+                    captures: HashMap::new(),
+                }],
+                teardown_results: vec![],
+            }],
+        };
+
+        let output = render(&run);
+        assert!(!output.contains("route ordering"));
+        assert!(!output.contains("docs/TROUBLESHOOTING.md#route-ordering"));
     }
 
     #[test]

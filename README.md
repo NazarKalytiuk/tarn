@@ -1309,6 +1309,10 @@ The skill triggers on keywords like "API test", "tarn", ".tarn.yaml", "test this
 
 ## Troubleshooting
 
+See [`docs/TROUBLESHOOTING.md`](./docs/TROUBLESHOOTING.md) for the full
+guide, including the NestJS-style [route ordering](./docs/TROUBLESHOOTING.md#route-ordering-nestjs-and-similar)
+trap that Tarn flags automatically.
+
 Common cases:
 
 - `connection_error`: server is down, wrong host/port, DNS issue, TLS/connect failure
@@ -1322,8 +1326,9 @@ Agent diagnosis loop:
 1. run `tarn validate` first for syntax/config errors
 2. run `tarn run --format json`
 3. read `failure_category` before reading the message text
-4. if `response` exists, inspect it before editing assertions
-5. if `request.url` still contains `{{ ... }}`, fix env/capture interpolation before retrying
+4. if a failed `status` assertion carries `hints`, follow the first hint before second-guessing the test
+5. if `response` exists, inspect it before editing assertions
+6. if `request.url` still contains `{{ ... }}`, fix env/capture interpolation before retrying
 
 Non-JSON bodies:
 
