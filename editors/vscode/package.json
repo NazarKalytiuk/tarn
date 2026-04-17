@@ -483,6 +483,26 @@
           "description": "%configuration.tarn.binaryPath.description%",
           "scope": "machine-overridable"
         },
+        "tarn.backend": {
+          "type": "string",
+          "enum": [
+            "cli",
+            "mcp"
+          ],
+          "enumDescriptions": [
+            "%configuration.tarn.backend.enum.cli%",
+            "%configuration.tarn.backend.enum.mcp%"
+          ],
+          "default": "cli",
+          "description": "%configuration.tarn.backend.description%",
+          "scope": "window"
+        },
+        "tarn.mcpPath": {
+          "type": "string",
+          "default": "",
+          "description": "%configuration.tarn.mcpPath.description%",
+          "scope": "machine-overridable"
+        },
         "tarn.lspBinaryPath": {
           "type": "string",
           "default": "tarn-lsp",

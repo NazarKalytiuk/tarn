@@ -17,7 +17,15 @@ import { RequestResponsePanel } from "./views/RequestResponsePanel";
 import { TarnStatusBar } from "./statusBar";
 import { registerCommands } from "./commands";
 import { TarnProcessRunner } from "./backend/TarnProcessRunner";
-import { promptInstallIfMissing } from "./backend/binaryResolver";
+import {
+  promptInstallIfMissing,
+  resolveMcpBinary,
+} from "./backend/binaryResolver";
+import { spawnMcpClient, type TarnMcpClient } from "./backend/TarnMcpClient";
+import {
+  selectBackend,
+  showMcpFallbackNoticeOnce,
+} from "./backend/selectBackend";
 import { getOutputChannel, disposeOutputChannel } from "./outputChannel";
 import { getExperimentalLspClient, readConfig } from "./config";
 import { resolveTarnLspBinary } from "./lsp/tarnLspResolver";
@@ -57,6 +65,14 @@ export type { TarnExtensionApi } from "./api";
  */
 let tarnLspClient: LanguageClient | undefined;
 
+/**
+ * Module-scoped handle on the active MCP client, if the user selected
+ * `tarn.backend: mcp` and the binary resolved successfully. Kept outside
+ * `activate()` so `deactivate()` can dispose the long-lived `tarn-mcp`
+ * child process deterministically; disposing twice is a no-op.
+ */
+let tarnMcpClient: TarnMcpClient | undefined;
+
 export async function activate(
   context: vscode.ExtensionContext,
 ): Promise<TarnExtensionApi | undefined> {
@@ -77,7 +93,40 @@ export async function activate(
 
   const resolved = await promptInstallIfMissing();
   const binaryPath = resolved?.path ?? readConfig().binaryPath;
-  const backend = new TarnProcessRunner(binaryPath);
+  const cliBackend = new TarnProcessRunner(binaryPath);
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  const selection = await selectBackend(
+    cliBackend,
+    workspaceRoot,
+    async (fallback, cwd) => {
+      // MCP client factory — resolves the binary, spawns the long-lived
+      // `tarn-mcp` child process, and runs the MCP initialize handshake.
+      // Any failure propagates out of the factory so `selectBackend`
+      // can log and degrade to CLI.
+      const resolvedMcp = await resolveMcpBinary();
+      const mcpCwd = cwd ?? process.cwd();
+      const client = spawnMcpClient(fallback, resolvedMcp.path, mcpCwd);
+      const ready = await client.isReady();
+      if (!ready) {
+        client.dispose();
+        throw new Error("tarn-mcp initialize handshake failed");
+      }
+      return client;
+    },
+  );
+  const backend = selection.backend;
+  tarnMcpClient = selection.mcpClient;
+  if (selection.fellBack) {
+    showMcpFallbackNoticeOnce();
+  }
+  context.subscriptions.push({
+    dispose: () => {
+      if (tarnMcpClient) {
+        tarnMcpClient.dispose();
+        tarnMcpClient = undefined;
+      }
+    },
+  });
 
   // Check that the resolved Tarn CLI is at or above the extension's
   // declared `tarn.minVersion`. Non-fatal: a mismatch shows a warning
@@ -87,7 +136,6 @@ export async function activate(
     void warnIfTarnOutdated(context, binaryPath);
   }
 
-  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   const index = new WorkspaceIndex({ backend, cwd: workspaceRoot });
   await index.initialize();
   context.subscriptions.push(index);
@@ -465,6 +513,20 @@ export async function deactivate(): Promise<void> {
       /* ignore: client was already stopped or failed to stop */
     } finally {
       tarnLspClient = undefined;
+    }
+  }
+  // Tear down the long-lived `tarn-mcp` process if one was spawned.
+  // The context-subscription disposer above also disposes it on
+  // extension reload; we dispose here as a belt-and-braces guarantee
+  // because VS Code does not promise subscriptions run before
+  // `deactivate()` on host shutdown.
+  if (tarnMcpClient) {
+    try {
+      tarnMcpClient.dispose();
+    } catch {
+      /* ignore: child may already be dead */
+    } finally {
+      tarnMcpClient = undefined;
     }
   }
   disposeOutputChannel();

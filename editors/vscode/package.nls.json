@@ -64,6 +64,10 @@
 
   "configuration.title": "Tarn",
   "configuration.tarn.binaryPath.description": "Path to the tarn CLI binary. Use an absolute path if it is not on PATH.",
+  "configuration.tarn.backend.description": "Which backend to use for running tests. `cli` spawns `tarn` per command; `mcp` keeps a `tarn-mcp` process alive and speaks JSON-RPC.",
+  "configuration.tarn.backend.enum.cli": "Spawn the `tarn` CLI for every command (default)",
+  "configuration.tarn.backend.enum.mcp": "Keep a `tarn-mcp` process alive and dispatch commands as JSON-RPC requests",
+  "configuration.tarn.mcpPath.description": "Override path to `tarn-mcp` binary (otherwise resolved from PATH or bundled binary).",
   "configuration.tarn.lspBinaryPath.description": "Path to the tarn-lsp binary used by the experimental vscode-languageclient integration. Use an absolute path if it is not on PATH.",
   "configuration.tarn.experimentalLspClient.description": "Experimental: start tarn-lsp as a side-by-side LSP client. Direct providers remain active until Phase V2 migrates each feature individually. Requires the tarn-lsp binary to be installed. Default: false.",
   "configuration.tarn.testFileGlob.description": "Glob pattern used to discover Tarn test files.",
