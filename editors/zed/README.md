@@ -87,7 +87,7 @@ git tag zed-v0.1.0
 git push --tags
 ```
 
-The tag triggers `.github/workflows/zed-extension-release.yml`, which:
+The tag triggers `.github/workflows/zed-mirror-release.yml`, which:
 
 1. Verifies the tag matches both manifest versions.
 2. Builds the WASM as a sanity check.
