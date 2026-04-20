@@ -12,13 +12,13 @@
       "name": "tarn",
       "source": "./plugin",
       "description": "CLI-first API testing tool for .tarn.yaml files with structured JSON output and a bundled MCP server for AI-assisted write/run/debug workflows.",
-      "version": "0.8.0"
+      "version": "0.9.0"
     },
     {
       "name": "tarn-lsp",
       "source": "./editors/claude-code/tarn-lsp-plugin",
       "description": "Language Server Protocol plugin for Tarn test files (.tarn.yaml) — diagnostics, hover, completion, symbols, navigation, code actions, quick-fix, formatting, JSONPath evaluator.",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "author": {
         "name": "Nazar Kalytiuk"
       },

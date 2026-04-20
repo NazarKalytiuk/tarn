@@ -1,6 +1,6 @@
 {
   "name": "tarn-lsp",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Language Server Protocol plugin for Tarn test files (.tarn.yaml).",
   "author": {
     "name": "Nazar Kalytiuk",
