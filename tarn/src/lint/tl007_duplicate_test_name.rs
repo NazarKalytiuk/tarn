@@ -95,6 +95,7 @@ mod tests {
             name: "f.tarn.yaml".into(),
             description: None,
             tags: Vec::new(),
+            openapi_operation_ids: None,
             env: std::collections::HashMap::new(),
             redaction: None,
             defaults: None,

@@ -27,6 +27,11 @@
       "items": { "type": "string" },
       "default": []
     },
+    "openapi_operation_ids": {
+      "type": "array",
+      "description": "Optional list of OpenAPI operation ids this test file exercises. Consumed by `tarn impact` to map changed operations to tests. Adopting the field is additive and never required.",
+      "items": { "type": "string", "minLength": 1 }
+    },
     "env": {
       "type": "object",
       "description": "Inline environment variables (lowest priority in resolution chain)",

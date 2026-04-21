@@ -7791,3 +7791,254 @@ steps:
         "minimal no-failures section emitted: {stdout}"
     );
 }
+
+// --- NAZ-410: tarn impact ---
+
+/// Build a tiny fixture suite under `dir` that `tarn impact` can match.
+fn write_impact_fixture(dir: &std::path::Path) {
+    std::fs::create_dir_all(dir.join("tests")).unwrap();
+    std::fs::write(
+        dir.join("tests").join("users.tarn.yaml"),
+        r#"
+name: Users
+tags: [users]
+openapi_operation_ids:
+  - getUserById
+tests:
+  get_user:
+    steps:
+      - name: GET /users/:id
+        request:
+          method: GET
+          url: "{{ env.base_url }}/users/1"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("tests").join("health.tarn.yaml"),
+        r#"
+name: Health
+steps:
+  - name: GET /health
+    request:
+      method: GET
+      url: "{{ env.base_url }}/health"
+"#,
+    )
+    .unwrap();
+}
+
+#[test]
+fn tarn_impact_endpoint_match_json_output_picks_correct_test() {
+    let dir = TempDir::new().unwrap();
+    write_impact_fixture(dir.path());
+
+    let output = tarn()
+        .args([
+            "impact",
+            "--endpoints",
+            "GET:/users/:id",
+            "--format",
+            "json",
+            "--path",
+            "tests",
+        ])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(json["schema_version"], 1);
+    let matches = json["matches"].as_array().unwrap();
+    assert!(!matches.is_empty());
+    let top = &matches[0];
+    assert_eq!(top["confidence"], "high");
+    assert!(top["file"].as_str().unwrap().ends_with("users.tarn.yaml"));
+    assert_eq!(top["test"], "get_user");
+    let reasons = top["reasons"].as_array().unwrap();
+    assert!(reasons
+        .iter()
+        .any(|r| r.as_str().unwrap().contains("GET /users/:id matches")));
+}
+
+#[test]
+fn tarn_impact_direct_file_edit_matches_high() {
+    let dir = TempDir::new().unwrap();
+    write_impact_fixture(dir.path());
+
+    let output = tarn()
+        .args([
+            "impact",
+            "--files",
+            "tests/users.tarn.yaml",
+            "--format",
+            "json",
+            "--path",
+            "tests",
+        ])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    let matches = json["matches"].as_array().unwrap();
+    let direct = matches
+        .iter()
+        .find(|m| m["file"].as_str().unwrap().ends_with("users.tarn.yaml"))
+        .unwrap();
+    assert_eq!(direct["confidence"], "high");
+    assert!(direct["reasons"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|r| r.as_str().unwrap().contains("direct edit")));
+}
+
+#[test]
+fn tarn_impact_diff_reads_git_changes() {
+    let dir = TempDir::new().unwrap();
+    write_impact_fixture(dir.path());
+
+    // Initialize a real git repo so `--diff` has something to read.
+    let git = |args: &[&str]| {
+        StdCommand::new("git")
+            .args(args)
+            .current_dir(dir.path())
+            .output()
+            .unwrap()
+    };
+    let init = git(&["init", "-q", "-b", "main"]);
+    assert!(init.status.success(), "git init: {:?}", init);
+    // Set an author to satisfy `git commit` even on fresh machines.
+    git(&["config", "user.email", "ci@example.com"]);
+    git(&["config", "user.name", "ci"]);
+    git(&["add", "."]);
+    let commit = git(&["commit", "-q", "-m", "initial"]);
+    assert!(commit.status.success(), "git commit: {:?}", commit);
+
+    // Mutate an existing test file so `git diff HEAD` reports a change.
+    std::fs::write(
+        dir.path().join("tests").join("users.tarn.yaml"),
+        r#"
+name: Users (edited)
+openapi_operation_ids:
+  - getUserById
+tests:
+  get_user:
+    steps:
+      - name: GET /users/:id
+        request:
+          method: GET
+          url: "{{ env.base_url }}/users/1"
+"#,
+    )
+    .unwrap();
+
+    let output = tarn()
+        .args(["impact", "--diff", "--format", "json", "--path", "tests"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    let diff_files = json["inputs"]["diff_files"].as_array().unwrap();
+    assert!(
+        diff_files
+            .iter()
+            .any(|f| f.as_str().unwrap().ends_with("users.tarn.yaml")),
+        "diff captured: {:?}",
+        diff_files
+    );
+    let matches = json["matches"].as_array().unwrap();
+    assert!(matches
+        .iter()
+        .any(|m| m["file"].as_str().unwrap().ends_with("users.tarn.yaml")
+            && m["confidence"] == "high"));
+}
+
+#[test]
+fn tarn_impact_no_inputs_errors_exit_two() {
+    let dir = TempDir::new().unwrap();
+    write_impact_fixture(dir.path());
+
+    let output = tarn()
+        .args(["impact", "--path", "tests"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("at least one of --diff"),
+        "error cites required inputs: {stderr}"
+    );
+}
+
+#[test]
+fn tarn_impact_no_matches_sets_low_confidence_only_false_and_emits_advice() {
+    let dir = TempDir::new().unwrap();
+    write_impact_fixture(dir.path());
+
+    let output = tarn()
+        .args([
+            "impact",
+            "--endpoints",
+            "POST:/totally/unrelated/path",
+            "--format",
+            "json",
+            "--path",
+            "tests",
+        ])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    let matches = json["matches"].as_array().unwrap();
+    assert!(matches.is_empty(), "no matches expected: {:?}", matches);
+    assert_eq!(json["low_confidence_only"], false);
+    let advice = json["advice"].as_array().unwrap();
+    assert!(!advice.is_empty(), "advice populated on empty matches");
+}
+
+#[test]
+fn tarn_impact_min_confidence_filters_low() {
+    let dir = TempDir::new().unwrap();
+    write_impact_fixture(dir.path());
+
+    // A file path with only a weak name-token overlap should register as
+    // low. Filtering at `--min-confidence high` must drop it.
+    let output = tarn()
+        .args([
+            "impact",
+            "--files",
+            "app/background/notifier.ts",
+            "--format",
+            "json",
+            "--min-confidence",
+            "high",
+            "--path",
+            "tests",
+        ])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    let matches = json["matches"].as_array().unwrap();
+    assert!(
+        matches.is_empty(),
+        "high-only filter should drop substring matches: {:?}",
+        matches
+    );
+}

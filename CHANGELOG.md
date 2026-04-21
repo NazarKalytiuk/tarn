@@ -237,6 +237,43 @@
     gracefully with a `yaml_snippet_warning: "source changed since
     run"` instead of blocking the whole command. Exit codes: 0 on
     success, 2 on unknown run id / missing artifacts / parse error.
+  - **`tarn impact` maps changes to test targets (NAZ-410).** New CLI
+    subcommand that answers "what should I run next for this change?"
+    without executing any tests. Accepts four additive input flavors:
+    `--diff` (reads `git diff --name-only HEAD` in the CWD), `--files
+    PATH[,…]`, `--endpoints METHOD:PATH[,…]` (e.g.
+    `GET:/users/:id,POST:/users`), and `--openapi-ops ID[,…]`. At
+    least one source is required (exit 2 otherwise). Matching is a
+    ranked sum of boring per-signal heuristics — URL method+path
+    equality after normalizing query strings, scheme+host, leading
+    `{{ env.* }}`, and concrete UUID / integer / `{id}` / `:id` /
+    `{{ capture.x }}` segments (high, weight 40); path prefix match
+    on the same method (medium, 15); shared `openapi_operation_ids`
+    (high, 38; new optional `Vec<String>` field on `TestFile`
+    persisted via serde `#[serde(default)]`); tag token synthesized
+    from the endpoint path (medium, 12); direct edit to a
+    `.tarn.yaml` (high, 50); shared topic directory segment between
+    a changed source file and a test file (medium, 10, with
+    `src`/`tests`/`lib`/… treated as non-informative); `include:` /
+    multipart fixture reference match via literal substring search in
+    the test's raw YAML (medium, 8); and a last-resort name-token
+    substring hit on test file name / test name / step URL (low, 3).
+    Output is available as `--format human` (grouped by confidence,
+    one line per match, tailed with an advice section) or
+    `--format json` (stable `schema_version: 1` envelope with
+    `inputs`, `matches[]` carrying `file` / `test` / `confidence` /
+    `score` / `reasons[]` / `run_hint.command`, `low_confidence_only`
+    boolean, and `advice[]`). `--min-confidence low|medium|high`
+    filters the result set post-scoring. `--path` narrows test
+    discovery and `--no-default-excludes` disables the standard
+    ignore list; otherwise the same discovery contract as `tarn run`
+    applies. Advice messages call out weak signals explicitly —
+    empty results get "provide `--endpoints` or narrow `--path`",
+    low-only results get "declare `openapi_operation_ids:` to
+    strengthen the signal", and any `--openapi-ops` call on a suite
+    without declarations gets "adopting the field sharpens impact
+    analysis". Exit codes: 0 on success, 2 on missing inputs /
+    invalid `METHOD:PATH` / git or filesystem errors.
 
 ## 0.9.0 — UUID version assertions & generators, basic faker with seeded RNG
 

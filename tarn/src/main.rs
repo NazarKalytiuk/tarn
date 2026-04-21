@@ -789,6 +789,55 @@ enum Commands {
         #[arg(long = "max-chars", default_value_t = tarn::report::pack_context::DEFAULT_MAX_CHARS)]
         max_chars: usize,
     },
+
+    /// Map a change to the Tarn targets it most likely affects (NAZ-410).
+    ///
+    /// Answers "what should I run next?" without executing any tests.
+    /// Accepts four input flavors: `--diff` (reads `git diff --name-only
+    /// HEAD` in the current repo), `--files PATH[,…]`, `--endpoints
+    /// METHOD:PATH[,…]`, and `--openapi-ops ID[,…]`. At least one must
+    /// be provided. Output is ranked by confidence and score; JSON mode
+    /// is stable under `schema_version: 1`.
+    ///
+    /// Exit codes: 0 on success, 2 on missing inputs / I/O / parse /
+    /// git errors.
+    Impact {
+        /// Read changed files from `git diff --name-only HEAD` under CWD.
+        #[arg(long)]
+        diff: bool,
+
+        /// Explicit changed file list (comma-separated).
+        #[arg(long, value_delimiter = ',')]
+        files: Vec<String>,
+
+        /// Endpoints touched by the change, `METHOD:PATH` (repeatable
+        /// / comma-separated). Example: `GET:/users/:id,POST:/users`.
+        #[arg(long, value_delimiter = ',')]
+        endpoints: Vec<String>,
+
+        /// OpenAPI operation ids touched by the change.
+        #[arg(long = "openapi-ops", value_delimiter = ',')]
+        openapi_ops: Vec<String>,
+
+        /// Output format: `human` (default) or `json`.
+        #[arg(long, default_value = "human")]
+        format: String,
+
+        /// Minimum confidence to include in the output: `low` (default),
+        /// `medium`, or `high`. Filtering happens after scoring so the
+        /// reported `matches` array is already filtered.
+        #[arg(long = "min-confidence", default_value = "low")]
+        min_confidence: String,
+
+        /// Restrict test discovery to the given path (file or directory).
+        /// Defaults to the current directory.
+        #[arg(long)]
+        path: Option<String>,
+
+        /// Disable the default excludes (`.git`, `node_modules`, `target`, …).
+        #[arg(long = "no-default-excludes")]
+        no_default_excludes: bool,
+    },
 }
 
 fn main() {
@@ -1082,6 +1131,25 @@ fn main() {
             format,
             max_chars,
         } => pack_context_command(failed, run.as_deref(), &file, &test, &format, max_chars),
+        Commands::Impact {
+            diff,
+            files,
+            endpoints,
+            openapi_ops,
+            format,
+            min_confidence,
+            path,
+            no_default_excludes,
+        } => impact_command(
+            diff,
+            &files,
+            &endpoints,
+            &openapi_ops,
+            &format,
+            &min_confidence,
+            path.as_deref(),
+            no_default_excludes,
+        ),
     };
 
     process::exit(exit_code);
@@ -2406,6 +2474,203 @@ fn pack_context_command(
     print!("{}", output);
 
     0
+}
+
+/// `tarn impact` — map a change to the Tarn targets it most likely affects.
+///
+/// Pure triage: no HTTP, no test execution. Inputs come from four
+/// mutually additive sources (`--diff`, `--files`, `--endpoints`,
+/// `--openapi-ops`); at least one must be provided. Test discovery
+/// follows the same `--path` / `--no-default-excludes` contract as
+/// `tarn run` / `tarn validate` so the surface feels uniform.
+///
+/// Exit codes: 0 on success, 2 on missing inputs / I/O / parse / git
+/// errors.
+#[allow(clippy::too_many_arguments)]
+fn impact_command(
+    diff: bool,
+    files: &[String],
+    endpoints: &[String],
+    openapi_ops: &[String],
+    format: &str,
+    min_confidence: &str,
+    path: Option<&str>,
+    no_default_excludes: bool,
+) -> i32 {
+    let format = match format.to_ascii_lowercase().as_str() {
+        "human" => "human",
+        "json" => "json",
+        other => {
+            eprintln!(
+                "Error: unknown impact format '{}'. Use 'human' or 'json'.",
+                other
+            );
+            return 2;
+        }
+    };
+
+    let min_confidence = match tarn::impact::Confidence::parse(min_confidence) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            return 2;
+        }
+    };
+
+    // Parse --endpoints before the "no inputs" check so syntax errors are
+    // reported even when the user also passed --diff with no matches.
+    let mut parsed_endpoints: Vec<tarn::impact::EndpointChange> = Vec::new();
+    for spec in endpoints {
+        match tarn::impact::parse_endpoint(spec) {
+            Ok(e) => parsed_endpoints.push(e),
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                return 2;
+            }
+        }
+    }
+
+    // Read git diff when requested. We keep diff and explicit --files
+    // distinct in the report so callers can tell the source apart.
+    let diff_files: Vec<String> = if diff {
+        match read_git_diff_files() {
+            Ok(list) => list,
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                return 2;
+            }
+        }
+    } else {
+        Vec::new()
+    };
+
+    if !diff && files.is_empty() && parsed_endpoints.is_empty() && openapi_ops.is_empty() {
+        eprintln!(
+            "Error: tarn impact needs at least one of --diff, --files, --endpoints, or --openapi-ops."
+        );
+        return 2;
+    }
+
+    // Discover test files.
+    let discovery = match resolve_files_with_report(path.map(String::from), no_default_excludes) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            return e.exit_code();
+        }
+    };
+
+    // Load and parse every discovered file, keeping the raw source for
+    // include / fixture string scanning.
+    let mut parsed_files: Vec<(String, tarn::model::TestFile, String)> =
+        Vec::with_capacity(discovery.files.len());
+    for file in &discovery.files {
+        let source = match std::fs::read_to_string(file) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("Error: failed to read {}: {}", file, e);
+                return 2;
+            }
+        };
+        let parsed = match parser::parse_str(&source, Path::new(file)) {
+            Ok(tf) => tf,
+            Err(e) => {
+                eprintln!("Error: failed to parse {}: {}", file, e);
+                return 2;
+            }
+        };
+        parsed_files.push((file.clone(), parsed, source));
+    }
+
+    let tests: Vec<tarn::impact::LoadedTest<'_>> = parsed_files
+        .iter()
+        .map(|(path, parsed, source)| tarn::impact::LoadedTest {
+            path: path.clone(),
+            parsed,
+            source: source.as_str(),
+        })
+        .collect();
+
+    let change = tarn::impact::ChangeSet {
+        diff_files,
+        files: files.to_vec(),
+        endpoints: parsed_endpoints,
+        openapi_ops: openapi_ops.to_vec(),
+    };
+    let report = tarn::impact::analyze(&change, &tests);
+    let report = tarn::impact::filter_by_confidence(report, min_confidence);
+
+    let output = match format {
+        "json" => tarn::impact::render_json(&report),
+        _ => {
+            let use_color = std::io::IsTerminal::is_terminal(&std::io::stdout());
+            tarn::impact::render_human(&report, use_color)
+        }
+    };
+    print!("{}", output);
+    if format == "json" {
+        println!();
+    }
+
+    0
+}
+
+/// Read changed file paths from `git diff --name-only HEAD` under the
+/// current working directory. Captures both staged and unstaged changes
+/// (that's the default behavior of this form). Falls back to `git
+/// diff-index --name-only HEAD` under the covers via a second try when
+/// the first fails because no commits exist yet (a fresh repo with only
+/// staged files). Errors out with a clear message when the CWD is not a
+/// git repository at all.
+fn read_git_diff_files() -> Result<Vec<String>, String> {
+    use std::process::Command as StdCommand;
+
+    let first = StdCommand::new("git")
+        .args(["diff", "--name-only", "HEAD"])
+        .output();
+    let output = match first {
+        Ok(o) if o.status.success() => o,
+        Ok(o) => {
+            // `git diff --name-only HEAD` fails on a brand-new repo with
+            // no commits yet; retry without the HEAD ref to capture the
+            // index state, which matches what a caller would reasonably
+            // expect from `--diff`.
+            let stderr = String::from_utf8_lossy(&o.stderr).to_string();
+            if stderr.contains("unknown revision")
+                || stderr.contains("bad revision")
+                || stderr.contains("does not have any commits yet")
+            {
+                StdCommand::new("git")
+                    .args(["diff", "--name-only"])
+                    .output()
+                    .map_err(|e| format!("failed to run git diff: {e}"))?
+            } else {
+                return Err(format!(
+                    "git diff failed (exit {}): {}",
+                    o.status.code().unwrap_or(-1),
+                    stderr.trim()
+                ));
+            }
+        }
+        Err(e) => {
+            return Err(format!(
+                "failed to run git (is git installed and CWD a repo?): {e}"
+            ));
+        }
+    };
+    if !output.status.success() {
+        return Err(format!(
+            "git diff failed (exit {}): {}",
+            output.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    Ok(text
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect())
 }
 
 /// `tarn rerun --failed [--run <id>]` — resolve the failing subset of a
@@ -4930,6 +5195,7 @@ steps:
             name: "test".into(),
             description: None,
             tags: vec![],
+            openapi_operation_ids: None,
             env: Default::default(),
             redaction: None,
             defaults: Some(Defaults {
@@ -4986,6 +5252,7 @@ steps:
             name: "test".into(),
             description: None,
             tags: vec![],
+            openapi_operation_ids: None,
             env: Default::default(),
             redaction: None,
             defaults: Some(Defaults {

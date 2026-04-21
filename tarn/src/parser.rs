@@ -10,6 +10,7 @@ const TOP_LEVEL_FIELDS: &[(&str, &str)] = &[
     ("name", "name"),
     ("description", "description"),
     ("tags", "tags"),
+    ("openapi_operation_ids", "openapi_operation_ids"),
     ("env", "env"),
     ("redaction", "redaction"),
     ("redact", "redaction"),

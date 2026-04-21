@@ -12,6 +12,7 @@ pub mod fixtures;
 pub mod format;
 pub mod http;
 pub mod hurl_import;
+pub mod impact;
 pub mod interpolation;
 pub mod jsonpath;
 pub mod lint;

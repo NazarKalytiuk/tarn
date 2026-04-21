@@ -150,6 +150,12 @@ pub struct TestFile {
     #[serde(default)]
     pub tags: Vec<String>,
 
+    /// Optional OpenAPI operation ids this file exercises. Consumed by
+    /// `tarn impact` to map changed operations to tests; absent by default
+    /// so adopting the field is additive and never required.
+    #[serde(default)]
+    pub openapi_operation_ids: Option<Vec<String>>,
+
     /// Inline environment variables with defaults
     #[serde(default)]
     pub env: HashMap<String, String>,
