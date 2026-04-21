@@ -2497,6 +2497,7 @@ dependencies = [
 name = "tarn-mcp"
 version = "0.9.0"
 dependencies = [
+ "chrono",
  "serde",
  "serde_json",
  "tarn",

@@ -4,6 +4,30 @@
 
 ### Runner + CLI (tarn)
 
+- **MCP parity with the CLI plus artifact-oriented APIs (NAZ-407, affects
+  `tarn-mcp`).** The MCP server now writes every run's artifacts under
+  `.tarn/runs/<run_id>/` — `report.json`, `summary.json`, `failures.json`,
+  `state.json`, `events.jsonl` plus the `.tarn/` pointer files — through
+  the same library helpers the CLI uses (`report::state_writer`,
+  `report::summary`, `report::agent_report`, etc.) so an MCP-driven run
+  is byte-identical to a CLI-driven one for the same inputs. `tarn_run`
+  gained a `report_mode` enum (`full`/`summary`/`failures`/`agent`,
+  default `agent`) that selects which slice of the run is returned
+  inline; every response carries `{run_id, exit_code, report, artifacts}`
+  so agents can open the heavy payloads back from disk instead of
+  keeping them in context. Five new tools surface the prior work on the
+  agent loop: `tarn_last_failures` (grouped failures JSON per NAZ-402),
+  `tarn_get_run_artifacts` (paths + existence flags, no payload load),
+  `tarn_rerun_failed` (wraps NAZ-403's `RerunSelection` and mints a
+  fresh run id/archive), `tarn_report` (concise NAZ-404 view from disk),
+  and `tarn_inspect` (NAZ-405 run/file/test/step views). Every handler
+  now returns a structured `ToolError { code, message, data }` instead
+  of a plain string — error codes live in the reserved `-32050..-32099`
+  JSON-RPC server block and are surfaced both as an `isError: true`
+  `tools/call` content block and as an embedded `error` object on the
+  response envelope. The library helper `tarn::report::compute_exit_code`
+  was promoted out of `main.rs` so the CLI and MCP agree on exit-code
+  precedence without drift.
 - **Immutable per-run artifact directories (NAZ-400).** Every `tarn run`
   now writes its JSON report and `state.json` into
   `.tarn/runs/<run_id>/`, where `<run_id>` is a stable identifier of

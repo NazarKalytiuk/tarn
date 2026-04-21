@@ -3,7 +3,7 @@ use clap_complete::{generate, Shell};
 use std::path::{Path, PathBuf};
 use std::process;
 
-use tarn::assert::types::{FailureCategory, RunResult, StepResult, TestResult};
+use tarn::assert::types::RunResult;
 use tarn::bench;
 use tarn::config::{self, TarnConfig};
 use tarn::cookie;
@@ -5053,49 +5053,12 @@ fn default_named_env_path(env_file: &str, name: &str) -> String {
     }
 }
 
+// Thin CLI wrapper around the shared `tarn::report::compute_exit_code`
+// helper so the MCP server and the CLI bin always agree on the exit
+// code category precedence. The original in-binary implementation was
+// promoted to the library in NAZ-407 to fulfil that parity requirement.
 fn run_result_exit_code(run_result: &RunResult) -> i32 {
-    let mut exit_code = if run_result.passed() { 0 } else { 1 };
-
-    for step in all_steps(run_result) {
-        match step.error_category {
-            Some(FailureCategory::ConnectionError)
-            | Some(FailureCategory::Timeout)
-            | Some(FailureCategory::CaptureError) => return 3,
-            Some(FailureCategory::ParseError) | Some(FailureCategory::UnresolvedTemplate) => {
-                exit_code = exit_code.max(2)
-            }
-            // Cascade fallout and fail-fast skips never bump the exit
-            // code above 1 — the root-cause step already set the
-            // correct category (usually CaptureError → 3). Treating
-            // a skip as a fresh runtime error would double-count the
-            // same failure. `SkippedByCondition` is a passing skip
-            // (inline `if:` / `unless:`), so it is also a no-op here.
-            Some(FailureCategory::SkippedDueToFailedCapture)
-            | Some(FailureCategory::SkippedDueToFailFast)
-            | Some(FailureCategory::SkippedByCondition)
-            | Some(FailureCategory::AssertionFailed)
-            // Shape drift is still a test-level assertion miss for exit
-            // code purposes — a test contract change shouldn't look like
-            // a runtime error to CI.
-            | Some(FailureCategory::ResponseShapeMismatch)
-            | None => {}
-        }
-    }
-
-    exit_code
-}
-
-fn all_steps(run_result: &RunResult) -> impl Iterator<Item = &StepResult> {
-    run_result.file_results.iter().flat_map(|file| {
-        file.setup_results
-            .iter()
-            .chain(file.test_results.iter().flat_map(steps_from_test))
-            .chain(file.teardown_results.iter())
-    })
-}
-
-fn steps_from_test(test: &TestResult) -> impl Iterator<Item = &StepResult> {
-    test.step_results.iter()
+    tarn::report::compute_exit_code(run_result)
 }
 
 fn update_command(check_only: bool) -> i32 {
@@ -5226,7 +5189,9 @@ parallel: false
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tarn::assert::types::{AssertionResult, FileResult};
+    use tarn::assert::types::{
+        AssertionResult, FailureCategory, FileResult, StepResult, TestResult,
+    };
     use tempfile::TempDir;
 
     fn with_current_dir<F>(path: &Path, f: F)

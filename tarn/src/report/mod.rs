@@ -24,9 +24,60 @@ pub mod state_writer;
 pub mod summary;
 pub mod tap;
 
-use crate::assert::types::RunResult;
+use crate::assert::types::{FailureCategory, RunResult, StepResult, TestResult};
 use std::path::PathBuf;
 use std::str::FromStr;
+
+/// Derive the process exit code the CLI (and MCP) should return for a
+/// finished run. Extracted from `main.rs` so both the CLI binary and
+/// the MCP server agree on exit-code semantics — an agent reading the
+/// MCP `tarn_run` response must see the same code the CLI would print.
+///
+/// Category precedence mirrors the documented exit codes:
+/// - 3: runtime errors (connection, timeout, capture failure)
+/// - 2: parse / unresolved template errors
+/// - 1: at least one step failed otherwise
+/// - 0: all green
+pub fn compute_exit_code(run_result: &RunResult) -> i32 {
+    let mut exit_code = if run_result.passed() { 0 } else { 1 };
+
+    for step in all_steps(run_result) {
+        match step.error_category {
+            Some(FailureCategory::ConnectionError)
+            | Some(FailureCategory::Timeout)
+            | Some(FailureCategory::CaptureError) => return 3,
+            Some(FailureCategory::ParseError) | Some(FailureCategory::UnresolvedTemplate) => {
+                exit_code = exit_code.max(2)
+            }
+            // Cascade fallout and fail-fast skips never bump the exit
+            // code above 1 — the root-cause step already set the
+            // correct category (usually CaptureError → 3). Treating
+            // a skip as a fresh runtime error would double-count the
+            // same failure.
+            Some(FailureCategory::SkippedDueToFailedCapture)
+            | Some(FailureCategory::SkippedDueToFailFast)
+            | Some(FailureCategory::SkippedByCondition)
+            | Some(FailureCategory::AssertionFailed)
+            | Some(FailureCategory::ResponseShapeMismatch)
+            | None => {}
+        }
+    }
+
+    exit_code
+}
+
+fn all_steps(run_result: &RunResult) -> impl Iterator<Item = &StepResult> {
+    run_result.file_results.iter().flat_map(|file| {
+        file.setup_results
+            .iter()
+            .chain(file.test_results.iter().flat_map(steps_from_test))
+            .chain(file.teardown_results.iter())
+    })
+}
+
+fn steps_from_test(test: &TestResult) -> impl Iterator<Item = &StepResult> {
+    test.step_results.iter()
+}
 
 /// Options that tweak how test results are rendered.
 #[derive(Debug, Clone, Copy, Default)]

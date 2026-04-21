@@ -23,6 +23,9 @@ path = "src/main.rs"
 tarn = { version = "0.9.0", path = "../tarn" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# `chrono` is re-used for run_id generation + run artifact timestamps.
+# Matches the version tarn itself pins so there is no version skew.
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 
 [dev-dependencies]
 tempfile = "3"

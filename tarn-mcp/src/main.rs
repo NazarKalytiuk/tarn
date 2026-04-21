@@ -1,7 +1,7 @@
 use serde_json::Value;
 use std::io::{self, BufRead, Write};
 use tarn_mcp::protocol::{self, JsonRpcRequest, JsonRpcResponse};
-use tarn_mcp::tools;
+use tarn_mcp::tools::{self, ToolError};
 
 fn main() {
     let stdin = io::stdin();
@@ -14,7 +14,6 @@ fn main() {
             Err(_) => break,
         };
 
-        // Skip empty lines
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
@@ -31,7 +30,6 @@ fn main() {
 
         let response = dispatch(&request);
 
-        // Notifications (no id) don't get a response
         if request.id.is_none() {
             continue;
         }
@@ -49,20 +47,11 @@ fn write_response(out: &mut impl Write, response: &JsonRpcResponse) {
 fn dispatch(req: &JsonRpcRequest) -> JsonRpcResponse {
     match req.method.as_str() {
         "initialize" => {
-            // NAZ-248: capture the MCP client's workspace root from the
-            // `initialize` params so subsequent tool calls can default
-            // their `cwd` without the caller having to restate it. The
-            // function is a best-effort extractor — clients that omit
-            // `rootUri`/`workspaceFolders` simply fall through to the
-            // process cwd inside `tools::resolve_cwd`.
             protocol::capture_workspace_root(&req.params);
             JsonRpcResponse::success(req.id.clone(), protocol::server_info())
         }
 
-        "notifications/initialized" => {
-            // No response needed for notifications
-            JsonRpcResponse::success(req.id.clone(), Value::Null)
-        }
+        "notifications/initialized" => JsonRpcResponse::success(req.id.clone(), Value::Null),
 
         "tools/list" => JsonRpcResponse::success(req.id.clone(), protocol::tools_list()),
 
@@ -94,12 +83,19 @@ fn handle_tool_call(req: &JsonRpcRequest) -> JsonRpcResponse {
         "tarn_validate" => tools::tarn_validate(&arguments),
         "tarn_list" => tools::tarn_list(&arguments),
         "tarn_fix_plan" => tools::tarn_fix_plan(&arguments),
-        _ => Err(format!("Unknown tool: {}", tool_name)),
+        "tarn_last_failures" => tools::tarn_last_failures(&arguments),
+        "tarn_get_run_artifacts" => tools::tarn_get_run_artifacts(&arguments),
+        "tarn_rerun_failed" => tools::tarn_rerun_failed(&arguments),
+        "tarn_report" => tools::tarn_report(&arguments),
+        "tarn_inspect" => tools::tarn_inspect(&arguments),
+        _ => Err(ToolError::new(
+            -32601,
+            format!("Unknown tool: {}", tool_name),
+        )),
     };
 
     match result {
         Ok(value) => {
-            // MCP tool results are wrapped in content array
             let content = serde_json::json!({
                 "content": [{
                     "type": "text",
@@ -108,13 +104,19 @@ fn handle_tool_call(req: &JsonRpcRequest) -> JsonRpcResponse {
             });
             JsonRpcResponse::success(req.id.clone(), content)
         }
-        Err(e) => {
+        Err(err) => {
+            // Surface the structured error in two compatible ways:
+            //   - `isError: true` content block (MCP `tools/call` convention)
+            //   - the same `{code, message, data}` object embedded in the
+            //     `text` so agents that parse the block can read it.
+            let payload = err.to_tool_call_json();
             let content = serde_json::json!({
                 "content": [{
                     "type": "text",
-                    "text": e
+                    "text": serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload.to_string())
                 }],
-                "isError": true
+                "isError": true,
+                "error": payload
             });
             JsonRpcResponse::success(req.id.clone(), content)
         }

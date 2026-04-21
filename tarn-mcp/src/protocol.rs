@@ -56,6 +56,27 @@ impl JsonRpcResponse {
             }),
         }
     }
+
+    /// Build a JSON-RPC error response whose `data` carries a structured
+    /// payload. Agents consume `{code, message, data}` verbatim instead
+    /// of parsing free-form error text, which is the NAZ-407 contract.
+    pub fn error_with_data(
+        id: Option<Value>,
+        code: i32,
+        message: impl Into<String>,
+        data: Value,
+    ) -> Self {
+        Self {
+            jsonrpc: "2.0".into(),
+            id,
+            result: None,
+            error: Some(JsonRpcError {
+                code,
+                message: message.into(),
+                data: Some(data),
+            }),
+        }
+    }
 }
 
 /// Workspace root captured from the MCP `initialize` handshake.
@@ -181,7 +202,7 @@ pub fn tools_list() -> Value {
         "tools": [
             {
                 "name": "tarn_run",
-                "description": "Run API tests defined in .tarn.yaml files and return structured JSON results. Use this to execute API tests and get detailed pass/fail information with assertion details.",
+                "description": "Run API tests defined in .tarn.yaml files. Writes artifacts under .tarn/runs/<run_id>/ and returns a compact agent report by default plus paths to the full artifacts so agents do not need to keep large JSON blobs in context.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -205,6 +226,11 @@ pub fn tools_list() -> Value {
                         "tag": {
                             "type": "string",
                             "description": "Filter tests by tag (comma-separated)"
+                        },
+                        "report_mode": {
+                            "type": "string",
+                            "enum": ["full", "summary", "failures", "agent"],
+                            "description": "Which slice of the run to return inline. `agent` (default) is the compact root-cause-first payload; `summary` and `failures` return the NAZ-401 artifacts; `full` returns the verbose JSON report. The run still writes every artifact regardless of the chosen mode."
                         }
                     }
                 }
@@ -279,6 +305,113 @@ pub fn tools_list() -> Value {
                             "type": "integer",
                             "minimum": 1,
                             "description": "Limit the number of failing steps included in the plan"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "tarn_last_failures",
+                "description": "Return the grouped failures (NAZ-402) for a specific run as structured JSON. Reads the persisted `failures.json` rather than re-running the tests. Useful for agents that want a failures-only view without loading the full report.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "cwd": {
+                            "type": "string",
+                            "description": "Absolute path to the project root. Defaults to the workspace root captured during MCP `initialize`, or the server process's current directory."
+                        },
+                        "run_id": {
+                            "type": "string",
+                            "description": "Run identifier or alias (`last`, `prev`, `@latest`, or a literal `YYYYmmdd-HHMMSS-xxxxxx` id). Defaults to `last`."
+                        }
+                    }
+                }
+            },
+            {
+                "name": "tarn_get_run_artifacts",
+                "description": "Return artifact paths plus existence flags for a specific run. Does not load any artifact payload — just tells the agent what is on disk for the given run.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "cwd": {
+                            "type": "string",
+                            "description": "Absolute path to the project root. Defaults to the workspace root captured during MCP `initialize`, or the server process's current directory."
+                        },
+                        "run_id": {
+                            "type": "string",
+                            "description": "Run identifier or alias. Defaults to `last`."
+                        }
+                    }
+                }
+            },
+            {
+                "name": "tarn_rerun_failed",
+                "description": "Rerun only the failing `(file, test)` pairs from a prior run. Response shape matches `tarn_run` (run_id, artifacts, report) so agents can loop run → inspect → rerun without switching tool surfaces.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "cwd": {
+                            "type": "string",
+                            "description": "Absolute path to the project root. Defaults to the workspace root captured during MCP `initialize`, or the server process's current directory."
+                        },
+                        "run_id": {
+                            "type": "string",
+                            "description": "Source run identifier or alias to seed the selection from. Defaults to `last` (the workspace-level `.tarn/failures.json` pointer)."
+                        },
+                        "env_name": {
+                            "type": "string",
+                            "description": "Environment name to resolve for the rerun (loads tarn.env.{name}.yaml)."
+                        },
+                        "vars": {
+                            "type": "object",
+                            "description": "Variable overrides as key-value pairs.",
+                            "additionalProperties": { "type": "string" }
+                        },
+                        "report_mode": {
+                            "type": "string",
+                            "enum": ["full", "summary", "failures", "agent"],
+                            "description": "Which slice of the rerun's report to return inline. Defaults to `agent`."
+                        }
+                    }
+                }
+            },
+            {
+                "name": "tarn_report",
+                "description": "Render the concise report (NAZ-404) for a persisted run: a tiny JSON envelope with totals, exit code, and grouped failures. No HTTP, no test execution — purely reads `summary.json` + `failures.json`.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "cwd": {
+                            "type": "string",
+                            "description": "Absolute path to the project root. Defaults to the workspace root captured during MCP `initialize`, or the server process's current directory."
+                        },
+                        "run_id": {
+                            "type": "string",
+                            "description": "Run identifier or alias. Defaults to `last`."
+                        }
+                    }
+                }
+            },
+            {
+                "name": "tarn_inspect",
+                "description": "Inspect a prior run's archived report (NAZ-405) at run, file, test, or step granularity. Optional `filter_category` narrows the view to one FailureCategory. Response includes artifact paths for the run that seeded the view.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "cwd": {
+                            "type": "string",
+                            "description": "Absolute path to the project root. Defaults to the workspace root captured during MCP `initialize`, or the server process's current directory."
+                        },
+                        "run_id": {
+                            "type": "string",
+                            "description": "Run identifier or alias (`last`, `prev`, etc.). Defaults to `last`."
+                        },
+                        "target": {
+                            "type": "string",
+                            "description": "Address of the entity to inspect: `FILE`, `FILE::TEST`, or `FILE::TEST::STEP`. Omit for the run-level view."
+                        },
+                        "filter_category": {
+                            "type": "string",
+                            "description": "Narrow the run-level view to steps whose `failure_category` matches this value."
                         }
                     }
                 }
