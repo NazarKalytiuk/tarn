@@ -186,6 +186,28 @@
     that hit it, and cascade fallout of drift still points its
     `root_cause` back at the drift step so agents can trace blocked
     skips to the real cause.
+  - **Agent-oriented compact run payload `tarn run --agent` (NAZ-412).**
+    New flag on `tarn run` that emits a single `AgentReport` JSON
+    object on stdout — run id, pass/fail status, exit code, totals,
+    root-cause-first failure groups (reusing the NAZ-402 fingerprinter
+    so `tarn failures` and the agent payload agree), per-cause
+    request/response excerpts capped at 300 chars, the full NAZ-415
+    `response_shape_mismatch` hint, a `cascaded_steps` list that
+    folds downstream `skipped_due_to_failed_capture` noise under its
+    upstream root cause, and up to three machine-dispatchable
+    `next_actions` per cause (`replace_jsonpath` first when a
+    high-confidence drift candidate exists, always an `inspect_step`
+    command, plus `rerun_failed` when there are ≥2 causes and
+    `check_server_reachable` for network failures). Root causes are
+    capped at 10 with a `notes` entry pointing to `tarn failures`
+    for the full list. Stdout is the AgentReport only; normal
+    stdout-bound formatters are suppressed, progress is silenced, and
+    stderr still prints `run id:` and `run artifacts:` so humans
+    watching the run see progress. File-bound `--format` targets
+    compose; `--agent` refuses combination with `--ndjson`, `--watch`,
+    or another stdout-bound non-JSON format with exit code 2.
+    Payload is `schema_version: 1` so MCP / agent clients can depend
+    on the envelope.
 
 ## 0.9.0 — UUID version assertions & generators, basic faker with seeded RNG
 

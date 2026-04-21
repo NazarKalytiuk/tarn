@@ -7300,3 +7300,176 @@ tests:
         "capture_failure.missing must list the unresolved name: {missing:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// NAZ-412: `tarn run --agent` compact root-cause payload
+// ---------------------------------------------------------------------------
+
+/// A failing multi-test suite under `--agent` must emit exactly one
+/// JSON object on stdout, and it must parse as `AgentReport` with the
+/// documented schema_version and the NAZ-400 stderr announcements
+/// still in place.
+#[test]
+fn agent_mode_prints_single_agent_report_json_to_stdout_on_failing_suite() {
+    let server = DemoServer::start();
+    let dir = TempDir::new().unwrap();
+    let (_a, b) = write_events_suite(&dir, &server.base_url());
+    // `events-b.tarn.yaml` expects status 500; `/health` returns 200,
+    // so it fails deterministically.
+    let _ = b;
+    let suite_dir = dir.path().display().to_string();
+    let output = tarn()
+        .args(["run", &suite_dir, "--agent"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    // stdout is exactly one AgentReport object.
+    let trimmed = stdout.trim();
+    let report: serde_json::Value = serde_json::from_str(trimmed).unwrap_or_else(|e| {
+        panic!("agent stdout must be a single JSON object: {e}\n---\n{stdout}")
+    });
+    assert_eq!(report["schema_version"], 1);
+    assert_eq!(report["status"], "failed");
+    assert!(!report["root_causes"].as_array().unwrap().is_empty());
+
+    // stderr still carries the NAZ-400 announcements so humans
+    // watching the run see progress.
+    assert!(
+        stderr.contains("run id:"),
+        "expected NAZ-400 `run id:` on stderr, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("run artifacts:"),
+        "expected NAZ-400 `run artifacts:` on stderr, got: {stderr}"
+    );
+}
+
+/// Passing suite must yield `status: "passed"` and zero root causes.
+#[test]
+fn agent_mode_on_passing_suite_reports_passed_and_no_root_causes() {
+    let server = DemoServer::start();
+    let dir = TempDir::new().unwrap();
+    let test_file = write_passing_fixture(&dir, "agent-pass.tarn.yaml", &server.base_url());
+
+    let output = tarn()
+        .args(["run", &test_file, "--agent"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let report: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(report["status"], "passed");
+    assert_eq!(report["exit_code"], 0);
+    assert!(report["root_causes"].as_array().unwrap().is_empty());
+    // Artifact paths must be populated and point at real files.
+    let artifacts = &report["artifacts"];
+    let report_path = artifacts["report"].as_str().unwrap();
+    assert!(
+        std::path::Path::new(report_path).is_file(),
+        "artifacts.report must point at a real file: {report_path}"
+    );
+}
+
+/// `--agent` + `--ndjson` must be refused with exit 2 so the user
+/// cannot accidentally interleave two stdout contracts.
+#[test]
+fn agent_mode_conflicts_with_ndjson() {
+    let server = DemoServer::start();
+    let dir = TempDir::new().unwrap();
+    let test_file = write_passing_fixture(&dir, "agent-ndjson.tarn.yaml", &server.base_url());
+
+    let output = tarn()
+        .args(["run", &test_file, "--agent", "--ndjson"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        stderr.contains("--agent") && stderr.contains("--ndjson"),
+        "error must name both flags, got: {stderr}"
+    );
+}
+
+/// File-bound `--format` targets (e.g. `junit=out.xml`) are compatible
+/// with `--agent`: the xml still lands on disk and stdout still gets
+/// just the AgentReport.
+#[test]
+fn agent_mode_composes_with_file_bound_format_targets() {
+    let server = DemoServer::start();
+    let dir = TempDir::new().unwrap();
+    let test_file = write_passing_fixture(&dir, "agent-compose.tarn.yaml", &server.base_url());
+    let junit_out = dir.path().join("out.xml");
+    let junit_arg = format!("junit={}", junit_out.display());
+
+    let output = tarn()
+        .args(["run", &test_file, "--agent", "--format", &junit_arg])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+
+    // stdout stays a single AgentReport JSON object.
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let report: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(report["schema_version"], 1);
+
+    // The junit target still wrote its file.
+    assert!(
+        junit_out.is_file(),
+        "junit file must be written alongside the agent payload"
+    );
+}
+
+/// A shape-drift failure surfaces `replace_jsonpath` as the first
+/// next action, carrying the high-confidence candidate path verbatim
+/// so an agent can dispatch the fix without parsing the message.
+#[test]
+fn agent_mode_surfaces_replace_jsonpath_action_for_shape_drift() {
+    let server =
+        FixedBodyServer::start(r#"{"request": {"uuid": "abc-123"}, "stageStatus": "pending"}"#);
+    let dir = TempDir::new().unwrap();
+    let test_file = write_test_file(
+        &dir,
+        "agent-drift.tarn.yaml",
+        &format!(
+            r#"
+name: Agent drift
+tests:
+  create:
+    steps:
+      - name: create_stage
+        request:
+          method: POST
+          url: "{base}/stages"
+        capture:
+          stage_id: "$.uuid"
+"#,
+            base = server.base_url()
+        ),
+    );
+
+    let output = tarn()
+        .args(["run", &test_file, "--agent"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let report: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    let rcs = report["root_causes"].as_array().unwrap();
+    assert_eq!(rcs.len(), 1);
+    let rc = &rcs[0];
+    assert_eq!(rc["category"], "response_shape_mismatch");
+    let first_action = &rc["next_actions"][0];
+    assert_eq!(first_action["kind"], "replace_jsonpath");
+    assert_eq!(first_action["suggestion"], "$.request.uuid");
+    assert_eq!(first_action["confidence"], "high");
+}

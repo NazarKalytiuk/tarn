@@ -216,6 +216,17 @@ enum Commands {
         /// deeper history — helpful for debugging flaky steps.
         #[arg(long = "fixture-retention", value_name = "N", default_value_t = tarn::fixtures::DEFAULT_RETENTION)]
         fixture_retention: usize,
+
+        /// Emit a compact root-cause-first JSON payload (`AgentReport`)
+        /// to stdout for automation / MCP clients, suppressing the
+        /// normal stdout formatter. Composes with other `--format`
+        /// targets that write to files; mutually exclusive with
+        /// `--ndjson`, `--watch`, and any explicit `--format` target
+        /// that writes a non-JSON payload to stdout. Stderr still
+        /// carries the usual `run id:` / `run artifacts:` announcements
+        /// so humans watching the run see progress (NAZ-412).
+        #[arg(long = "agent")]
+        agent: bool,
     },
 
     /// Validate test files without running
@@ -766,6 +777,7 @@ fn main() {
             no_last_run_json,
             no_fixtures,
             fixture_retention,
+            agent,
         } => run_command(
             path,
             &format,
@@ -805,6 +817,7 @@ fn main() {
             no_fixtures,
             fixture_retention,
             None,
+            agent,
         ),
         Commands::Bench {
             path,
@@ -1043,6 +1056,7 @@ fn run_command(
     no_fixtures: bool,
     fixture_retention: usize,
     rerun_selection: Option<tarn::report::rerun::RerunSelection>,
+    agent: bool,
 ) -> i32 {
     let project =
         match load_project_context(path.as_deref().map(Path::new).unwrap_or(Path::new("."))) {
@@ -1089,7 +1103,11 @@ fn run_command(
     // owns stdout outright, so we skip the auto-selection in that case
     // to avoid a TTY-default `llm` target colliding with the stream.
     let effective_format_specs: Vec<String> = if format_specs.is_empty() {
-        if ndjson {
+        if ndjson || agent {
+            // `--agent` owns stdout with the AgentReport JSON payload;
+            // any default format target would be suppressed anyway, so
+            // skip creating it outright. Mirrors how `--ndjson` leaves
+            // the stdout target list empty.
             Vec::new()
         } else {
             let default_format = if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
@@ -1179,8 +1197,9 @@ fn run_command(
     // Only print the human-mode discovery summary when a human-mode
     // stdout target actually exists: if every output target is a
     // structured file (json=run.json, junit=out.xml, etc.) the summary
-    // would be stray noise, and NDJSON requires a clean stream.
+    // would be stray noise, and NDJSON / --agent require a clean stream.
     let emits_human_stdout = !ndjson
+        && !agent
         && output_targets
             .iter()
             .any(|t| matches!(t.format, OutputFormat::Human) && t.path.is_none());
@@ -1242,6 +1261,35 @@ fn run_command(
         if conflicting_stdout_format {
             eprintln!(
                 "Error: --ndjson writes to stdout and conflicts with another --format target that also writes to stdout. Route the other format to a file (e.g. --format json=run.json)."
+            );
+            return 2;
+        }
+    }
+
+    // --agent owns stdout: the final payload is one AgentReport JSON
+    // object. Anything else on stdout (NDJSON stream, watch loop,
+    // another structured format target) would corrupt what the agent
+    // reads. File-bound targets (`--format json=out.json`, junit=...)
+    // still compose because they never touch stdout.
+    if agent {
+        if ndjson {
+            eprintln!(
+                "Error: --agent and --ndjson both own stdout. Drop one (agent mode already writes a compact JSON payload)."
+            );
+            return 2;
+        }
+        if watch {
+            eprintln!(
+                "Error: --agent is mutually exclusive with --watch. Agent mode emits a single payload per invocation; loop externally if you need repeated runs."
+            );
+            return 2;
+        }
+        let conflicting_stdout_format = output_targets.iter().any(|t| {
+            t.writes_to_stdout() && t.path.is_none() && !matches!(t.format, OutputFormat::Human)
+        });
+        if conflicting_stdout_format {
+            eprintln!(
+                "Error: --agent writes the AgentReport to stdout and conflicts with another --format target that also writes to stdout. Route the other format to a file (e.g. --format json=run.json)."
             );
             return 2;
         }
@@ -1343,6 +1391,7 @@ fn run_command(
             jobs,
             extra_redact_headers,
             &state_ctx,
+            agent,
         );
         let end_time = chrono::Utc::now();
 
@@ -1490,6 +1539,7 @@ fn execute_run(
     jobs: Option<usize>,
     extra_redact_headers: &[String],
     state_context: &StateContext,
+    agent: bool,
 ) -> i32 {
     let started_at = chrono::Utc::now();
     let start = std::time::Instant::now();
@@ -1498,7 +1548,14 @@ fn execute_run(
         matches!(t.format, OutputFormat::Human) && t.writes_to_stdout() && t.path.is_none()
     });
 
-    let progress: Option<Box<dyn ProgressReporter + Send + Sync>> = if ndjson {
+    // In --agent mode stdout is reserved for the final AgentReport
+    // payload. Forcing `no_progress` behavior (no streaming reporter,
+    // no human summary on stdout) keeps the output a single JSON
+    // object, same contract as `--no-progress` with a structured
+    // --format target.
+    let progress: Option<Box<dyn ProgressReporter + Send + Sync>> = if agent {
+        None
+    } else if ndjson {
         let mode = if parallel {
             ProgressMode::Parallel
         } else {
@@ -1596,9 +1653,12 @@ fn execute_run(
         p.run_finished(&run_result);
     }
 
-    // Suppress batch outputs to stdout when --ndjson owns stdout. The final
-    // JSON report is still emitted to any file-bound --format target.
-    let suppress_stdout_outputs = ndjson;
+    // Suppress batch outputs to stdout when --ndjson or --agent owns
+    // stdout. Agent mode prints exactly one AgentReport JSON object
+    // at the end of the run; any other stdout-bound format target
+    // would corrupt that. File-bound targets (junit=out.xml, etc.)
+    // still run.
+    let suppress_stdout_outputs = ndjson || agent;
 
     if let Err(e) = emit_run_outputs(
         &run_result,
@@ -1622,6 +1682,26 @@ fn execute_run(
     emit_run_completed_event(events_ref, &run_result, exit_code);
     write_state_sidecar(&run_result, started_at, exit_code, state_context);
     mirror_events_stream_to_pointer(events_ref, state_context);
+
+    // --agent: print exactly one AgentReport JSON object to stdout.
+    // Placed after state/summary/failures artifacts land so the
+    // `artifacts` block always points at files that actually exist on
+    // disk when the payload is emitted.
+    if agent {
+        let ended_at = chrono::Utc::now();
+        let agent_inputs = tarn::report::agent_report::AgentReportInputs {
+            run_id: state_context.run_id.clone(),
+            exit_code,
+            started_at,
+            ended_at,
+            selected_files: files,
+            selectors,
+            run_directory: state_context.run_directory.as_deref(),
+        };
+        let report = tarn::report::agent_report::build(&run_result, agent_inputs);
+        print!("{}", tarn::report::agent_report::render_json(&report));
+    }
+
     exit_code
 }
 
@@ -2237,6 +2317,11 @@ fn rerun_command(
         no_fixtures,
         fixture_retention,
         Some(selection),
+        // `tarn rerun` never exposes an agent mode of its own; the
+        // compact payload is specific to forward `tarn run` and we do
+        // not want the rerun path to accidentally print a second JSON
+        // blob to stdout.
+        false,
     )
 }
 

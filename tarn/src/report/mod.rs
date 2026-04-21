@@ -1,3 +1,4 @@
+pub mod agent_report;
 pub mod compact;
 pub mod concise;
 pub mod curl;
