@@ -71,6 +71,14 @@ pub const ERR_RUN_ID_UNKNOWN: i32 = -32060;
 pub const ERR_RERUN_EMPTY: i32 = -32061;
 pub const ERR_INVALID_REPORT: i32 = -32062;
 pub const ERR_INSPECT_FAILED: i32 = -32063;
+// NAZ-416: new high-level surfaces. Each domain gets its own code so the
+// structured error data the agent receives ties a failure to a specific
+// CLI equivalent without text-matching the message.
+pub const ERR_IMPACT_INVALID_INPUT: i32 = -32064;
+pub const ERR_IMPACT_PARSE_FAILED: i32 = -32065;
+pub const ERR_SCAFFOLD_INVALID_INPUT: i32 = -32066;
+pub const ERR_SCAFFOLD_FAILED: i32 = -32067;
+pub const ERR_PACK_CONTEXT_INVALID_INPUT: i32 = -32068;
 
 /// Resolved working directory for an MCP tool call, plus a flag telling
 /// downstream code whether the caller pinned it explicitly.
@@ -905,6 +913,36 @@ pub fn tarn_rerun_failed(params: &Value) -> Result<Value, ToolError> {
             "rerun_source".into(),
             serde_json::to_value(&selection.source).unwrap_or(Value::Null),
         );
+        // NAZ-416: echo the knobs the caller passed so the agent can
+        // confirm the rerun used the expected env / vars without
+        // re-parsing its own arguments, plus the selection slice the
+        // runner actually executed.
+        map.insert(
+            "selection".into(),
+            json!({
+                "files": selection.files(),
+                "targets": selection
+                    .targets
+                    .iter()
+                    .map(|t| json!({
+                        "file": t.file,
+                        "test": t.test,
+                        "label": t.label(),
+                    }))
+                    .collect::<Vec<_>>(),
+            }),
+        );
+        let mut vars_obj = serde_json::Map::new();
+        for (k, v) in &cli_vars {
+            vars_obj.insert(k.clone(), Value::String(v.clone()));
+        }
+        map.insert(
+            "inputs".into(),
+            json!({
+                "env_name": env_name,
+                "vars": Value::Object(vars_obj),
+            }),
+        );
     }
     Ok(response)
 }
@@ -1222,6 +1260,844 @@ pub fn tarn_fix_plan(params: &Value) -> Result<Value, ToolError> {
     }))
 }
 
+// Collect a `Vec<String>` from an optional JSON array-of-strings field.
+// Used by tool parameter validation so the same "wrong type" / "wrong
+// element type" error shape appears everywhere.
+fn parse_string_array(params: &Value, key: &str) -> Result<Vec<String>, ToolError> {
+    let Some(raw) = params.get(key) else {
+        return Ok(Vec::new());
+    };
+    let Some(arr) = raw.as_array() else {
+        return Err(
+            ToolError::new(ERR_INVALID_PARAM, format!("`{}` must be an array", key))
+                .with_data(json!({ "param": key, "got": raw })),
+        );
+    };
+    let mut out = Vec::with_capacity(arr.len());
+    for (idx, v) in arr.iter().enumerate() {
+        let s = v.as_str().ok_or_else(|| {
+            ToolError::new(
+                ERR_INVALID_PARAM,
+                format!("`{}[{}]` must be a string", key, idx),
+            )
+            .with_data(json!({ "param": key, "index": idx, "got": v }))
+        })?;
+        out.push(s.to_string());
+    }
+    Ok(out)
+}
+
+/// `tarn_impact` — map a change to the tests it most likely affects.
+/// Mirrors the CLI's `tarn impact --format json` contract so agents that
+/// already read one surface can read the other.
+pub fn tarn_impact(params: &Value) -> Result<Value, ToolError> {
+    let cwd = resolve_cwd(params)?;
+    require_config_for_explicit_cwd(&cwd)?;
+    let workspace_root = if cwd.explicit {
+        cwd.path.clone()
+    } else {
+        config::find_project_root(&cwd.path).unwrap_or_else(|| cwd.path.clone())
+    };
+
+    let diff = params
+        .get("diff")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let files = parse_string_array(params, "files")?;
+    let openapi_ops = parse_string_array(params, "openapi_ops")?;
+    let no_default_excludes = params
+        .get("no_default_excludes")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    // Parse endpoints: accept either string specs (`"GET:/users"`) or
+    // structured `{method, path}` objects so the MCP surface is friendlier
+    // than the bare CLI flag.
+    let mut endpoints: Vec<tarn::impact::EndpointChange> = Vec::new();
+    if let Some(raw) = params.get("endpoints") {
+        let arr = raw.as_array().ok_or_else(|| {
+            ToolError::new(ERR_INVALID_PARAM, "`endpoints` must be an array")
+                .with_data(json!({ "param": "endpoints" }))
+        })?;
+        for (idx, ep) in arr.iter().enumerate() {
+            if let Some(s) = ep.as_str() {
+                let parsed = tarn::impact::parse_endpoint(s).map_err(|e| {
+                    ToolError::new(ERR_IMPACT_INVALID_INPUT, e)
+                        .with_data(json!({ "param": "endpoints", "index": idx, "got": s }))
+                })?;
+                endpoints.push(parsed);
+            } else if let Some(obj) = ep.as_object() {
+                let method = obj.get("method").and_then(|v| v.as_str()).ok_or_else(|| {
+                    ToolError::new(ERR_IMPACT_INVALID_INPUT, "endpoint object missing `method`")
+                        .with_data(json!({ "param": "endpoints", "index": idx }))
+                })?;
+                let path = obj.get("path").and_then(|v| v.as_str()).ok_or_else(|| {
+                    ToolError::new(ERR_IMPACT_INVALID_INPUT, "endpoint object missing `path`")
+                        .with_data(json!({ "param": "endpoints", "index": idx }))
+                })?;
+                endpoints.push(tarn::impact::EndpointChange {
+                    method: method.to_string(),
+                    path: path.to_string(),
+                });
+            } else {
+                return Err(ToolError::new(
+                    ERR_IMPACT_INVALID_INPUT,
+                    "endpoints[] entries must be `METHOD:/path` strings or `{method, path}` objects",
+                )
+                .with_data(json!({ "param": "endpoints", "index": idx, "got": ep })));
+            }
+        }
+    }
+
+    // At least one input family is required — the CLI enforces the same
+    // rule and surfaces a hint pointing at the flags that would satisfy it.
+    if !diff && files.is_empty() && endpoints.is_empty() && openapi_ops.is_empty() {
+        return Err(ToolError::new(
+            ERR_IMPACT_INVALID_INPUT,
+            "tarn_impact needs at least one of: diff, files, endpoints, openapi_ops",
+        )
+        .with_data(json!({
+            "hint": "provide at least one of: { \"diff\": true }, files: [...], endpoints: [...], openapi_ops: [...]",
+        })));
+    }
+
+    let min_confidence = match params.get("min_confidence").and_then(|v| v.as_str()) {
+        Some(s) => tarn::impact::Confidence::parse(s).map_err(|e| {
+            ToolError::new(ERR_INVALID_PARAM, e)
+                .with_data(json!({ "param": "min_confidence", "got": s }))
+        })?,
+        None => tarn::impact::Confidence::Low,
+    };
+
+    // `diff` expects to run `git diff` under the workspace root. Keep the
+    // behaviour scoped so we do not poke at the host's cwd.
+    let diff_files: Vec<String> = if diff {
+        read_git_diff_files_in(&workspace_root).map_err(|e| {
+            ToolError::new(ERR_IMPACT_PARSE_FAILED, e).with_data(json!({
+                "workspace_root": workspace_root.display().to_string(),
+            }))
+        })?
+    } else {
+        Vec::new()
+    };
+
+    // Discover tests under the given path (or the workspace's test_dir).
+    let path_str = params.get("path").and_then(|v| v.as_str());
+    let discovery_files = discover_impact_files(&workspace_root, path_str, no_default_excludes)?;
+
+    // Load + parse each test; keep the raw source so the include matcher
+    // has something to scan.
+    let mut loaded: Vec<(String, tarn::model::TestFile, String)> =
+        Vec::with_capacity(discovery_files.len());
+    for file in &discovery_files {
+        let source = std::fs::read_to_string(file).map_err(|e| {
+            ToolError::new(
+                ERR_IMPACT_PARSE_FAILED,
+                format!("failed to read {}: {}", file, e),
+            )
+            .with_data(json!({ "file": file }))
+        })?;
+        let parsed = parser::parse_str(&source, Path::new(file)).map_err(|e| {
+            ToolError::new(
+                ERR_IMPACT_PARSE_FAILED,
+                format!("failed to parse {}: {}", file, e),
+            )
+            .with_data(json!({ "file": file }))
+        })?;
+        loaded.push((file.clone(), parsed, source));
+    }
+    let tests: Vec<tarn::impact::LoadedTest<'_>> = loaded
+        .iter()
+        .map(|(p, parsed, source)| tarn::impact::LoadedTest {
+            path: p.clone(),
+            parsed,
+            source: source.as_str(),
+        })
+        .collect();
+
+    let change = tarn::impact::ChangeSet {
+        diff_files,
+        files,
+        endpoints,
+        openapi_ops,
+    };
+    let report = tarn::impact::analyze(&change, &tests);
+    let report = tarn::impact::filter_by_confidence(report, min_confidence);
+
+    // The CLI emits `ImpactReport` verbatim via `render_json`; we parse it
+    // back to `Value` so the MCP envelope stays a single JSON object and
+    // can carry the `cwd` echo without surprising the agent with a
+    // stringly-typed body.
+    let body: Value = serde_json::from_str(&tarn::impact::render_json(&report)).map_err(|e| {
+        ToolError::new(
+            ERR_IMPACT_PARSE_FAILED,
+            format!("failed to serialise impact report: {}", e),
+        )
+    })?;
+    let Value::Object(mut obj) = body else {
+        return Err(ToolError::new(
+            ERR_IMPACT_PARSE_FAILED,
+            "impact report did not serialise as object",
+        ));
+    };
+    obj.insert(
+        "cwd".into(),
+        Value::String(workspace_root.display().to_string()),
+    );
+    Ok(Value::Object(obj))
+}
+
+// Resolve the discovery root for `tarn_impact` without touching process
+// cwd. Mirrors the CLI's `resolve_files_with_report` fallback but driven
+// by the MCP caller's explicit workspace.
+fn discover_impact_files(
+    workspace_root: &Path,
+    path: Option<&str>,
+    no_default_excludes: bool,
+) -> Result<Vec<String>, ToolError> {
+    let opts = if no_default_excludes {
+        runner::DiscoveryOptions {
+            ignored_dirs: Vec::new(),
+        }
+    } else {
+        runner::DiscoveryOptions::default()
+    };
+
+    let target: PathBuf = match path {
+        Some(p) => resolve_path_against_cwd(p, workspace_root),
+        None => {
+            let project_config = config::load_config(workspace_root).map_err(|e| {
+                ToolError::new(ERR_PARSE, e.to_string()).with_data(json!({
+                    "workspace_root": workspace_root.display().to_string(),
+                }))
+            })?;
+            let tests_dir = workspace_root.join(&project_config.test_dir);
+            if tests_dir.is_dir() {
+                tests_dir
+            } else {
+                workspace_root.to_path_buf()
+            }
+        }
+    };
+
+    if target.is_file() {
+        return Ok(vec![target.to_string_lossy().into_owned()]);
+    }
+    if !target.is_dir() {
+        return Err(ToolError::new(
+            ERR_PATH_NOT_FOUND,
+            format!("Path not found: {}", target.display()),
+        )
+        .with_data(json!({ "path": target.display().to_string() })));
+    }
+    let report = runner::discover_test_files_with_report(&target, &opts).map_err(|e| {
+        ToolError::new(ERR_PATH_NOT_FOUND, e.to_string())
+            .with_data(json!({ "path": target.display().to_string() }))
+    })?;
+    Ok(report.files)
+}
+
+// Run `git diff --name-only HEAD` under the given workspace root. Kept as
+// an internal helper (rather than shelling out to the user's cwd) so the
+// MCP server is insulated from whatever directory the host process is in.
+fn read_git_diff_files_in(workspace_root: &Path) -> Result<Vec<String>, String> {
+    use std::process::Command as StdCommand;
+
+    let first = StdCommand::new("git")
+        .current_dir(workspace_root)
+        .args(["diff", "--name-only", "HEAD"])
+        .output();
+    let output = match first {
+        Ok(o) if o.status.success() => o,
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr).to_string();
+            if stderr.contains("unknown revision")
+                || stderr.contains("bad revision")
+                || stderr.contains("does not have any commits yet")
+            {
+                StdCommand::new("git")
+                    .current_dir(workspace_root)
+                    .args(["diff", "--name-only"])
+                    .output()
+                    .map_err(|e| format!("failed to run git diff: {e}"))?
+            } else {
+                return Err(format!(
+                    "git diff failed (exit {}): {}",
+                    o.status.code().unwrap_or(-1),
+                    stderr.trim()
+                ));
+            }
+        }
+        Err(e) => {
+            return Err(format!("failed to run git (is git installed?): {e}"));
+        }
+    };
+    if !output.status.success() {
+        return Err(format!(
+            "git diff failed (exit {}): {}",
+            output.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect())
+}
+
+/// `tarn_scaffold` — generate a starter `.tarn.yaml` from one of four
+/// input modes (openapi / curl / explicit / recorded). Returns both the
+/// rendered YAML and structured metadata so an agent can iterate without
+/// re-reading the file.
+pub fn tarn_scaffold(params: &Value) -> Result<Value, ToolError> {
+    let cwd = resolve_cwd(params)?;
+    require_config_for_explicit_cwd(&cwd)?;
+    let workspace_root = if cwd.explicit {
+        cwd.path.clone()
+    } else {
+        config::find_project_root(&cwd.path).unwrap_or_else(|| cwd.path.clone())
+    };
+
+    let mode = params.get("mode").and_then(|v| v.as_str()).ok_or_else(|| {
+        ToolError::new(
+            ERR_SCAFFOLD_INVALID_INPUT,
+            "Missing required parameter: mode (openapi|curl|explicit|recorded)",
+        )
+        .with_data(json!({ "param": "mode" }))
+    })?;
+
+    // Exactly one of the mode-specific payload objects must be present;
+    // the CLI enforces the same "pick one" rule by counting flags. Doing
+    // the check up front keeps the error payload predictable.
+    let openapi = params.get("openapi");
+    let curl = params.get("curl");
+    let explicit = params.get("explicit");
+    let recorded = params.get("recorded");
+    let provided = [openapi, curl, explicit, recorded]
+        .iter()
+        .filter(|v| v.is_some())
+        .count();
+    if provided > 1 {
+        return Err(ToolError::new(
+            ERR_SCAFFOLD_INVALID_INPUT,
+            "Provide exactly one of: openapi, curl, explicit, recorded",
+        )
+        .with_data(json!({ "provided": provided, "expected": 1 })));
+    }
+
+    let input = match mode {
+        "openapi" => {
+            let obj = openapi.and_then(|v| v.as_object()).ok_or_else(|| {
+                ToolError::new(
+                    ERR_SCAFFOLD_INVALID_INPUT,
+                    "mode=openapi requires `openapi: {spec_path, op_id}`",
+                )
+                .with_data(json!({ "param": "openapi" }))
+            })?;
+            let spec_path = obj
+                .get("spec_path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    ToolError::new(ERR_SCAFFOLD_INVALID_INPUT, "openapi.spec_path is required")
+                        .with_data(json!({ "param": "openapi.spec_path" }))
+                })?;
+            let op_id = obj.get("op_id").and_then(|v| v.as_str()).ok_or_else(|| {
+                ToolError::new(ERR_SCAFFOLD_INVALID_INPUT, "openapi.op_id is required")
+                    .with_data(json!({ "param": "openapi.op_id" }))
+            })?;
+            tarn::scaffold::ScaffoldInput::OpenApi {
+                spec_path: resolve_path_against_cwd(spec_path, &workspace_root),
+                op_id: op_id.to_string(),
+            }
+        }
+        "curl" => {
+            let obj = curl.and_then(|v| v.as_object()).ok_or_else(|| {
+                ToolError::new(
+                    ERR_SCAFFOLD_INVALID_INPUT,
+                    "mode=curl requires `curl: {command|file}`",
+                )
+                .with_data(json!({ "param": "curl" }))
+            })?;
+            // Accept the literal command text OR a file path that carries it.
+            if let Some(cmd) = obj.get("command").and_then(|v| v.as_str()) {
+                tarn::scaffold::ScaffoldInput::Curl {
+                    curl_text: cmd.to_string(),
+                    source_label: "inline".into(),
+                }
+            } else if let Some(file) = obj.get("file").and_then(|v| v.as_str()) {
+                let resolved = resolve_path_against_cwd(file, &workspace_root);
+                let text = std::fs::read_to_string(&resolved).map_err(|e| {
+                    ToolError::new(
+                        ERR_SCAFFOLD_INVALID_INPUT,
+                        format!("failed to read curl file {}: {}", resolved.display(), e),
+                    )
+                    .with_data(
+                        json!({ "param": "curl.file", "path": resolved.display().to_string() }),
+                    )
+                })?;
+                let label = resolved
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(file)
+                    .to_string();
+                tarn::scaffold::ScaffoldInput::Curl {
+                    curl_text: text,
+                    source_label: label,
+                }
+            } else {
+                return Err(ToolError::new(
+                    ERR_SCAFFOLD_INVALID_INPUT,
+                    "curl mode requires `curl.command` or `curl.file`",
+                )
+                .with_data(json!({ "param": "curl" })));
+            }
+        }
+        "explicit" => {
+            let obj = explicit.and_then(|v| v.as_object()).ok_or_else(|| {
+                ToolError::new(
+                    ERR_SCAFFOLD_INVALID_INPUT,
+                    "mode=explicit requires `explicit: {method, url}`",
+                )
+                .with_data(json!({ "param": "explicit" }))
+            })?;
+            let method = obj.get("method").and_then(|v| v.as_str()).ok_or_else(|| {
+                ToolError::new(ERR_SCAFFOLD_INVALID_INPUT, "explicit.method is required")
+                    .with_data(json!({ "param": "explicit.method" }))
+            })?;
+            let url = obj.get("url").and_then(|v| v.as_str()).ok_or_else(|| {
+                ToolError::new(ERR_SCAFFOLD_INVALID_INPUT, "explicit.url is required")
+                    .with_data(json!({ "param": "explicit.url" }))
+            })?;
+            tarn::scaffold::ScaffoldInput::Explicit {
+                method: method.to_string(),
+                url: url.to_string(),
+            }
+        }
+        "recorded" => {
+            let obj = recorded.and_then(|v| v.as_object()).ok_or_else(|| {
+                ToolError::new(
+                    ERR_SCAFFOLD_INVALID_INPUT,
+                    "mode=recorded requires `recorded: {path}`",
+                )
+                .with_data(json!({ "param": "recorded" }))
+            })?;
+            let path_str = obj.get("path").and_then(|v| v.as_str()).ok_or_else(|| {
+                ToolError::new(ERR_SCAFFOLD_INVALID_INPUT, "recorded.path is required")
+                    .with_data(json!({ "param": "recorded.path" }))
+            })?;
+            tarn::scaffold::ScaffoldInput::Recorded {
+                path: resolve_path_against_cwd(path_str, &workspace_root),
+            }
+        }
+        other => {
+            return Err(ToolError::new(
+                ERR_SCAFFOLD_INVALID_INPUT,
+                format!(
+                    "unknown mode '{}' (expected: openapi|curl|explicit|recorded)",
+                    other
+                ),
+            )
+            .with_data(json!({
+                "param": "mode",
+                "got": other,
+                "allowed": ["openapi", "curl", "explicit", "recorded"],
+            })));
+        }
+    };
+
+    let name_override = params
+        .get("name")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let options = tarn::scaffold::ScaffoldOptions { name_override };
+
+    let result = tarn::scaffold::generate(&input, &options).map_err(|e| {
+        ToolError::new(ERR_SCAFFOLD_FAILED, e.to_string()).with_data(json!({ "mode": mode }))
+    })?;
+
+    let body_shape = match &result.request.body {
+        Some(tarn::scaffold::BodyShape::Json(v)) => Some(v.clone()),
+        Some(tarn::scaffold::BodyShape::Raw(s)) => Some(Value::String(s.clone())),
+        None => None,
+    };
+    let todos: Vec<Value> = result
+        .todos
+        .iter()
+        .map(|t| {
+            json!({
+                "line": t.line,
+                "category": t.category.as_str(),
+                "message": t.message,
+            })
+        })
+        .collect();
+    let mut response_captures: Vec<String> = result.request.captures.keys().cloned().collect();
+    response_captures.sort();
+    let headers: serde_json::Map<String, Value> = result
+        .request
+        .headers
+        .iter()
+        .map(|(k, v)| (k.clone(), Value::String(v.clone())))
+        .collect();
+
+    let mut response = json!({
+        "schema_version": 1,
+        "run_id": Value::Null,
+        "source_mode": result.source_mode.as_str(),
+        "inferred": {
+            "method": result.request.method,
+            "url": result.request.url,
+            "headers": Value::Object(headers),
+            "body_shape": body_shape,
+            "response_captures": response_captures,
+            "response_shape_keys": result.request.response_shape_keys,
+            "path_params": result.request.path_params,
+        },
+        "todos": todos,
+        "yaml": result.yaml.clone(),
+        "validation": {
+            "parsed_ok": result.parsed_ok,
+            "schema_ok": result.schema_ok,
+        },
+    });
+
+    // Optional `out` writes the rendered YAML (or JSON) to disk. We
+    // mirror the CLI rule: refuse to clobber an existing file unless
+    // `force: true` so scaffolds never silently overwrite a user's work.
+    if let Some(out_raw) = params.get("out").and_then(|v| v.as_str()) {
+        let force = params
+            .get("force")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let out_path = resolve_path_against_cwd(out_raw, &workspace_root);
+        if out_path.exists() && !force {
+            return Err(ToolError::new(
+                ERR_SCAFFOLD_INVALID_INPUT,
+                format!(
+                    "{} already exists (pass force=true to overwrite)",
+                    out_path.display()
+                ),
+            )
+            .with_data(json!({ "param": "out", "path": out_path.display().to_string() })));
+        }
+        if let Some(parent) = out_path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    ToolError::new(
+                        ERR_SCAFFOLD_FAILED,
+                        format!("failed to create {}: {}", parent.display(), e),
+                    )
+                })?;
+            }
+        }
+        let format = params
+            .get("format")
+            .and_then(|v| v.as_str())
+            .unwrap_or("yaml");
+        let payload = match format {
+            "yaml" => result.yaml.clone(),
+            "json" => serde_json::to_string_pretty(&response).unwrap_or_default() + "\n",
+            other => {
+                return Err(ToolError::new(
+                    ERR_SCAFFOLD_INVALID_INPUT,
+                    format!("unknown scaffold format '{}' (expected yaml|json)", other),
+                )
+                .with_data(json!({ "param": "format", "got": other })));
+            }
+        };
+        std::fs::write(&out_path, payload.as_bytes()).map_err(|e| {
+            ToolError::new(
+                ERR_SCAFFOLD_FAILED,
+                format!("failed to write {}: {}", out_path.display(), e),
+            )
+        })?;
+        if let Value::Object(ref mut map) = response {
+            map.insert(
+                "written_to".into(),
+                Value::String(out_path.display().to_string()),
+            );
+        }
+    }
+
+    Ok(response)
+}
+
+/// `tarn_run_agent` — convenience wrapper over `tarn_run` with
+/// `report_mode: agent` pre-selected and the selector knobs surfaced
+/// explicitly. Agents driving the inner loop land here first so they do
+/// not need to remember to set `report_mode`.
+pub fn tarn_run_agent(params: &Value) -> Result<Value, ToolError> {
+    let cwd = resolve_cwd(params)?;
+    require_config_for_explicit_cwd(&cwd)?;
+
+    let path_str = params
+        .get("path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("tests");
+    let env_name = params.get("env_name").and_then(|v| v.as_str());
+    let tag_str = params.get("tag").and_then(|v| v.as_str()).unwrap_or("");
+    let cli_vars = parse_vars(params);
+    let no_default_excludes = params
+        .get("no_default_excludes")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let tag_filter = if tag_str.is_empty() {
+        Vec::new()
+    } else {
+        runner::parse_tag_filter(tag_str)
+    };
+
+    // Build selector list from the three NAZ-412 knobs. `select` is a
+    // full `FILE[::TEST[::STEP]]` grammar; `test_filter` / `step_filter`
+    // synthesize wildcard selectors so a caller who knows the test name
+    // but not the file path can still narrow the run.
+    let mut selectors: Vec<tarn::selector::Selector> = Vec::new();
+    for (idx, s) in parse_string_array(params, "select")?.iter().enumerate() {
+        let parsed = tarn::selector::Selector::parse(s).map_err(|e| {
+            ToolError::new(ERR_INVALID_PARAM, e)
+                .with_data(json!({ "param": "select", "index": idx, "got": s }))
+        })?;
+        selectors.push(parsed);
+    }
+    let test_filter = params
+        .get("test_filter")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
+    let step_filter = params
+        .get("step_filter")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
+    if test_filter.is_some() || step_filter.is_some() {
+        let step = step_filter.map(|s| {
+            if let Ok(idx) = s.parse::<usize>() {
+                tarn::selector::StepSelector::Index(idx)
+            } else {
+                tarn::selector::StepSelector::Name(s.to_string())
+            }
+        });
+        selectors.push(tarn::selector::Selector::wildcard(
+            test_filter.map(String::from),
+            step,
+        ));
+    }
+
+    // Discover files the same way `tarn_run` does, but honor the
+    // `no_default_excludes` override that the ticket calls out for the
+    // agent surface.
+    let workspace_root = if cwd.explicit {
+        cwd.path.clone()
+    } else {
+        config::find_project_root(&cwd.path).unwrap_or_else(|| cwd.path.clone())
+    };
+    let files = discover_impact_files(&workspace_root, Some(path_str), no_default_excludes)?;
+    if files.is_empty() {
+        return Err(ToolError::new(ERR_NO_TESTS, "No .tarn.yaml files found")
+            .with_data(json!({ "path": path_str })));
+    }
+
+    let opts = build_run_opts();
+    let outputs = if selectors.is_empty() {
+        execute_and_persist(
+            &cwd,
+            &files,
+            env_name,
+            &cli_vars,
+            &tag_filter,
+            &[],
+            &opts,
+            &["tarn-mcp".to_string(), "run-agent".to_string()],
+        )?
+    } else {
+        execute_and_persist_with_selectors(
+            &cwd,
+            &files,
+            env_name,
+            &cli_vars,
+            &tag_filter,
+            &selectors,
+            &opts,
+            &["tarn-mcp".to_string(), "run-agent".to_string()],
+        )?
+    };
+
+    build_run_response(&outputs, ReportMode::Agent)
+}
+
+/// `tarn_last_root_causes` — failures-first read. Returns only the
+/// root-cause groups (NAZ-402), skipping the wider failures envelope,
+/// so the agent can immediately plan a fix without filtering cascade
+/// fallout itself.
+pub fn tarn_last_root_causes(params: &Value) -> Result<Value, ToolError> {
+    let workspace_root = resolve_workspace_root(params)?;
+    let run_id = resolve_run_id_param(&workspace_root, params)?;
+    let run_dir = report::run_dir::run_directory(&workspace_root, &run_id);
+    let failures_path = run_dir.join("failures.json");
+    let doc: FailuresDoc = read_json_artifact(&failures_path)?;
+
+    let built = report::failures_command::build_report(&doc, failures_path.display().to_string());
+    let groups_value = serde_json::to_value(&built.groups).map_err(|e| {
+        ToolError::new(
+            ERR_ARTIFACT_PARSE,
+            format!("failed to serialise failure groups: {}", e),
+        )
+    })?;
+
+    Ok(json!({
+        "schema_version": report::failures_command::FAILURES_REPORT_SCHEMA_VERSION,
+        "run_id": run_id,
+        "workspace_root": workspace_root.display().to_string(),
+        "groups": groups_value,
+        "total_failures": built.total_failures,
+        "total_cascades": built.total_cascades,
+        "artifacts": artifact_paths(&run_dir),
+    }))
+}
+
+/// `tarn_pack_context` — assemble a remediation bundle (NAZ-414) from a
+/// prior run's artifacts. Supports the same narrowing (failed-only,
+/// files/tests filters) and both JSON and markdown render targets the
+/// CLI offers.
+pub fn tarn_pack_context(params: &Value) -> Result<Value, ToolError> {
+    let workspace_root = resolve_workspace_root(params)?;
+
+    // `run_id` is optional: when omitted, read the `.tarn/` pointers so
+    // the tool works the same way `tarn pack-context` does without
+    // `--run`.
+    let (summary_path, failures_path, report_path, state_path, run_dir_opt, resolved_run_id) =
+        match params.get("run_id").and_then(|v| v.as_str()) {
+            Some(alias) => {
+                let run_id =
+                    report::run_dir::resolve_run_id(&workspace_root, alias).map_err(|e| {
+                        ToolError::new(ERR_RUN_ID_UNKNOWN, e.to_string()).with_data(json!({
+                            "run_id": alias,
+                        }))
+                    })?;
+                let dir = report::run_dir::run_directory(&workspace_root, &run_id);
+                (
+                    dir.join("summary.json"),
+                    dir.join("failures.json"),
+                    dir.join("report.json"),
+                    dir.join("state.json"),
+                    Some(dir),
+                    Some(run_id),
+                )
+            }
+            None => {
+                let tarn_dir = workspace_root.join(".tarn");
+                (
+                    tarn_dir.join("summary.json"),
+                    tarn_dir.join("failures.json"),
+                    tarn_dir.join("last-run.json"),
+                    tarn_dir.join("state.json"),
+                    None,
+                    None,
+                )
+            }
+        };
+
+    let summary: report::summary::SummaryDoc = read_json_artifact(&summary_path)?;
+    let failures: FailuresDoc = read_json_artifact(&failures_path)?;
+
+    // `report.json` and `state.json` are best-effort enrichment. A parse
+    // error blocks execution because silent corruption would hide real
+    // issues; a missing file degrades gracefully to `None`.
+    let report_value: Option<Value> = if report_path.is_file() {
+        Some(read_json_artifact::<Value>(&report_path)?)
+    } else {
+        None
+    };
+    let state_doc: Option<report::state_writer::StateDoc> = if state_path.is_file() {
+        Some(read_json_artifact::<report::state_writer::StateDoc>(
+            &state_path,
+        )?)
+    } else {
+        None
+    };
+
+    let failed_only = params
+        .get("failed")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    let files_filter = parse_string_array(params, "files")?;
+    let tests_filter = parse_string_array(params, "tests")?;
+
+    let inputs = report::pack_context::PackContextInputs {
+        summary: &summary,
+        failures: &failures,
+        report: report_value.as_ref(),
+        state: state_doc.as_ref(),
+        run_dir: run_dir_opt.as_deref(),
+        file_filters: &files_filter,
+        test_filters: &tests_filter,
+        failed_only,
+        workspace_root: &workspace_root,
+    };
+    let mut pack = report::pack_context::build(&inputs);
+
+    let max_chars = params
+        .get("max_chars")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize)
+        .unwrap_or(12_000);
+
+    let format = params
+        .get("format")
+        .and_then(|v| v.as_str())
+        .unwrap_or("json")
+        .to_ascii_lowercase();
+
+    let artifacts = match &run_dir_opt {
+        Some(dir) => artifact_paths(dir),
+        None => Value::Null,
+    };
+
+    match format.as_str() {
+        "markdown" | "md" => {
+            let rendered = report::pack_context::render_markdown(&mut pack, max_chars);
+            Ok(json!({
+                "schema_version": 1,
+                "run_id": resolved_run_id,
+                "workspace_root": workspace_root.display().to_string(),
+                "markdown": rendered,
+                "artifacts": artifacts,
+            }))
+        }
+        "json" => {
+            // Apply truncation in-place, then surface the bundle as the
+            // structured object it already is — no need to re-parse a
+            // rendered string.
+            report::pack_context::apply_truncation(
+                &mut pack,
+                max_chars,
+                report::pack_context::RenderFormat::Json,
+            );
+            let bundle = serde_json::to_value(&pack).map_err(|e| {
+                ToolError::new(
+                    ERR_PACK_CONTEXT_INVALID_INPUT,
+                    format!("failed to serialise pack-context: {}", e),
+                )
+            })?;
+            Ok(json!({
+                "schema_version": 1,
+                "run_id": resolved_run_id,
+                "workspace_root": workspace_root.display().to_string(),
+                "bundle": bundle,
+                "artifacts": artifacts,
+            }))
+        }
+        other => Err(ToolError::new(
+            ERR_PACK_CONTEXT_INVALID_INPUT,
+            format!(
+                "unknown pack-context format '{}' (expected json|markdown)",
+                other
+            ),
+        )
+        .with_data(json!({ "param": "format", "got": other }))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1412,6 +2288,65 @@ mod tests {
                 .and_then(|v| v.as_i64()),
             Some(1)
         );
+    }
+
+    #[test]
+    fn tarn_impact_rejects_no_inputs_with_hint() {
+        // A completely empty input set must surface a structured error
+        // pointing the agent at the fields that would satisfy the tool.
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("tarn.config.yaml"), "test_dir: tests\n").unwrap();
+        let err = tarn_impact(&json!({ "cwd": tmp.path().to_string_lossy() }))
+            .expect_err("missing inputs must error");
+        assert_eq!(err.code, ERR_IMPACT_INVALID_INPUT);
+        let data = err.data.expect("error carries structured data");
+        assert!(data.get("hint").is_some(), "hint must be present");
+    }
+
+    #[test]
+    fn tarn_scaffold_rejects_missing_mode() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("tarn.config.yaml"), "test_dir: tests\n").unwrap();
+        let err = tarn_scaffold(&json!({ "cwd": tmp.path().to_string_lossy() }))
+            .expect_err("missing mode must error");
+        assert_eq!(err.code, ERR_SCAFFOLD_INVALID_INPUT);
+        assert!(err.data.is_some());
+    }
+
+    #[test]
+    fn tarn_scaffold_rejects_unknown_mode() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("tarn.config.yaml"), "test_dir: tests\n").unwrap();
+        let err = tarn_scaffold(&json!({
+            "cwd": tmp.path().to_string_lossy(),
+            "mode": "bogus",
+        }))
+        .expect_err("unknown mode must error");
+        assert_eq!(err.code, ERR_SCAFFOLD_INVALID_INPUT);
+    }
+
+    #[test]
+    fn tarn_scaffold_rejects_multiple_mode_payloads() {
+        // Two payload objects must short-circuit even before the mode
+        // handler runs — otherwise an ambiguous intent might silently
+        // collapse to whichever branch the dispatcher happens to pick.
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("tarn.config.yaml"), "test_dir: tests\n").unwrap();
+        let err = tarn_scaffold(&json!({
+            "cwd": tmp.path().to_string_lossy(),
+            "mode": "explicit",
+            "explicit": { "method": "GET", "url": "http://example.com/" },
+            "curl": { "command": "curl http://example.com" },
+        }))
+        .expect_err("ambiguous payloads must error");
+        assert_eq!(err.code, ERR_SCAFFOLD_INVALID_INPUT);
+    }
+
+    #[test]
+    fn parse_string_array_rejects_non_string_elements() {
+        let err = parse_string_array(&json!({ "files": [1, 2, 3] }), "files").unwrap_err();
+        assert_eq!(err.code, ERR_INVALID_PARAM);
+        assert!(err.message.contains("files[0]"));
     }
 
     #[test]

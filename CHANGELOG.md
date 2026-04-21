@@ -4,6 +4,33 @@
 
 ### Runner + CLI (tarn)
 
+- **High-level MCP APIs for the agent inner loop (NAZ-416, affects
+  `tarn-mcp`).** Five new tools wrap the prior library work so an agent
+  can drive impact → scaffold → run → inspect → fix without shell
+  fallbacks: `tarn_impact` (wraps `tarn::impact::analyze` with the same
+  JSON shape `tarn impact --format json` emits, plus a structured
+  error for missing inputs that carries a hint), `tarn_scaffold`
+  (wraps `tarn::scaffold::generate` for all four input modes
+  openapi/curl/explicit/recorded, optionally writing the rendered YAML
+  to disk with an overwrite guard), `tarn_run_agent` (convenience
+  surface over `tarn_run` with `report_mode: agent` pre-selected and
+  the full selector grammar — `test_filter`, `step_filter`, `select`,
+  `tag` — exposed), `tarn_last_root_causes` (failures-first read that
+  returns only the fingerprinted groups from NAZ-402, no cascade noise),
+  and `tarn_pack_context` (wraps NAZ-414's remediation bundle with both
+  JSON and markdown render targets and the `max_chars` truncation
+  budget). `tarn_rerun_failed` now echoes the caller's `env_name`/
+  `vars` and the selection slice the runner executed so an agent can
+  confirm its own intent without re-parsing. Every new response carries
+  `schema_version: 1` — the same version the underlying CLI artifacts
+  already emit so a consumer reading both surfaces sees consistent
+  versioning. Four new error codes in the reserved `-32050..-32099`
+  window (`ERR_IMPACT_INVALID_INPUT`, `ERR_IMPACT_PARSE_FAILED`,
+  `ERR_SCAFFOLD_INVALID_INPUT`, `ERR_SCAFFOLD_FAILED`,
+  `ERR_PACK_CONTEXT_INVALID_INPUT`) keep domain errors structured
+  instead of stringified. The golden `tools-list.json.golden` is
+  refreshed with descriptions ending in `equivalent to: tarn …` so
+  agents can cross-check behaviour against the CLI.
 - **MCP parity with the CLI plus artifact-oriented APIs (NAZ-407, affects
   `tarn-mcp`).** The MCP server now writes every run's artifacts under
   `.tarn/runs/<run_id>/` — `report.json`, `summary.json`, `failures.json`,

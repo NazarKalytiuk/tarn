@@ -415,6 +415,238 @@ pub fn tools_list() -> Value {
                         }
                     }
                 }
+            },
+            {
+                "name": "tarn_impact",
+                "description": "Map a change (files / endpoints / openapi ops / `git diff`) to the `.tarn.yaml` tests it most likely affects, with confidence tiers and run hints. Read-only: no HTTP and no test execution. Equivalent to: tarn impact --format json.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "cwd": {
+                            "type": "string",
+                            "description": "Absolute path to the project root. Defaults to the workspace root captured during MCP `initialize`, or the server process's current directory."
+                        },
+                        "path": {
+                            "type": "string",
+                            "description": "Restrict test discovery to this subpath (file or directory). Relative paths resolve against `cwd`."
+                        },
+                        "diff": {
+                            "type": "boolean",
+                            "description": "When true, run `git diff --name-only HEAD` under `cwd` and feed the result in as changed files."
+                        },
+                        "files": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Changed source files as plain strings."
+                        },
+                        "endpoints": {
+                            "type": "array",
+                            "description": "Endpoints touched by the change. Each entry is either a `METHOD:/path` string or a `{method, path}` object.",
+                            "items": {
+                                "oneOf": [
+                                    { "type": "string" },
+                                    {
+                                        "type": "object",
+                                        "properties": {
+                                            "method": { "type": "string" },
+                                            "path": { "type": "string" }
+                                        },
+                                        "required": ["method", "path"]
+                                    }
+                                ]
+                            }
+                        },
+                        "openapi_ops": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "OpenAPI `operationId`s whose behaviour changed."
+                        },
+                        "min_confidence": {
+                            "type": "string",
+                            "enum": ["low", "medium", "high"],
+                            "description": "Drop matches below this tier before returning."
+                        },
+                        "no_default_excludes": {
+                            "type": "boolean",
+                            "description": "Disable the default discovery ignore rules (e.g. `.git`, `node_modules`)."
+                        }
+                    }
+                }
+            },
+            {
+                "name": "tarn_scaffold",
+                "description": "Generate a minimal `.tarn.yaml` skeleton from one of four input modes (OpenAPI operation id, raw curl, method+url, or a recorded fixture). Returns the rendered YAML plus structured metadata (TODOs, inferred request, validation). Optional `out` writes the file to disk. Equivalent to: tarn scaffold --from-openapi / --from-curl / --method+--url / --from-recorded.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "cwd": {
+                            "type": "string",
+                            "description": "Absolute path to the project root. Defaults to the workspace root captured during MCP `initialize`, or the server process's current directory."
+                        },
+                        "mode": {
+                            "type": "string",
+                            "enum": ["openapi", "curl", "explicit", "recorded"],
+                            "description": "Input mode. Must match the payload object provided."
+                        },
+                        "openapi": {
+                            "type": "object",
+                            "description": "Payload for mode=openapi.",
+                            "properties": {
+                                "spec_path": { "type": "string" },
+                                "op_id": { "type": "string" }
+                            },
+                            "required": ["spec_path", "op_id"]
+                        },
+                        "curl": {
+                            "type": "object",
+                            "description": "Payload for mode=curl. Provide either `command` (inline) or `file` (path to read).",
+                            "properties": {
+                                "command": { "type": "string" },
+                                "file": { "type": "string" }
+                            }
+                        },
+                        "explicit": {
+                            "type": "object",
+                            "description": "Payload for mode=explicit.",
+                            "properties": {
+                                "method": { "type": "string" },
+                                "url": { "type": "string" }
+                            },
+                            "required": ["method", "url"]
+                        },
+                        "recorded": {
+                            "type": "object",
+                            "description": "Payload for mode=recorded.",
+                            "properties": {
+                                "path": { "type": "string" }
+                            },
+                            "required": ["path"]
+                        },
+                        "name": {
+                            "type": "string",
+                            "description": "Override the inferred top-level `name:` field."
+                        },
+                        "out": {
+                            "type": "string",
+                            "description": "Write the scaffold to this path (relative paths resolve against `cwd`). Refuses to overwrite unless `force=true`."
+                        },
+                        "force": {
+                            "type": "boolean",
+                            "description": "Allow overwriting an existing `out` path."
+                        },
+                        "format": {
+                            "type": "string",
+                            "enum": ["yaml", "json"],
+                            "description": "When `out` is set, write YAML (default) or the JSON metadata block."
+                        }
+                    },
+                    "required": ["mode"]
+                }
+            },
+            {
+                "name": "tarn_run_agent",
+                "description": "Run a suite with `report_mode=agent` pre-selected, surfacing the compact AgentReport (NAZ-412) plus artifact paths. Preferred entry point when the caller will iterate on failures. Equivalent to: tarn run --agent.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "cwd": {
+                            "type": "string",
+                            "description": "Absolute path to the project root. Defaults to the workspace root captured during MCP `initialize`, or the server process's current directory."
+                        },
+                        "path": {
+                            "type": "string",
+                            "description": "Path to a `.tarn.yaml` file or directory. Relative paths resolve against `cwd`."
+                        },
+                        "env_name": {
+                            "type": "string",
+                            "description": "Environment name (loads tarn.env.{name}.yaml)."
+                        },
+                        "vars": {
+                            "type": "object",
+                            "description": "Variable overrides as key-value pairs.",
+                            "additionalProperties": { "type": "string" }
+                        },
+                        "test_filter": {
+                            "type": "string",
+                            "description": "Run only this named test across every discovered file (wildcard selector)."
+                        },
+                        "step_filter": {
+                            "type": "string",
+                            "description": "Run only this step (name or zero-based index) within the filtered tests."
+                        },
+                        "select": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Explicit `FILE[::TEST[::STEP]]` selectors. Combine with `test_filter`/`step_filter` if desired."
+                        },
+                        "tag": {
+                            "type": "string",
+                            "description": "Comma-separated tag filter."
+                        },
+                        "no_default_excludes": {
+                            "type": "boolean",
+                            "description": "Disable the default discovery ignore rules."
+                        }
+                    }
+                }
+            },
+            {
+                "name": "tarn_last_root_causes",
+                "description": "Return only the root-cause failure groups (NAZ-402) for a run, without the wider failures envelope. The fastest failures-first read for an agent planning a fix. Equivalent to: tarn failures --format json (groups only).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "cwd": {
+                            "type": "string",
+                            "description": "Absolute path to the project root. Defaults to the workspace root captured during MCP `initialize`, or the server process's current directory."
+                        },
+                        "run_id": {
+                            "type": "string",
+                            "description": "Run identifier or alias (`last`, `prev`, `@latest`, or a literal id). Defaults to `last`."
+                        }
+                    }
+                }
+            },
+            {
+                "name": "tarn_pack_context",
+                "description": "Assemble a remediation bundle (NAZ-414) from a prior run's artifacts: failing entries enriched with YAML snippets, request/response excerpts, captures lineage, and rerun hints. Supports truncation budgets for context-limited agents. Equivalent to: tarn pack-context.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "cwd": {
+                            "type": "string",
+                            "description": "Absolute path to the project root. Defaults to the workspace root captured during MCP `initialize`, or the server process's current directory."
+                        },
+                        "run_id": {
+                            "type": "string",
+                            "description": "Run identifier or alias. Defaults to the workspace-level `.tarn/` pointer."
+                        },
+                        "failed": {
+                            "type": "boolean",
+                            "description": "Pack only failing entries. Defaults to true."
+                        },
+                        "files": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Narrow entries to these files (path suffix match)."
+                        },
+                        "tests": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Narrow entries to these test names (exact match)."
+                        },
+                        "format": {
+                            "type": "string",
+                            "enum": ["json", "markdown"],
+                            "description": "Output shape: JSON bundle (default) or markdown."
+                        },
+                        "max_chars": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "description": "Soft budget for the rendered output. Triggers structured truncation (see NAZ-414) when exceeded."
+                        }
+                    }
+                }
             }
         ]
     })

@@ -88,6 +88,11 @@ fn handle_tool_call(req: &JsonRpcRequest) -> JsonRpcResponse {
         "tarn_rerun_failed" => tools::tarn_rerun_failed(&arguments),
         "tarn_report" => tools::tarn_report(&arguments),
         "tarn_inspect" => tools::tarn_inspect(&arguments),
+        "tarn_impact" => tools::tarn_impact(&arguments),
+        "tarn_scaffold" => tools::tarn_scaffold(&arguments),
+        "tarn_run_agent" => tools::tarn_run_agent(&arguments),
+        "tarn_last_root_causes" => tools::tarn_last_root_causes(&arguments),
+        "tarn_pack_context" => tools::tarn_pack_context(&arguments),
         _ => Err(ToolError::new(
             -32601,
             format!("Unknown tool: {}", tool_name),
