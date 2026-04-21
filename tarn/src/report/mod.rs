@@ -1,4 +1,5 @@
 pub mod compact;
+pub mod concise;
 pub mod curl;
 pub mod diff;
 pub mod failure;

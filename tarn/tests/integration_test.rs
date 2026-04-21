@@ -6355,3 +6355,194 @@ steps:
     assert_eq!(view["from"]["run_id"], run_a);
     assert_eq!(view["to"]["run_id"], run_b);
 }
+
+// ============================================================================
+// NAZ-404: tarn report — built-in concise rendering of persisted artifacts
+// ============================================================================
+
+/// A multi-failure run should exit 1 and the stdout should list each
+/// root-cause group. This is the happy path for the "replace
+/// parse-results.py" workflow.
+#[test]
+fn report_subcommand_renders_groups_from_latest_run() {
+    let server = DemoServer::start();
+    let dir = TempDir::new().unwrap();
+    // Two distinct failures so we exercise group rendering rather than
+    // a single-group special case.
+    let test_file = write_test_file(
+        &dir,
+        "report-multi.tarn.yaml",
+        &format!(
+            r#"
+name: Report multi
+tests:
+  a:
+    steps:
+      - name: bad1
+        request:
+          method: GET
+          url: "{base}/health"
+        assert:
+          status: 418
+  b:
+    steps:
+      - name: bad2
+        request:
+          method: GET
+          url: "{base}/health"
+        assert:
+          status: 599
+"#,
+            base = server.base_url()
+        ),
+    );
+
+    let run = tarn()
+        .args(["run", &test_file])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(run.status.code(), Some(1));
+
+    let report = tarn()
+        .args(["report", "--no-color"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(report.status.code(), Some(1));
+    let stdout = String::from_utf8(report.stdout).unwrap();
+    assert!(
+        stdout.contains("FAIL") && stdout.contains("failures:"),
+        "expected fail verdict + failures section, got: {}",
+        stdout
+    );
+    // Two distinct fingerprints → two `●` group bullets.
+    assert!(
+        stdout.matches("●").count() >= 2,
+        "expected at least two group bullets, got: {}",
+        stdout
+    );
+}
+
+/// `tarn report --run last` and `tarn report --run <id>` must read the
+/// same archive and therefore produce identical output up to the
+/// run-id label. This is the composition promise with NAZ-400's archive.
+#[test]
+fn report_subcommand_run_last_matches_explicit_run_id() {
+    let server = DemoServer::start();
+    let dir = TempDir::new().unwrap();
+    let test_file = write_test_file(
+        &dir,
+        "report-by-id.tarn.yaml",
+        &format!(
+            r#"
+name: Report by id
+steps:
+  - name: bad
+    request:
+      method: GET
+      url: "{base}/health"
+    assert:
+      status: 599
+"#,
+            base = server.base_url()
+        ),
+    );
+
+    let run = tarn()
+        .args(["run", &test_file])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(run.status.code(), Some(1));
+    let run_id = run_id_from_stderr(&String::from_utf8_lossy(&run.stderr));
+
+    let by_alias = tarn()
+        .args(["report", "--run", "last", "--format", "json", "--no-color"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(by_alias.status.code(), Some(1));
+    let by_id = tarn()
+        .args(["report", "--run", &run_id, "--format", "json", "--no-color"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(by_id.status.code(), Some(1));
+
+    assert_eq!(
+        String::from_utf8(by_alias.stdout).unwrap(),
+        String::from_utf8(by_id.stdout).unwrap(),
+        "`--run last` must resolve to the same archive as the explicit run id",
+    );
+}
+
+/// Passing an unknown run id must exit 2 with a clear message instead
+/// of silently falling back to the latest run's artifacts.
+#[test]
+fn report_subcommand_unknown_run_id_exits_two() {
+    let dir = TempDir::new().unwrap();
+    // Seed `.tarn/` so the workspace is recognized as a tarn project.
+    fs::create_dir_all(dir.path().join(".tarn")).unwrap();
+    fs::write(dir.path().join("tarn.config.yaml"), "").unwrap();
+
+    let output = tarn()
+        .args(["report", "--run", "does-not-exist"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("does-not-exist"),
+        "error should reference the missing run: {}",
+        stderr
+    );
+}
+
+/// A clean run's artifacts must drive a 0-exit concise report with the
+/// correct totals and no failures section.
+#[test]
+fn report_subcommand_passing_run_exits_zero_with_totals_only() {
+    let server = DemoServer::start();
+    let dir = TempDir::new().unwrap();
+    let test_file = write_test_file(
+        &dir,
+        "report-clean.tarn.yaml",
+        &format!(
+            r#"
+name: Clean report
+steps:
+  - name: ok
+    request:
+      method: GET
+      url: "{base}/health"
+    assert:
+      status: 200
+"#,
+            base = server.base_url()
+        ),
+    );
+
+    let run = tarn()
+        .args(["run", &test_file])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(run.status.code(), Some(0));
+
+    let report = tarn()
+        .args(["report", "--format", "json", "--no-color"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(report.status.code(), Some(0));
+    let stdout = String::from_utf8(report.stdout).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(parsed["schema_version"], 1);
+    assert_eq!(parsed["exit_code"], 0);
+    assert_eq!(parsed["failed"]["steps"], 0);
+    assert_eq!(parsed["totals"]["steps"], 1);
+    assert!(parsed["groups"].as_array().unwrap().is_empty());
+    assert_eq!(parsed["groups_truncated"], false);
+}

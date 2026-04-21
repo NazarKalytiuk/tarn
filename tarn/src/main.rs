@@ -624,6 +624,36 @@ enum Commands {
         fail_on_failure: bool,
     },
 
+    /// Concise re-render of a prior run's persisted artifacts (NAZ-404).
+    ///
+    /// Loads `summary.json` + `failures.json` from `.tarn/` (or from
+    /// `.tarn/runs/<run_id>/` when `--run` is given) and prints a
+    /// one-screen verdict plus, when there are failures, at most 10
+    /// root-cause groups. The goal is to replace external helper
+    /// scripts like `parse-results.py` with a stable, built-in
+    /// reporter that humans and agents can both consume.
+    ///
+    /// Use `--format json` for a documented JSON envelope
+    /// (`schema_version` 1). Exit codes: 0 on a clean run, 1 when the
+    /// loaded artifact has failures, 2 on missing / malformed
+    /// artifacts or an unknown `--run <id>`.
+    Report {
+        /// Run id (or alias: `last`, `latest`, `@latest`, `prev`).
+        /// Without this flag the workspace-level pointer at
+        /// `.tarn/summary.json` + `.tarn/failures.json` is read.
+        #[arg(long)]
+        run: Option<String>,
+
+        /// Output format: `concise` (default) or `json`.
+        #[arg(long, default_value = "concise")]
+        format: String,
+
+        /// Disable ANSI color output. Honored automatically when
+        /// stdout is not a TTY.
+        #[arg(long = "no-color")]
+        no_color: bool,
+    },
+
     /// Compare two runs' summary + failure sets (NAZ-405).
     ///
     /// Loads `summary.json` + `failures.json` for both `run_a` and
@@ -909,6 +939,11 @@ fn main() {
             filter_category.as_deref(),
             fail_on_failure,
         ),
+        Commands::Report {
+            run,
+            format,
+            no_color,
+        } => report_command(run.as_deref(), &format, no_color),
         Commands::Diff {
             run_a,
             run_b,
@@ -1797,6 +1832,142 @@ fn failures_command(
     } else {
         1
     }
+}
+
+/// `tarn report [--run <id>] [--format concise|json]` (NAZ-404).
+///
+/// Reads the persisted `summary.json` + `failures.json` for the
+/// targeted run and renders a one-screen verdict (or a stable JSON
+/// envelope). Pure reporting — no HTTP, no test execution. This is the
+/// built-in replacement for external helper scripts that used to shell
+/// out to `python3 bin/parse-results.py` against the JSON report.
+///
+/// Exit codes:
+/// - 0 when the loaded `failures.json` is empty (clean run)
+/// - 1 when the loaded `failures.json` has at least one failure
+/// - 2 when the artifact is missing, unparseable, or `--run <id>` is
+///   unknown
+fn report_command(run: Option<&str>, format: &str, no_color: bool) -> i32 {
+    let format = match format.to_ascii_lowercase().as_str() {
+        "concise" => "concise",
+        "json" => "json",
+        other => {
+            eprintln!(
+                "Error: unknown report format '{}'. Use 'concise' or 'json'.",
+                other
+            );
+            return 2;
+        }
+    };
+
+    let cwd = match std::env::current_dir() {
+        Ok(dir) => dir,
+        Err(e) => {
+            eprintln!("Error: failed to resolve current directory: {}", e);
+            return 2;
+        }
+    };
+    let workspace_root = config::find_project_root(&cwd).unwrap_or_else(|| cwd.clone());
+
+    // Resolve the artifact pair. `--run <alias>` goes through the
+    // shared resolver so aliases like `last`/`prev`/`@latest` are
+    // honored and we match the behavior of `tarn inspect`/`tarn diff`.
+    // Without `--run`, we fall back to the workspace-level pointers
+    // at `.tarn/summary.json` + `.tarn/failures.json` that NAZ-401
+    // refreshes on every run.
+    let (summary_path, failures_path, resolved_run_label) = match run {
+        Some(alias) => {
+            let run_id = match tarn::report::run_dir::resolve_run_id(&workspace_root, alias) {
+                Ok(id) => id,
+                Err(err) => {
+                    eprintln!("Error: {}", err);
+                    return 2;
+                }
+            };
+            let dir = tarn::report::run_dir::run_directory(&workspace_root, &run_id);
+            (dir.join("summary.json"), dir.join("failures.json"), run_id)
+        }
+        None => {
+            let tarn_dir = workspace_root.join(".tarn");
+            (
+                tarn_dir.join("summary.json"),
+                tarn_dir.join("failures.json"),
+                // Label is filled in from the artifact below when we
+                // load it; "latest" is a placeholder for the error path.
+                "latest".to_string(),
+            )
+        }
+    };
+
+    let summary: tarn::report::summary::SummaryDoc = match read_report_artifact(&summary_path) {
+        Ok(s) => s,
+        Err(code) => return code,
+    };
+    let failures: tarn::report::summary::FailuresDoc = match read_report_artifact(&failures_path) {
+        Ok(f) => f,
+        Err(code) => return code,
+    };
+
+    // Prefer the run_id embedded in the summary when we loaded via the
+    // latest-run pointer; it's the authoritative label and matches what
+    // `tarn inspect` prints for the same archive.
+    let run_label = if run.is_some() {
+        resolved_run_label
+    } else {
+        summary
+            .run_id
+            .clone()
+            .unwrap_or_else(|| resolved_run_label.clone())
+    };
+
+    let no_color_effective = no_color || !std::io::IsTerminal::is_terminal(&std::io::stdout());
+
+    let output = match format {
+        "json" => {
+            let v = tarn::report::concise::render_json(&summary, &failures, &run_label);
+            serde_json::to_string_pretty(&v).unwrap_or_default()
+        }
+        _ => tarn::report::concise::render_concise(
+            &summary,
+            &failures,
+            &run_label,
+            no_color_effective,
+        ),
+    };
+    print!("{}", output);
+    if format == "json" {
+        println!();
+    }
+
+    if failures.failures.is_empty() {
+        0
+    } else {
+        1
+    }
+}
+
+/// Shared loader for `tarn report`'s summary + failures inputs. Keeps
+/// error handling uniform so a missing summary and a missing failures
+/// file both exit 2 with a path-aware message.
+fn read_report_artifact<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, i32> {
+    if !path.is_file() {
+        eprintln!(
+            "Error: no artifact at {}. Run `tarn run` first, or pass `--run <id>`.",
+            path.display()
+        );
+        return Err(2);
+    }
+    let raw = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            eprintln!("Error: failed to read {}: {}", path.display(), e);
+            return Err(2);
+        }
+    };
+    serde_json::from_slice::<T>(&raw).map_err(|e| {
+        eprintln!("Error: failed to parse {}: {}", path.display(), e);
+        2
+    })
 }
 
 /// `tarn rerun --failed [--run <id>]` — resolve the failing subset of a

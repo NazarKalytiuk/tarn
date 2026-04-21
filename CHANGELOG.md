@@ -59,6 +59,29 @@
     archive. Source lookup is anchored at the current workspace root;
     `cd` into the project before invoking the command if you have
     moved away.
+  - **Built-in concise report subcommand `tarn report` (NAZ-404).**
+    New CLI subcommand that re-renders a prior run's persisted
+    `summary.json` + `failures.json` without re-running the tests,
+    replacing external helper scripts (such as `parse-results.py`) in
+    the common local-debugging loop. `tarn report` reads the
+    workspace-level pointers at `.tarn/summary.json` /
+    `.tarn/failures.json` by default; `--run <run_id>` (with the same
+    `last` / `latest` / `@latest` / `prev` / bare-id aliases supported
+    by `tarn inspect` and `tarn diff`) opens any historical archive
+    under `.tarn/runs/<run_id>/`. `--format concise` (the default)
+    prints a one-line verdict header followed — on failing runs — by
+    up to 10 root-cause groups (reusing the NAZ-402 fingerprinting so
+    cascade fallout collapses into `└─ cascades: N skipped` rather
+    than inflating the group count), with a trailing
+    `…and N more groups (run \`tarn failures\` for full list)` when
+    the run has more. `--format json` emits a stable envelope
+    (`schema_version: 1`) with totals, failed counts, and a
+    `groups_truncated` / `groups_total` pair so agents can paginate or
+    fall back to `tarn failures`. Color output is honored on a TTY and
+    suppressed automatically on a pipe (plus `--no-color` for explicit
+    override), mirroring the llm renderer. Exit codes: 0 when the
+    loaded `failures.json` is empty, 1 when it has any failure, 2 on
+    missing / malformed artifacts or an unknown `--run <id>`.
   - **`tarn inspect` and `tarn diff` for run drill-down and
     comparison (NAZ-405).** `tarn inspect <run_id> [target]` loads
     `.tarn/runs/<run_id>/report.json` and renders a run / file /
