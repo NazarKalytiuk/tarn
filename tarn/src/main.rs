@@ -734,6 +734,61 @@ enum Commands {
         #[arg(long = "filter-category", value_name = "CATEGORY")]
         filter_category: Option<String>,
     },
+
+    /// Pack a minimum remediation bundle for agents (NAZ-414).
+    ///
+    /// Reads the persisted `summary.json` + `failures.json` (and the
+    /// full `report.json` when present) for the targeted run and emits
+    /// a compact, deterministic payload carrying: failed YAML snippets,
+    /// request / response excerpts for the failing steps, captures
+    /// produced / consumed / blocked, rerun guidance, and artifact
+    /// paths for deeper inspection. An agent can take the packed
+    /// context and decide the next edit without reopening the full
+    /// report in common cases.
+    ///
+    /// Without `--run`, the workspace-level pointers under `.tarn/`
+    /// are read (the latest run). Use `--run <id>` to target any
+    /// historical archive; `last` / `latest` / `@latest` / `prev` are
+    /// supported. `--file` / `--test` are repeatable and compose as
+    /// AND with each other (and with `--failed`). Output defaults to
+    /// JSON; pass `--format markdown` for a human-friendly version of
+    /// the same data. `--max-chars` caps the serialized output size;
+    /// when the budget is exceeded, the lowest-priority sections are
+    /// trimmed first and a truncation note is appended.
+    ///
+    /// Exit codes: 0 on success, 2 on unknown run id / missing
+    /// artifacts / parse error.
+    PackContext {
+        /// Pack only failing entries. Defaults to true when no other
+        /// filter is set; pass `--failed=false` to include every
+        /// failure regardless of the narrow selection.
+        #[arg(long, default_value_t = true)]
+        failed: bool,
+
+        /// Run id (or alias: `last`, `latest`, `@latest`, `prev`).
+        /// Without this flag the workspace-level pointers under
+        /// `.tarn/` are used.
+        #[arg(long)]
+        run: Option<String>,
+
+        /// Restrict to failures in the given file (repeatable).
+        #[arg(long, value_name = "PATH")]
+        file: Vec<String>,
+
+        /// Restrict to failures in the given test name (repeatable).
+        #[arg(long, value_name = "NAME")]
+        test: Vec<String>,
+
+        /// Output format: `json` (default) or `markdown`.
+        #[arg(long, default_value = "json")]
+        format: String,
+
+        /// Upper bound on the serialized output length, in characters.
+        /// When exceeded, lower-priority sections are trimmed first
+        /// and a truncation note is appended.
+        #[arg(long = "max-chars", default_value_t = tarn::report::pack_context::DEFAULT_MAX_CHARS)]
+        max_chars: usize,
+    },
 }
 
 fn main() {
@@ -1019,6 +1074,14 @@ fn main() {
             test.as_deref(),
             filter_category.as_deref(),
         ),
+        Commands::PackContext {
+            failed,
+            run,
+            file,
+            test,
+            format,
+            max_chars,
+        } => pack_context_command(failed, run.as_deref(), &file, &test, &format, max_chars),
     };
 
     process::exit(exit_code);
@@ -2202,6 +2265,147 @@ fn read_report_artifact<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T
         eprintln!("Error: failed to parse {}: {}", path.display(), e);
         2
     })
+}
+
+/// `tarn pack-context` — assemble a minimum remediation bundle from
+/// the persisted run artifacts and print it to stdout.
+///
+/// The command reads `summary.json` + `failures.json` mandatorily (to
+/// identify failing coordinates) and `report.json` / `state.json`
+/// opportunistically (to enrich entries with captures lineage, related
+/// steps, and the argv/env that produced the run). A missing
+/// `report.json` degrades gracefully to empty `captures.consumed_by` +
+/// `related_steps`; a missing `state.json` degrades to empty `args` and
+/// a null `env_name`.
+///
+/// Exit codes: 0 on success, 2 on unknown run id / missing artifacts /
+/// parse errors / unknown `--format`.
+fn pack_context_command(
+    failed: bool,
+    run: Option<&str>,
+    files: &[String],
+    tests: &[String],
+    format: &str,
+    max_chars: usize,
+) -> i32 {
+    let format = match format.to_ascii_lowercase().as_str() {
+        "json" => "json",
+        "markdown" | "md" => "markdown",
+        other => {
+            eprintln!(
+                "Error: unknown pack-context format '{}'. Use 'json' or 'markdown'.",
+                other
+            );
+            return 2;
+        }
+    };
+
+    let cwd = match std::env::current_dir() {
+        Ok(dir) => dir,
+        Err(e) => {
+            eprintln!("Error: failed to resolve current directory: {}", e);
+            return 2;
+        }
+    };
+    let workspace_root = config::find_project_root(&cwd).unwrap_or_else(|| cwd.clone());
+
+    // Resolve the artifact triple (summary, failures, report, state).
+    // `run_dir_opt` is `Some` when an archive directory exists; the
+    // builder uses it to populate the `artifacts` block with stable
+    // paths. The latest-run pointer path carries no run directory, so
+    // we leave `artifacts` empty in that case.
+    let (summary_path, failures_path, report_path, state_path, run_dir_opt) = match run {
+        Some(alias) => {
+            let run_id = match tarn::report::run_dir::resolve_run_id(&workspace_root, alias) {
+                Ok(id) => id,
+                Err(err) => {
+                    eprintln!("Error: {}", err);
+                    return 2;
+                }
+            };
+            let dir = tarn::report::run_dir::run_directory(&workspace_root, &run_id);
+            (
+                dir.join("summary.json"),
+                dir.join("failures.json"),
+                dir.join("report.json"),
+                dir.join("state.json"),
+                Some(dir),
+            )
+        }
+        None => {
+            let tarn_dir = workspace_root.join(".tarn");
+            (
+                tarn_dir.join("summary.json"),
+                tarn_dir.join("failures.json"),
+                tarn_dir.join("last-run.json"),
+                tarn_dir.join("state.json"),
+                None,
+            )
+        }
+    };
+
+    let summary: tarn::report::summary::SummaryDoc = match read_report_artifact(&summary_path) {
+        Ok(s) => s,
+        Err(code) => return code,
+    };
+    let failures: tarn::report::summary::FailuresDoc = match read_report_artifact(&failures_path) {
+        Ok(f) => f,
+        Err(code) => return code,
+    };
+
+    // `report.json` / `state.json` are best-effort enrichment. A parse
+    // error here still blocks execution (exit 2) because silently
+    // ignoring a corrupt artifact would hide real issues; a missing
+    // file, by contrast, is normal for older runs.
+    let report_value: Option<serde_json::Value> = if report_path.is_file() {
+        match std::fs::read(&report_path).and_then(|raw| {
+            serde_json::from_slice(&raw)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+        }) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                eprintln!("Error: failed to parse {}: {}", report_path.display(), e);
+                return 2;
+            }
+        }
+    } else {
+        None
+    };
+    let state_doc: Option<tarn::report::state_writer::StateDoc> = if state_path.is_file() {
+        match std::fs::read(&state_path).and_then(|raw| {
+            serde_json::from_slice(&raw)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+        }) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                eprintln!("Error: failed to parse {}: {}", state_path.display(), e);
+                return 2;
+            }
+        }
+    } else {
+        None
+    };
+
+    let inputs = tarn::report::pack_context::PackContextInputs {
+        summary: &summary,
+        failures: &failures,
+        report: report_value.as_ref(),
+        state: state_doc.as_ref(),
+        run_dir: run_dir_opt.as_deref(),
+        file_filters: files,
+        test_filters: tests,
+        failed_only: failed,
+        workspace_root: &workspace_root,
+    };
+    let mut pack = tarn::report::pack_context::build(&inputs);
+
+    let output = match format {
+        "markdown" => tarn::report::pack_context::render_markdown(&mut pack, max_chars),
+        _ => tarn::report::pack_context::render_json(&mut pack, max_chars),
+    };
+    print!("{}", output);
+
+    0
 }
 
 /// `tarn rerun --failed [--run <id>]` — resolve the failing subset of a

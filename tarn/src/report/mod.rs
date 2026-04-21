@@ -14,6 +14,7 @@ pub mod json;
 pub mod json_parse;
 pub mod junit;
 pub mod llm;
+pub mod pack_context;
 pub mod progress;
 pub mod redaction;
 pub mod rerun;

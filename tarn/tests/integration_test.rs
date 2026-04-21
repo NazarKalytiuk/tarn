@@ -7473,3 +7473,321 @@ tests:
     assert_eq!(first_action["suggestion"], "$.request.uuid");
     assert_eq!(first_action["confidence"], "high");
 }
+
+// ============================================================================
+// NAZ-414: tarn pack-context — minimum remediation bundle for agents
+// ============================================================================
+
+/// A file where one test fails with shape drift that also cascades
+/// into a downstream capture consumer. `tarn pack-context --failed`
+/// must surface both the drift diagnosis and the cascade fallout on
+/// the drift entry so an agent can make the next edit directly.
+#[test]
+fn pack_context_bundles_drift_failure_with_cascade_fallout() {
+    let server = FixedBodyServer::start(r#"{"request": {"uuid": "abc-123"}}"#);
+    let dir = TempDir::new().unwrap();
+    let test_file = write_test_file(
+        &dir,
+        "pack-drift.tarn.yaml",
+        &format!(
+            r#"
+name: Pack drift
+tests:
+  create_then_fetch:
+    steps:
+      - name: create_stage
+        request:
+          method: POST
+          url: "{base}/stages"
+        capture:
+          stage_id: "$.uuid"
+      - name: fetch_stage
+        request:
+          method: GET
+          url: "{base}/stages/{{{{ capture.stage_id }}}}"
+"#,
+            base = server.base_url()
+        ),
+    );
+
+    let run = tarn()
+        .args(["run", &test_file])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(run.status.code().unwrap() != 0);
+
+    let output = tarn()
+        .args(["pack-context", "--format", "json"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let pack: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+
+    assert_eq!(pack["schema_version"], 1);
+    let entries = pack["entries"].as_array().unwrap();
+    // The primary drift entry must exist; the cascade fallout is
+    // folded into `related_steps` on that entry, not as a separate
+    // top-level entry.
+    let drift_entry = entries
+        .iter()
+        .find(|e| e["step"] == "create_stage")
+        .expect("drift entry present");
+    assert_eq!(drift_entry["test"], "create_then_fetch");
+    // Shape diagnosis attached.
+    let shape = &drift_entry["failure"]["response_shape_mismatch"];
+    assert_eq!(shape["expected_path"], "$.uuid");
+    assert!(
+        shape["candidate_fixes"][0]["path"]
+            .as_str()
+            .unwrap()
+            .contains("$.request.uuid"),
+        "high-confidence candidate surfaced on the drift entry"
+    );
+    // Blocked captures list the missing path derived from the
+    // diagnosis so an agent knows which capture stopped producing.
+    let blocked = drift_entry["captures"]["blocked"].as_array().unwrap();
+    assert!(!blocked.is_empty(), "blocked captures populated for drift");
+    assert_eq!(blocked[0]["missing_path"], "$.uuid");
+    // Related steps surface the downstream cascade.
+    let related = drift_entry["related_steps"].as_array().unwrap();
+    assert!(
+        related.iter().any(|r| r["step"] == "fetch_stage"),
+        "downstream cascade step listed as related: {:?}",
+        related
+    );
+}
+
+/// `tarn pack-context --run last` and `tarn pack-context --run <id>`
+/// must read the same archive and produce the same bundle (barring the
+/// `generated_at` timestamp, which we strip before comparing).
+#[test]
+fn pack_context_last_and_explicit_run_id_produce_same_bundle() {
+    let server = DemoServer::start();
+    let dir = TempDir::new().unwrap();
+    let test_file = write_test_file(
+        &dir,
+        "pack-ident.tarn.yaml",
+        &format!(
+            r#"
+name: Pack ident
+steps:
+  - name: bad
+    request:
+      method: GET
+      url: "{base}/health"
+    assert:
+      status: 599
+"#,
+            base = server.base_url()
+        ),
+    );
+    let run = tarn()
+        .args(["run", &test_file])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(run.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&run.stderr).to_string();
+    let run_id = run_id_from_stderr(&stderr);
+
+    let last = tarn()
+        .args(["pack-context", "--run", "last", "--format", "json"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let explicit = tarn()
+        .args(["pack-context", "--run", &run_id, "--format", "json"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(last.status.code(), Some(0));
+    assert_eq!(explicit.status.code(), Some(0));
+
+    let mut a: serde_json::Value = serde_json::from_slice(&last.stdout).unwrap();
+    let mut b: serde_json::Value = serde_json::from_slice(&explicit.stdout).unwrap();
+    // `generated_at` is an RFC3339 timestamp stamped at render time —
+    // two back-to-back invocations will differ by milliseconds. The
+    // rest of the envelope must be byte-identical.
+    a.as_object_mut().unwrap().remove("generated_at");
+    b.as_object_mut().unwrap().remove("generated_at");
+    assert_eq!(
+        a, b,
+        "pack-context must be deterministic across --run last / --run <id>"
+    );
+    assert_eq!(a["run_id"].as_str(), Some(run_id.as_str()));
+}
+
+/// `--test NAME` narrows the bundle to a single test. A run with two
+/// failing tests must emit only the requested one.
+#[test]
+fn pack_context_test_filter_narrows_to_single_failure() {
+    let server = DemoServer::start();
+    let dir = TempDir::new().unwrap();
+    let test_file = write_test_file(
+        &dir,
+        "pack-narrow.tarn.yaml",
+        &format!(
+            r#"
+name: Pack narrow
+tests:
+  alpha:
+    steps:
+      - name: bad_a
+        request:
+          method: GET
+          url: "{base}/health"
+        assert:
+          status: 599
+  beta:
+    steps:
+      - name: bad_b
+        request:
+          method: GET
+          url: "{base}/health"
+        assert:
+          status: 599
+"#,
+            base = server.base_url()
+        ),
+    );
+    let run = tarn()
+        .args(["run", &test_file])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(run.status.code(), Some(1));
+
+    let output = tarn()
+        .args(["pack-context", "--test", "alpha", "--format", "json"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    let pack: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let entries = pack["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 1, "filter must narrow to one entry");
+    assert_eq!(entries[0]["test"], "alpha");
+}
+
+/// When the source file is edited after the run, the snippet extractor
+/// must warn and omit the snippet rather than blowing up, so the rest
+/// of the entry is still useful.
+#[test]
+fn pack_context_warns_when_source_changed_since_run() {
+    let server = DemoServer::start();
+    let dir = TempDir::new().unwrap();
+    let test_file = write_test_file(
+        &dir,
+        "pack-edited.tarn.yaml",
+        &format!(
+            r#"
+name: Pack edited
+steps:
+  - name: failing
+    request:
+      method: GET
+      url: "{base}/health"
+    assert:
+      status: 599
+"#,
+            base = server.base_url()
+        ),
+    );
+    let run = tarn()
+        .args(["run", &test_file])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(run.status.code(), Some(1));
+
+    // Rewrite the source so the failing step name no longer exists.
+    fs::write(
+        &test_file,
+        format!(
+            r#"
+name: Pack edited
+steps:
+  - name: different_name
+    request:
+      method: GET
+      url: "{base}/health"
+    assert:
+      status: 200
+"#,
+            base = server.base_url()
+        ),
+    )
+    .unwrap();
+
+    let output = tarn()
+        .args(["pack-context", "--format", "json"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    let pack: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let entry = &pack["entries"][0];
+    assert!(
+        entry["yaml_snippet"].is_null() || !entry["yaml_snippet"].is_string(),
+        "snippet must be omitted when the step is gone from source"
+    );
+    assert_eq!(
+        entry["yaml_snippet_warning"].as_str(),
+        Some("source changed since run"),
+        "warning must be present: {:?}",
+        entry
+    );
+    // Rest of the entry must still be useful.
+    assert_eq!(entry["failure"]["response"]["status"], 200);
+    assert!(entry["rerun"]["command"].is_string());
+}
+
+/// Markdown mode must exit 0 on a clean run and emit a minimal
+/// "no failures" section.
+#[test]
+fn pack_context_markdown_on_clean_run_emits_no_failures_section() {
+    let server = DemoServer::start();
+    let dir = TempDir::new().unwrap();
+    let test_file = write_test_file(
+        &dir,
+        "pack-clean.tarn.yaml",
+        &format!(
+            r#"
+name: Pack clean
+steps:
+  - name: ok
+    request:
+      method: GET
+      url: "{base}/health"
+    assert:
+      status: 200
+"#,
+            base = server.base_url()
+        ),
+    );
+    let run = tarn()
+        .args(["run", &test_file])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(run.status.code(), Some(0));
+
+    let output = tarn()
+        .args(["pack-context", "--format", "markdown"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("# tarn pack-context"),
+        "markdown heading present: {stdout}"
+    );
+    assert!(
+        stdout.contains("No failing entries"),
+        "minimal no-failures section emitted: {stdout}"
+    );
+}

@@ -208,6 +208,35 @@
     or another stdout-bound non-JSON format with exit code 2.
     Payload is `schema_version: 1` so MCP / agent clients can depend
     on the envelope.
+  - **Minimum remediation bundles `tarn pack-context` (NAZ-414).**
+    New CLI subcommand that reads a run's persisted `summary.json` +
+    `failures.json` (and opportunistically `report.json` / `state.json`)
+    and emits a compact, deterministic payload carrying the same
+    small bundle of context an agent needs after a failed run: failed
+    YAML snippets (re-extracted from source with the parser's line
+    locations so the exact failing step block is surfaced verbatim
+    with two lines of leading context, capped at 40 lines), request
+    and response excerpts for only the failing steps, captures
+    lineage (produced by the failing step, `consumed_by` later steps
+    via `{{ capture.X }}` interpolation, `blocked` from cascade
+    assertions and shape-drift diagnoses), related same-test cascade
+    fallout, and a rerun command + selector per entry. `--failed`
+    (default), `--file`, and `--test` filters compose as AND and are
+    repeatable. `--run <id>` reads any historical archive (`last` /
+    `latest` / `@latest` / `prev` aliases honored); without it the
+    workspace-level pointers under `.tarn/` are used. `--format json`
+    (default) emits a stable envelope (`schema_version: 1`);
+    `--format markdown` renders the same data as headings + fenced
+    YAML + bullet lists. `--max-chars N` caps serialized output
+    (default 16000) and trims lowest-priority sections first
+    (markdown-only snippet stripping past entry 3 → drop
+    `consumed_by` past 3 per entry → drop `related_steps` past 3 per
+    entry → truncate response bodies → drop entries past the 10th)
+    with a trailing `notes` entry pointing to the full `report.json`
+    when anything was cut. Source files edited since the run degrade
+    gracefully with a `yaml_snippet_warning: "source changed since
+    run"` instead of blocking the whole command. Exit codes: 0 on
+    success, 2 on unknown run id / missing artifacts / parse error.
 
 ## 0.9.0 — UUID version assertions & generators, basic faker with seeded RNG
 
