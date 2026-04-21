@@ -585,6 +585,80 @@ enum Commands {
         #[arg(long = "fixture-retention", value_name = "N", default_value_t = tarn::fixtures::DEFAULT_RETENTION)]
         fixture_retention: usize,
     },
+
+    /// Inspect a prior run's report at run, file, test, or step level (NAZ-405).
+    ///
+    /// Loads `<workspace>/.tarn/runs/<run_id>/report.json`. `run_id`
+    /// supports the aliases `last` / `latest` / `@latest` (most recent
+    /// archive) and `prev` (the one before latest). Use `target` to
+    /// drill down: `FILE`, `FILE::TEST`, or `FILE::TEST::STEP`. The
+    /// step view is the canonical "open a failing step without parsing
+    /// the whole JSON" path.
+    ///
+    /// Exit codes: 0 on success, 2 on unknown run id / missing file /
+    /// parse error. Pass `--fail-on-failure` to make the command
+    /// return 1 when the inspected entity is failing (useful in CI
+    /// smoke tests that want a non-zero code without grepping output).
+    Inspect {
+        /// Run id (or alias: `last`, `latest`, `@latest`, `prev`).
+        run_id: String,
+
+        /// Optional drill-down target: `FILE`, `FILE::TEST`, or
+        /// `FILE::TEST::STEP`. Omit for a run-level summary.
+        target: Option<String>,
+
+        /// Output format: `human` (default) or `json`.
+        #[arg(long, default_value = "human")]
+        format: String,
+
+        /// Filter the run-level list to failed files/tests that carry
+        /// a failure in this category (e.g. `assertion_failed`).
+        /// Ignored on file / test / step targets.
+        #[arg(long = "filter-category", value_name = "CATEGORY")]
+        filter_category: Option<String>,
+
+        /// Exit 1 when the inspected entity (run / file / test / step)
+        /// is failing. Disabled by default so `tarn inspect` stays
+        /// idempotent on success/failure alike.
+        #[arg(long = "fail-on-failure")]
+        fail_on_failure: bool,
+    },
+
+    /// Compare two runs' summary + failure sets (NAZ-405).
+    ///
+    /// Loads `summary.json` + `failures.json` for both `run_a` and
+    /// `run_b`. Aliases `last` / `prev` are supported. Emits a totals
+    /// delta plus a failure-set delta bucketed into `new`, `fixed`,
+    /// and `persistent` using the same fingerprinting that
+    /// `tarn failures` uses, so cascade noise collapses instead of
+    /// double-counting.
+    ///
+    /// Exit codes: 0 on success, 2 on unknown run id / parse error.
+    /// The command never returns a "regressed" code — inspect the
+    /// JSON or grep the human output for `new:` to decide.
+    Diff {
+        /// Baseline run id (or alias: `last`, `prev`).
+        run_a: String,
+        /// Comparison run id (or alias: `last`, `prev`).
+        run_b: String,
+
+        /// Output format: `human` (default) or `json`.
+        #[arg(long, default_value = "human")]
+        format: String,
+
+        /// Only consider failures whose root cause file matches.
+        #[arg(long, value_name = "PATH")]
+        file: Option<String>,
+
+        /// Only consider failures whose root cause test matches.
+        #[arg(long, value_name = "NAME")]
+        test: Option<String>,
+
+        /// Only consider failures in this category
+        /// (e.g. `assertion_failed`).
+        #[arg(long = "filter-category", value_name = "CATEGORY")]
+        filter_category: Option<String>,
+    },
 }
 
 fn main() {
@@ -821,6 +895,34 @@ fn main() {
             no_last_run_json,
             no_fixtures,
             fixture_retention,
+        ),
+        Commands::Inspect {
+            run_id,
+            target,
+            format,
+            filter_category,
+            fail_on_failure,
+        } => inspect_command(
+            &run_id,
+            target.as_deref(),
+            &format,
+            filter_category.as_deref(),
+            fail_on_failure,
+        ),
+        Commands::Diff {
+            run_a,
+            run_b,
+            format,
+            file,
+            test,
+            filter_category,
+        } => diff_command(
+            &run_a,
+            &run_b,
+            &format,
+            file.as_deref(),
+            test.as_deref(),
+            filter_category.as_deref(),
         ),
     };
 
@@ -1871,6 +1973,225 @@ fn announce_rerun_selection(
     if total > MAX_ENTRIES {
         eprintln!("  …and {} more", total - MAX_ENTRIES);
     }
+}
+
+/// `tarn inspect <run_id> [target]` (NAZ-405). Loads a prior run's
+/// `report.json` and renders the requested view. Pure reporting — no
+/// HTTP or filesystem side effects beyond reading the archive.
+fn inspect_command(
+    run_id: &str,
+    target: Option<&str>,
+    format: &str,
+    filter_category: Option<&str>,
+    fail_on_failure: bool,
+) -> i32 {
+    let format = match format.to_ascii_lowercase().as_str() {
+        "human" => "human",
+        "json" => "json",
+        other => {
+            eprintln!(
+                "Error: unknown inspect format '{}'. Use 'human' or 'json'.",
+                other
+            );
+            return 2;
+        }
+    };
+
+    if let Some(cat) = filter_category {
+        if let Err(msg) = tarn::report::inspect::validate_category(cat) {
+            eprintln!("Error: {}", msg);
+            return 2;
+        }
+    }
+
+    let cwd = match std::env::current_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("Error: failed to resolve current directory: {}", e);
+            return 2;
+        }
+    };
+    let workspace_root = config::find_project_root(&cwd).unwrap_or_else(|| cwd.clone());
+
+    let source = match tarn::report::inspect::resolve_source(&workspace_root, run_id) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            return 2;
+        }
+    };
+
+    let report = match tarn::report::inspect::load_report(&source) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            return 2;
+        }
+    };
+
+    let parsed_target = match tarn::report::inspect::Target::parse(target) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            return 2;
+        }
+    };
+
+    let view = match tarn::report::inspect::build_view(
+        &source,
+        &report,
+        &parsed_target,
+        filter_category,
+    ) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            return 2;
+        }
+    };
+
+    let output = match format {
+        "json" => serde_json::to_string_pretty(&view).unwrap_or_default(),
+        _ => tarn::report::inspect::render_human(&view),
+    };
+    print!("{}", output);
+    if format == "json" {
+        println!();
+    }
+
+    if fail_on_failure && view_is_failing(&view) {
+        1
+    } else {
+        0
+    }
+}
+
+/// Whether the inspected entity is in a failing state. The run-level
+/// view uses `exit_code`; narrower views read the embedded `status`.
+fn view_is_failing(view: &serde_json::Value) -> bool {
+    let target = view
+        .get("target")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("run");
+    match target {
+        "run" => view
+            .get("exit_code")
+            .and_then(serde_json::Value::as_i64)
+            .map(|c| c != 0)
+            .unwrap_or(false),
+        "file" => {
+            view.get("file")
+                .and_then(|f| f.get("status"))
+                .and_then(serde_json::Value::as_str)
+                == Some("FAILED")
+        }
+        "test" => {
+            view.get("test")
+                .and_then(|t| t.get("status"))
+                .and_then(serde_json::Value::as_str)
+                == Some("FAILED")
+        }
+        "step" => {
+            view.get("step")
+                .and_then(|s| s.get("status"))
+                .and_then(serde_json::Value::as_str)
+                == Some("FAILED")
+        }
+        _ => false,
+    }
+}
+
+/// `tarn diff <run_a> <run_b>` (NAZ-405). Loads `summary.json` and
+/// `failures.json` from both sides and emits bucketed deltas.
+fn diff_command(
+    run_a: &str,
+    run_b: &str,
+    format: &str,
+    file: Option<&str>,
+    test: Option<&str>,
+    filter_category: Option<&str>,
+) -> i32 {
+    let format = match format.to_ascii_lowercase().as_str() {
+        "human" => "human",
+        "json" => "json",
+        other => {
+            eprintln!(
+                "Error: unknown diff format '{}'. Use 'human' or 'json'.",
+                other
+            );
+            return 2;
+        }
+    };
+    if let Some(cat) = filter_category {
+        if let Err(msg) = tarn::report::inspect::validate_category(cat) {
+            eprintln!("Error: {}", msg);
+            return 2;
+        }
+    }
+
+    let cwd = match std::env::current_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("Error: failed to resolve current directory: {}", e);
+            return 2;
+        }
+    };
+    let workspace_root = config::find_project_root(&cwd).unwrap_or_else(|| cwd.clone());
+
+    let from_side = match tarn::report::diff::resolve_side(&workspace_root, run_a) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            return 2;
+        }
+    };
+    let to_side = match tarn::report::diff::resolve_side(&workspace_root, run_b) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            return 2;
+        }
+    };
+
+    let (from_summary, from_failures) = match tarn::report::diff::load_side(&from_side) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            return 2;
+        }
+    };
+    let (to_summary, to_failures) = match tarn::report::diff::load_side(&to_side) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            return 2;
+        }
+    };
+
+    let filters = tarn::report::diff::DiffFilters {
+        file,
+        test,
+        category: filter_category,
+    };
+    let view = tarn::report::diff::build_diff(
+        &from_side,
+        &from_summary,
+        &from_failures,
+        &to_side,
+        &to_summary,
+        &to_failures,
+        &filters,
+    );
+
+    let output = match format {
+        "json" => tarn::report::diff::render_json(&view),
+        _ => tarn::report::diff::render_human(&view),
+    };
+    print!("{}", output);
+    if format == "json" {
+        println!();
+    }
+    0
 }
 
 fn parse_output_targets(specs: &[String]) -> Result<Vec<OutputTarget>, String> {

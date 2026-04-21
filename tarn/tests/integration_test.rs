@@ -5970,3 +5970,388 @@ fn rerun_without_failed_flag_exits_two() {
         stderr
     );
 }
+
+// ============================================================================
+// NAZ-405: tarn inspect + tarn diff — drill-down and run comparison
+// ============================================================================
+
+/// Run a mixed pass/fail workload and inspect the resulting archive at
+/// the run level. The JSON output must carry the expected counts and
+/// list the failing file so a caller can drill down without opening the
+/// full report.
+#[test]
+fn inspect_run_level_json_reports_failed_file_and_counts() {
+    let server = DemoServer::start();
+    let dir = TempDir::new().unwrap();
+    let test_file = write_test_file(
+        &dir,
+        "mixed.tarn.yaml",
+        &format!(
+            r#"
+name: Mixed
+env:
+  base_url: "{base}"
+tests:
+  happy:
+    steps:
+      - name: health_ok
+        request:
+          method: GET
+          url: "{{{{ env.base_url }}}}/health"
+        assert:
+          status: 200
+  sad:
+    steps:
+      - name: health_bad
+        request:
+          method: GET
+          url: "{{{{ env.base_url }}}}/health"
+        assert:
+          status: 418
+"#,
+            base = server.base_url()
+        ),
+    );
+
+    let first = tarn()
+        .args(["run", &test_file])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(first.status.code(), Some(1));
+    let run_id = run_id_from_stderr(&String::from_utf8_lossy(&first.stderr));
+
+    let inspect = tarn()
+        .args(["inspect", &run_id, "--format", "json"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(inspect.status.code(), Some(0));
+    let view: serde_json::Value = serde_json::from_slice(&inspect.stdout).unwrap();
+    assert_eq!(view["target"], "run");
+    assert_eq!(view["run_id"], run_id);
+    assert_eq!(view["failed"]["tests"], 1);
+    assert_eq!(view["failed"]["files"], 1);
+    let failed_files = view["failed_files"].as_array().unwrap();
+    assert_eq!(failed_files.len(), 1);
+    assert!(failed_files[0]["file"]
+        .as_str()
+        .unwrap()
+        .ends_with("mixed.tarn.yaml"));
+}
+
+/// `tarn inspect <id> FILE::TEST::STEP` must surface the step's
+/// request, response, and assertion details — the canonical "open a
+/// failing step without parsing the whole report" path from the
+/// acceptance criteria.
+#[test]
+fn inspect_step_level_exposes_request_response_and_assertions() {
+    let server = DemoServer::start();
+    let dir = TempDir::new().unwrap();
+    let test_file = write_test_file(
+        &dir,
+        "bad.tarn.yaml",
+        &format!(
+            r#"
+name: Bad
+env:
+  base_url: "{base}"
+tests:
+  sad:
+    steps:
+      - name: boom
+        request:
+          method: GET
+          url: "{{{{ env.base_url }}}}/health"
+        assert:
+          status: 418
+"#,
+            base = server.base_url()
+        ),
+    );
+
+    let first = tarn()
+        .args(["run", &test_file])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(first.status.code(), Some(1));
+    let run_id = run_id_from_stderr(&String::from_utf8_lossy(&first.stderr));
+
+    let inspect = tarn()
+        .args([
+            "inspect",
+            &run_id,
+            &format!("{}::sad::boom", test_file),
+            "--format",
+            "json",
+        ])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(inspect.status.code(), Some(0));
+    let view: serde_json::Value = serde_json::from_slice(&inspect.stdout).unwrap();
+    assert_eq!(view["target"], "step");
+    assert_eq!(view["step"]["status"], "FAILED");
+    assert_eq!(view["step"]["request"]["method"], "GET");
+    assert_eq!(view["step"]["response"]["status"], 200);
+    let asserts = view["step"]["assertions"].as_array().unwrap();
+    assert!(asserts.iter().any(|a| a["assertion"] == "status"));
+    assert_eq!(view["step"]["failure_category"], "assertion_failed");
+}
+
+/// `tarn inspect last` must resolve to the most recent archive so the
+/// user can drill down without copy-pasting a run id.
+#[test]
+fn inspect_last_alias_targets_most_recent_archive() {
+    let server = DemoServer::start();
+    let dir = TempDir::new().unwrap();
+    let test_file = write_test_file(
+        &dir,
+        "ok.tarn.yaml",
+        &format!(
+            r#"
+name: Ok
+steps:
+  - name: ok
+    request:
+      method: GET
+      url: "{base}/health"
+    assert:
+      status: 200
+"#,
+            base = server.base_url()
+        ),
+    );
+    let run = tarn()
+        .args(["run", &test_file])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(run.status.code(), Some(0));
+    let run_id = run_id_from_stderr(&String::from_utf8_lossy(&run.stderr));
+
+    let inspect = tarn()
+        .args(["inspect", "last", "--format", "json"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(inspect.status.code(), Some(0));
+    let view: serde_json::Value = serde_json::from_slice(&inspect.stdout).unwrap();
+    assert_eq!(view["run_id"], run_id);
+}
+
+/// An unknown run id must exit 2 rather than silently falling back to
+/// the latest archive — otherwise automation that passes a stale id
+/// would inspect a different run without knowing it.
+#[test]
+fn inspect_unknown_run_id_exits_two() {
+    let dir = TempDir::new().unwrap();
+    std::fs::create_dir_all(dir.path().join(".tarn")).unwrap();
+    std::fs::write(dir.path().join("tarn.config.yaml"), "").unwrap();
+    let output = tarn()
+        .args(["inspect", "bogus-id"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("bogus-id") || stderr.contains("unknown run id"),
+        "error must point at the bad id: {}",
+        stderr
+    );
+}
+
+/// Given two runs where the 2nd fixes one failure, introduces a new
+/// one, and keeps an existing one, `tarn diff` must classify each into
+/// the right bucket (new / fixed / persistent). This matches the
+/// "improved, regressed, or shifted" acceptance criterion.
+#[test]
+fn diff_classifies_new_fixed_and_persistent_failures() {
+    let server = DemoServer::start();
+    let dir = TempDir::new().unwrap();
+
+    // Run A: two tests, one fails on /health (418), one fails asserting
+    // a missing JSONPath on /health-ish response.
+    let first_yaml = format!(
+        r#"
+name: A
+env:
+  base_url: "{base}"
+tests:
+  persistent_fail:
+    steps:
+      - name: persistent
+        request:
+          method: GET
+          url: "{{{{ env.base_url }}}}/health"
+        assert:
+          status: 418
+  fixed_later:
+    steps:
+      - name: soon_fixed
+        request:
+          method: GET
+          url: "{{{{ env.base_url }}}}/health"
+        assert:
+          status: 419
+"#,
+        base = server.base_url()
+    );
+    let path_a = write_test_file(&dir, "suite.tarn.yaml", &first_yaml);
+    let a = tarn()
+        .args(["run", &path_a])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(a.status.code(), Some(1));
+    let run_a = run_id_from_stderr(&String::from_utf8_lossy(&a.stderr));
+
+    // Run B: the `fixed_later` test is now passing, a new failure is
+    // introduced under `new_fail`, and `persistent_fail` still fails.
+    let second_yaml = format!(
+        r#"
+name: B
+env:
+  base_url: "{base}"
+tests:
+  persistent_fail:
+    steps:
+      - name: persistent
+        request:
+          method: GET
+          url: "{{{{ env.base_url }}}}/health"
+        assert:
+          status: 418
+  fixed_later:
+    steps:
+      - name: soon_fixed
+        request:
+          method: GET
+          url: "{{{{ env.base_url }}}}/health"
+        assert:
+          status: 200
+  new_fail:
+    steps:
+      - name: freshly_broken
+        request:
+          method: GET
+          url: "{{{{ env.base_url }}}}/health"
+        assert:
+          status: 420
+"#,
+        base = server.base_url()
+    );
+    std::fs::write(&path_a, second_yaml).unwrap();
+    let b = tarn()
+        .args(["run", &path_a])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(b.status.code(), Some(1));
+    let run_b = run_id_from_stderr(&String::from_utf8_lossy(&b.stderr));
+
+    let diff = tarn()
+        .args(["diff", &run_a, &run_b, "--format", "json"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        diff.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&diff.stderr)
+    );
+    let view: serde_json::Value = serde_json::from_slice(&diff.stdout).unwrap();
+    assert_eq!(view["from"]["run_id"], run_a);
+    assert_eq!(view["to"]["run_id"], run_b);
+
+    let new = view["new"].as_array().unwrap();
+    let fixed = view["fixed"].as_array().unwrap();
+    let persistent = view["persistent"].as_array().unwrap();
+    assert_eq!(
+        new.len(),
+        1,
+        "expected exactly one new failure group; view: {}",
+        view
+    );
+    assert_eq!(
+        fixed.len(),
+        1,
+        "expected exactly one fixed failure group; view: {}",
+        view
+    );
+    assert_eq!(
+        persistent.len(),
+        1,
+        "expected exactly one persistent failure group; view: {}",
+        view
+    );
+    assert_eq!(
+        view["totals_delta"]["failed_tests"], 0,
+        "tests shifted but count stayed at 2 → delta is 0; view: {}",
+        view
+    );
+}
+
+/// `tarn diff last prev` must resolve both aliases against the
+/// `.tarn/runs/` directory so users don't have to copy run ids.
+#[test]
+fn diff_last_prev_aliases_resolve_to_recent_archives() {
+    let server = DemoServer::start();
+    let dir = TempDir::new().unwrap();
+    let test_file = write_test_file(
+        &dir,
+        "simple.tarn.yaml",
+        &format!(
+            r#"
+name: simple
+steps:
+  - name: ok
+    request:
+      method: GET
+      url: "{base}/health"
+    assert:
+      status: 200
+"#,
+            base = server.base_url()
+        ),
+    );
+    let first = tarn()
+        .args(["run", &test_file])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(first.status.code(), Some(0));
+    let run_a = run_id_from_stderr(&String::from_utf8_lossy(&first.stderr));
+
+    // The run_id prefix is second-resolution, so back-to-back runs in
+    // the same second would tiebreak by the random suffix. Sleep past
+    // the boundary so lexical and chronological order agree and the
+    // `prev` / `last` aliases map unambiguously to run_a / run_b.
+    std::thread::sleep(Duration::from_millis(1100));
+    let second = tarn()
+        .args(["run", &test_file])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(second.status.code(), Some(0));
+    let run_b = run_id_from_stderr(&String::from_utf8_lossy(&second.stderr));
+    assert!(
+        run_b > run_a,
+        "lexical order must track chronological order: a={} b={}",
+        run_a,
+        run_b
+    );
+
+    let diff = tarn()
+        .args(["diff", "prev", "last", "--format", "json"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(diff.status.code(), Some(0));
+    let view: serde_json::Value = serde_json::from_slice(&diff.stdout).unwrap();
+    assert_eq!(view["from"]["run_id"], run_a);
+    assert_eq!(view["to"]["run_id"], run_b);
+}

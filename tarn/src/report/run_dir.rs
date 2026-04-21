@@ -52,6 +52,75 @@ pub fn ensure_run_directory(workspace_root: &Path, run_id: &str) -> io::Result<P
     Ok(dir)
 }
 
+/// Resolve a user-supplied run identifier alias to a concrete `run_id`
+/// that matches a directory under `<workspace_root>/.tarn/runs/`.
+///
+/// Supported aliases:
+/// - `last` / `latest` / `@latest` → the most recent archive
+///   (lexically greatest `run_id`; the timestamp prefix keeps lexical
+///   and chronological order aligned).
+/// - `prev` → the archive immediately preceding the latest.
+/// - Any other string → treated as a literal `run_id`; returned
+///   verbatim only when the corresponding directory exists.
+///
+/// Returns `io::Error` with `NotFound` when the alias cannot be
+/// satisfied (no archives on disk, alias mismatch, unknown id). The
+/// caller is expected to map that to exit code 2.
+pub fn resolve_run_id(workspace_root: &Path, alias: &str) -> io::Result<String> {
+    let lower = alias.to_ascii_lowercase();
+    match lower.as_str() {
+        "last" | "latest" | "@latest" => nth_run_id_from_end(workspace_root, 0),
+        "prev" | "previous" => nth_run_id_from_end(workspace_root, 1),
+        _ => {
+            let dir = run_directory(workspace_root, alias);
+            if dir.is_dir() {
+                Ok(alias.to_string())
+            } else {
+                Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!(
+                        "unknown run id '{}' (no directory at {})",
+                        alias,
+                        dir.display()
+                    ),
+                ))
+            }
+        }
+    }
+}
+
+/// Return the N-th most recent `run_id` under `.tarn/runs/` (0 = latest).
+/// Names are sorted lexicographically descending; since `run_id` carries
+/// a `YYYYmmdd-HHMMSS-xxxxxx` prefix, lexical order equals chronological
+/// order.
+fn nth_run_id_from_end(workspace_root: &Path, offset: usize) -> io::Result<String> {
+    let runs_dir = workspace_root.join(".tarn").join("runs");
+    if !runs_dir.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("no run archives at {}", runs_dir.display()),
+        ));
+    }
+    let mut names: Vec<String> = std::fs::read_dir(&runs_dir)?
+        .filter_map(|entry| entry.ok())
+        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        .filter_map(|e| e.file_name().into_string().ok())
+        .collect();
+    names.sort();
+    names.reverse();
+    names.into_iter().nth(offset).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            format!(
+                "no run at offset {} under {} ({} runs available)",
+                offset,
+                runs_dir.display(),
+                offset
+            ),
+        )
+    })
+}
+
 /// Copy a freshly-written run artifact (e.g. `report.json`) to a
 /// pointer path (e.g. `.tarn/last-run.json`) so legacy consumers that
 /// read the pointer path keep working. The pointer is overwritten
@@ -123,6 +192,67 @@ mod tests {
             !pointer.with_extension("tmp").exists(),
             "tmp must be renamed away"
         );
+    }
+
+    #[test]
+    fn resolve_run_id_last_returns_lexically_greatest_archive() {
+        let tmp = TempDir::new().unwrap();
+        for id in ["20260101-000000-aaaaaa", "20260102-000000-bbbbbb"] {
+            ensure_run_directory(tmp.path(), id).unwrap();
+        }
+        let resolved = resolve_run_id(tmp.path(), "last").unwrap();
+        assert_eq!(resolved, "20260102-000000-bbbbbb");
+        assert_eq!(resolve_run_id(tmp.path(), "latest").unwrap(), resolved);
+        assert_eq!(resolve_run_id(tmp.path(), "@latest").unwrap(), resolved);
+    }
+
+    #[test]
+    fn resolve_run_id_prev_returns_one_before_latest() {
+        let tmp = TempDir::new().unwrap();
+        for id in [
+            "20260101-000000-aaaaaa",
+            "20260102-000000-bbbbbb",
+            "20260103-000000-cccccc",
+        ] {
+            ensure_run_directory(tmp.path(), id).unwrap();
+        }
+        assert_eq!(
+            resolve_run_id(tmp.path(), "prev").unwrap(),
+            "20260102-000000-bbbbbb"
+        );
+    }
+
+    #[test]
+    fn resolve_run_id_bare_id_returns_verbatim_when_archive_exists() {
+        let tmp = TempDir::new().unwrap();
+        ensure_run_directory(tmp.path(), "20260101-000000-abcdef").unwrap();
+        assert_eq!(
+            resolve_run_id(tmp.path(), "20260101-000000-abcdef").unwrap(),
+            "20260101-000000-abcdef"
+        );
+    }
+
+    #[test]
+    fn resolve_run_id_unknown_id_returns_not_found() {
+        let tmp = TempDir::new().unwrap();
+        ensure_run_directory(tmp.path(), "20260101-000000-abcdef").unwrap();
+        let err = resolve_run_id(tmp.path(), "nope").unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn resolve_run_id_last_without_any_archives_errors() {
+        let tmp = TempDir::new().unwrap();
+        let err = resolve_run_id(tmp.path(), "last").unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn resolve_run_id_prev_with_only_one_archive_errors() {
+        let tmp = TempDir::new().unwrap();
+        ensure_run_directory(tmp.path(), "20260101-000000-abcdef").unwrap();
+        let err = resolve_run_id(tmp.path(), "prev").unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
     }
 
     #[test]

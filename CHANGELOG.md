@@ -59,6 +59,27 @@
     archive. Source lookup is anchored at the current workspace root;
     `cd` into the project before invoking the command if you have
     moved away.
+  - **`tarn inspect` and `tarn diff` for run drill-down and
+    comparison (NAZ-405).** `tarn inspect <run_id> [target]` loads
+    `.tarn/runs/<run_id>/report.json` and renders a run / file /
+    test / step view depending on the `FILE[::TEST[::STEP]]` address
+    passed — so opening a single failing step no longer needs `jq`
+    against the full report. Run id aliases `last` / `latest` /
+    `@latest` / `prev` are supported (`prev` resolves to the archive
+    immediately before the latest). The run-level view accepts
+    `--filter-category <cat>` to narrow the listed failed files to
+    those carrying a failure in the given category; pass
+    `--fail-on-failure` to exit 1 when the inspected entity is
+    failing. `tarn diff <run_a> <run_b>` loads both runs'
+    `summary.json` and `failures.json`, computes the totals delta,
+    and classifies failure fingerprints (reusing the grouping
+    machinery from `tarn failures`) into `new` (only in B), `fixed`
+    (only in A), and `persistent` (both). `--file`, `--test`, and
+    `--filter-category` compose additively against the root-cause
+    coordinates so diffs can be scoped to a single suite. Both
+    subcommands support `--format human|json` with a stable JSON
+    envelope (`schema_version` 1). Exit codes: 0 on success, 2 on
+    unknown run id / missing artifact / parse error.
 
 ## 0.9.0 — UUID version assertions & generators, basic faker with seeded RNG
 
