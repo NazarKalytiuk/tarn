@@ -747,23 +747,21 @@ fn emit_step_events(
                         &missing,
                     );
                 }
-                FailureCategory::Timeout => {
-                    if is_poll_timeout(result) {
-                        let (attempts, last_status) = poll_metadata(result);
-                        events.emit_polling_timeout(
-                            crate::report::event_stream::StepCoords {
-                                file: file_path,
-                                test: test_name,
-                                step: &result.name,
-                                step_index: index,
-                            },
-                            crate::report::event_stream::PollingTimeoutInfo {
-                                elapsed_ms: result.duration_ms,
-                                attempts,
-                                last_status,
-                            },
-                        );
-                    }
+                FailureCategory::Timeout if is_poll_timeout(result) => {
+                    let (attempts, last_status) = poll_metadata(result);
+                    events.emit_polling_timeout(
+                        crate::report::event_stream::StepCoords {
+                            file: file_path,
+                            test: test_name,
+                            step: &result.name,
+                            step_index: index,
+                        },
+                        crate::report::event_stream::PollingTimeoutInfo {
+                            elapsed_ms: result.duration_ms,
+                            attempts,
+                            last_status,
+                        },
+                    );
                 }
                 _ => {}
             }
