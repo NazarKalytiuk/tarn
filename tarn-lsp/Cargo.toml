@@ -1,11 +1,11 @@
 [package]
 name = "tarn-lsp"
-version = "0.11.3"
+version = "0.11.4"
 edition = "2021"
 description = "Language Server Protocol implementation for Tarn .tarn.yaml test files"
 license = "MIT"
 repository = "https://github.com/NazarKalytiuk/tarn"
-homepage = "https://nazarkalytiuk.github.io/hive/"
+homepage = "https://nazarkalytiuk.github.io/tarn/"
 documentation = "https://github.com/NazarKalytiuk/tarn/blob/main/docs/TARN_LSP.md"
 readme = "../README.md"
 keywords = ["lsp", "api", "testing", "cli", "tarn"]
@@ -20,7 +20,7 @@ name = "tarn-lsp"
 path = "src/main.rs"
 
 [dependencies]
-tarn = { version = "0.11.2", path = "../tarn" }
+tarn = { version = "0.11.4", path = "../tarn" }
 lsp-server = "0.7"
 lsp-types = "0.95"
 # lsp-server uses crossbeam-channel under the hood. We depend on it

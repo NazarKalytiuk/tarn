@@ -808,26 +808,26 @@ mod tests {
 
     #[test]
     fn resolve_shell_variable() {
-        std::env::set_var("HIVE_TEST_SECRET", "s3cret");
-        let result = resolve_shell_vars("password is ${HIVE_TEST_SECRET}");
+        std::env::set_var("TARN_TEST_SECRET", "s3cret");
+        let result = resolve_shell_vars("password is ${TARN_TEST_SECRET}");
         assert_eq!(result, "password is s3cret");
-        std::env::remove_var("HIVE_TEST_SECRET");
+        std::env::remove_var("TARN_TEST_SECRET");
     }
 
     #[test]
     fn resolve_missing_shell_variable_becomes_empty() {
-        let result = resolve_shell_vars("${HIVE_NONEXISTENT_VAR}");
+        let result = resolve_shell_vars("${TARN_NONEXISTENT_VAR}");
         assert_eq!(result, "");
     }
 
     #[test]
     fn resolve_multiple_shell_variables() {
-        std::env::set_var("HIVE_TEST_A", "alpha");
-        std::env::set_var("HIVE_TEST_B", "beta");
-        let result = resolve_shell_vars("${HIVE_TEST_A} and ${HIVE_TEST_B}");
+        std::env::set_var("TARN_TEST_A", "alpha");
+        std::env::set_var("TARN_TEST_B", "beta");
+        let result = resolve_shell_vars("${TARN_TEST_A} and ${TARN_TEST_B}");
         assert_eq!(result, "alpha and beta");
-        std::env::remove_var("HIVE_TEST_A");
-        std::env::remove_var("HIVE_TEST_B");
+        std::env::remove_var("TARN_TEST_A");
+        std::env::remove_var("TARN_TEST_B");
     }
 
     #[test]

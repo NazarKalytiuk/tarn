@@ -165,7 +165,7 @@ fn asset_for(platform: Os, arch: Architecture) -> Result<(String, DownloadedFile
         }
     };
 
-    Ok((format!("hive-{os_slug}-{arch_slug}.{ext}"), archive))
+    Ok((format!("tarn-{os_slug}-{arch_slug}.{ext}"), archive))
 }
 
 zed::register_extension!(TarnExtension);

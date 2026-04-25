@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+## 0.11.4 — Rename hotfix: complete hive→tarn coverage
+
+Patch release that finishes the `hive`→`tarn` rename started in the
+NAZ-426/427/428/429/430 sequence. The bulk renames missed a handful
+of references that silently broke real functionality:
+
+- `tarn/src/update.rs` had `REPO_NAME = "hive"` hardcoded, so
+  `tarn update` was hitting `github.com/NazarKalytiuk/hive` (404)
+  instead of the renamed repo.
+- The Zed extension constructed the release-asset filename as
+  `hive-{os}-{arch}.{ext}`, but the release pipeline now publishes
+  `tarn-{os}-{arch}.{ext}`, so `tarn-lsp` could not be auto-installed
+  through the Zed extension.
+- Three Cargo.toml files (`tarn`, `tarn-lsp`, `tarn-mcp`) still
+  pointed `homepage`/`documentation` at `nazarkalytiuk.github.io/hive/`.
+- `scripts/release/render-homebrew-formula.sh` rendered all five
+  download URLs against `github.com/NazarKalytiuk/hive`, so the
+  generated formula would have produced 404s.
+- Five `examples/demo-server/*.tarn.yaml` files still referenced
+  the schema at `raw.githubusercontent.com/NazarKalytiuk/hive/main/...`.
+- Three documentation surfaces (`docs/TARN_LSP.md`,
+  `docs/site/tarn-lsp.html`, the Claude Code plugin README) still
+  said "the hive repo".
+- Test-only env-var names in `tarn/src/env.rs` (`HIVE_TEST_*`) were
+  renamed to `TARN_TEST_*` for consistency.
+
+`HIVE_INSTALL_DIR` is still honored in `install.sh` as a documented
+backward-compatible alias for `TARN_INSTALL_DIR`.
+
 ## 0.11.2 — Release-pipeline patch for 0.11.0
 
 Hot-fix release for the broken 0.11.0 publish pipeline. Functionally

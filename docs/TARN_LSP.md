@@ -65,10 +65,10 @@ cargo install tarn-lsp
 
 The 0.6.2 release was the first Tarn release to publish `tarn-lsp` to crates.io (see `CHANGELOG.md`). After install, `which tarn-lsp` should print a path inside `~/.cargo/bin/`. That binary is what every LSP client below spawns.
 
-If you are working from a local checkout of the hive repo — for example, hacking on the server itself — you can install directly from the workspace instead:
+If you are working from a local checkout of the tarn repo — for example, hacking on the server itself — you can install directly from the workspace instead:
 
 ```bash
-# from the root of the hive repo
+# from the root of the tarn repo
 cargo install --path tarn-lsp
 ```
 

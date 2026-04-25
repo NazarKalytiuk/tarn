@@ -1,12 +1,12 @@
 [package]
 name = "tarn-mcp"
-version = "0.11.3"
+version = "0.11.4"
 edition = "2021"
 description = "MCP server for Tarn API testing tool"
 license = "MIT"
 repository = "https://github.com/NazarKalytiuk/tarn"
-homepage = "https://nazarkalytiuk.github.io/hive/"
-documentation = "https://nazarkalytiuk.github.io/hive/mcp.html"
+homepage = "https://nazarkalytiuk.github.io/tarn/"
+documentation = "https://nazarkalytiuk.github.io/tarn/mcp.html"
 readme = "../README.md"
 keywords = ["mcp", "api", "testing", "cli"]
 categories = ["command-line-utilities", "development-tools::testing"]
@@ -20,7 +20,7 @@ name = "tarn-mcp"
 path = "src/main.rs"
 
 [dependencies]
-tarn = { version = "0.11.2", path = "../tarn" }
+tarn = { version = "0.11.4", path = "../tarn" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # `chrono` is re-used for run_id generation + run artifact timestamps.

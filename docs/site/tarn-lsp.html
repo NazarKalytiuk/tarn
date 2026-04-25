@@ -53,7 +53,7 @@
               <pre><span class="prompt">$</span> cargo install tarn-lsp</pre>
             </div>
             <p><code class="ic">tarn-lsp</code> is published on crates.io, so a single <code class="ic">cargo install</code> is enough. After it finishes, <code class="ic">which tarn-lsp</code> should print a path inside <code class="ic">~/.cargo/bin/</code>. That binary is what every LSP client below spawns over stdio.</p>
-            <p>From a checkout of the hive repo, use <code class="ic">cargo install --path tarn-lsp</code> to install the workspace copy, or <code class="ic">cargo build -p tarn-lsp --release</code> for pure local development with no install step at all. The binary lives at <code class="ic">./target/release/tarn-lsp</code> in that case &mdash; point your LSP client directly at the absolute path.</p>
+            <p>From a checkout of the tarn repo, use <code class="ic">cargo install --path tarn-lsp</code> to install the workspace copy, or <code class="ic">cargo build -p tarn-lsp --release</code> for pure local development with no install step at all. The binary lives at <code class="ic">./target/release/tarn-lsp</code> in that case &mdash; point your LSP client directly at the absolute path.</p>
 
             <h2 id="language-features">Language features</h2>
             <p>Every feature below is a full LSP request handler that reuses the in-process <code class="ic">tarn</code> library, so the server never forks or re-implements parser, schema, or interpolation logic.</p>

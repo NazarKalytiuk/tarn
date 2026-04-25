@@ -2,7 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 
 const REPO_OWNER: &str = "NazarKalytiuk";
-const REPO_NAME: &str = "hive";
+const REPO_NAME: &str = "tarn";
 
 /// Information about an available update.
 pub struct UpdateInfo {

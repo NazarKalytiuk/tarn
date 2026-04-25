@@ -1,12 +1,12 @@
 [package]
 name = "tarn"
-version = "0.11.3"
+version = "0.11.4"
 edition = "2021"
 description = "CLI-first API testing tool"
 license = "MIT"
 repository = "https://github.com/NazarKalytiuk/tarn"
-homepage = "https://nazarkalytiuk.github.io/hive/"
-documentation = "https://nazarkalytiuk.github.io/hive/"
+homepage = "https://nazarkalytiuk.github.io/tarn/"
+documentation = "https://nazarkalytiuk.github.io/tarn/"
 readme = "../README.md"
 keywords = ["api", "testing", "cli", "http", "graphql"]
 categories = ["command-line-utilities", "development-tools::testing"]
