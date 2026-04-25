@@ -60,7 +60,7 @@ jobs:
 
       - name: Integration tests
         if: matrix.os == 'ubuntu-latest'
-        run: npm run test:integration
+        run: xvfb-run -a npm run test:integration
 
       - name: Build bundle
         run: npm run build

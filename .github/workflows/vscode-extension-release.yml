@@ -140,7 +140,7 @@ jobs:
         run: cargo build -p tarn -p tarn-lsp
 
       - name: Integration tests
-        run: npm run test:integration
+        run: xvfb-run -a npm run test:integration
 
       - name: Build bundle
         run: npm run build
