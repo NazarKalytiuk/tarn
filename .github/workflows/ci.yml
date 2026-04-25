@@ -69,6 +69,37 @@ jobs:
       - name: Test tarn libs and bins
         run: cargo test -p tarn --lib --bins
 
+      # Diagnostic probe: integration tests on Windows have been
+      # crashing with STATUS_STACK_OVERFLOW (-1073741571 / 0xC00000FD)
+      # in the spawned `tarn.exe` since the suite was switched from
+      # `--no-run` to a real run in v0.11.0. Hypothesis: debug-build
+      # `tarn.exe` blows the 1 MB Windows main-thread stack because of
+      # the giant `run_command` frame (31 args, ~2k LOC). Run a few
+      # trivial CLI invocations against the same debug binary — if
+      # even `--version` crashes, the hypothesis is confirmed and the
+      # fix is `[profile.dev.package.tarn] opt-level = 1`. Probe is
+      # non-fatal so the integration step still runs and we capture
+      # both data points in one CI run.
+      - name: Probe debug tarn.exe on Windows (stack-overflow check)
+        if: matrix.label == 'Windows'
+        shell: bash
+        continue-on-error: true
+        run: |
+          set +e
+          BIN=target/debug/tarn.exe
+          echo "::group::$BIN --version"
+          "$BIN" --version
+          echo "exit_code=$?"
+          echo "::endgroup::"
+          echo "::group::$BIN run --help"
+          "$BIN" run --help >/dev/null
+          echo "exit_code=$?"
+          echo "::endgroup::"
+          echo "::group::$BIN run missing.tarn.yaml --agent --ndjson (expect 2)"
+          "$BIN" run missing.tarn.yaml --agent --ndjson
+          echo "exit_code=$?"
+          echo "::endgroup::"
+
       - name: Test tarn integration suite
         run: cargo test -p tarn --test integration_test
 
