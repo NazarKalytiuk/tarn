@@ -137,7 +137,7 @@ jobs:
 
       - name: Build tarn binaries for integration tests
         working-directory: ${{ github.workspace }}
-        run: cargo build -p tarn -p tarn-lsp
+        run: cargo build -p tarn -p tarn-lsp -p demo-server
 
       - name: Integration tests
         run: xvfb-run -a npm run test:integration
