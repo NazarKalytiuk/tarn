@@ -2,14 +2,21 @@
 
 ## Unreleased
 
-## 0.11.1 — Release-pipeline patch for 0.11.0
+## 0.11.2 — Release-pipeline patch for 0.11.0
 
 Hot-fix release for the broken 0.11.0 publish pipeline. Functionally
 identical to 0.11.0 for end users; the only deltas are workflow
 fixes that let `tarn-mcp`, `tarn-lsp`, and the VS Code extension
 actually reach their registries.
 
-### Why 0.11.1 instead of re-running 0.11.0
+(0.11.1 was tagged but never produced any artifacts: a YAML literal-
+block indentation bug in the release.yml fix made the workflow file
+fail to parse before any job started, so no commit at v0.11.1 ever
+reached crates.io, the GitHub releases page, or the VS Code
+Marketplace. 0.11.2 lands the version-bump-and-fix on a fresh tag
+with the YAML fix applied.)
+
+### Why a hot-fix release instead of re-running 0.11.0
 
 The 0.11.0 tag baked in workflow files with two latent bugs that
 only surfaced at publish time:
@@ -25,7 +32,7 @@ only surfaced at publish time:
 
 Re-running the v0.11.0 jobs would have re-executed the same broken
 workflows because tag pushes pin the workflow file to the tagged
-commit. 0.11.1 lands the fixes on a fresh tag so the publish
+commit. 0.11.2 lands the fixes on a fresh tag so the publish
 pipeline can finish end-to-end.
 
 ### Workflow fixes
@@ -36,6 +43,9 @@ pipeline can finish end-to-end.
   authoritative source removes the ANSI dependency, the sparse-
   index propagation lag, and the `cargo search` ranking quirks
   in one move. Retry budget bumped from 6 minutes to 9 minutes.
+  The JSON parse uses an inline `python3 -c` so it stays a single
+  YAML literal-block line and does not retrip the indentation
+  hazard that bricked the v0.11.1 attempt.
 - **`vscode-extension.yml` / `vscode-extension-release.yml`**:
   add `dtolnay/rust-toolchain@stable` and
   `cargo build -p tarn -p tarn-lsp` ahead of the integration

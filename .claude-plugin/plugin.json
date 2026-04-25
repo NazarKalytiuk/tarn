@@ -1,6 +1,6 @@
 {
   "name": "tarn",
-  "version": "0.11.1",
+  "version": "0.11.2",
   "description": "CLI-first API testing tool for .tarn.yaml files with structured JSON output and a bundled MCP server for AI-assisted write/run/debug workflows. A companion `tarn-lsp` language server plugin ships from the same marketplace under the `tarn-lsp` name.",
   "author": {
     "name": "Nazar Kalytiuk",

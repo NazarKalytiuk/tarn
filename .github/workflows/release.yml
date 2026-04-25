@@ -272,12 +272,9 @@ jobs:
             local api="https://crates.io/api/v1/crates/${crate}"
             local latest
             for attempt in $(seq 1 36); do
-              latest="$(curl -sH 'User-Agent: tarn-release-check' "$api" \
-                | python3 -c 'import json,sys
-try:
-    d=json.load(sys.stdin); print(d["crate"]["max_version"])
-except Exception:
-    pass' 2>/dev/null || true)"
+              latest="$(curl -sH 'User-Agent: tarn-release-check' "$api" 2>/dev/null \
+                | python3 -c "import json,sys; print(json.load(sys.stdin)['crate']['max_version'])" 2>/dev/null \
+                || true)"
               if [ "$latest" = "$version" ]; then
                 echo "$crate $version is visible on crates.io (max_version)."
                 return 0
