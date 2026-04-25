@@ -192,7 +192,7 @@ Add to your project's `.claude/settings.json`:
 ### Claude Code Install
 
 ```
-/plugin marketplace add NazarKalytiuk/hive
+/plugin marketplace add NazarKalytiuk/tarn
 /plugin install tarn-lsp@tarn --scope project
 /reload-plugins
 ```
@@ -243,4 +243,4 @@ Reuse shared steps: `- include: ./shared/auth.tarn.yaml` in setup/teardown/steps
 
 ## File Extension
 
-Tests use `.tarn.yaml`. Schema validation: add `# yaml-language-server: $schema=https://raw.githubusercontent.com/NazarKalytiuk/hive/main/schemas/v1/testfile.json` at the top of test files for IDE autocompletion.
+Tests use `.tarn.yaml`. Schema validation: add `# yaml-language-server: $schema=https://raw.githubusercontent.com/NazarKalytiuk/tarn/main/schemas/v1/testfile.json` at the top of test files for IDE autocompletion.

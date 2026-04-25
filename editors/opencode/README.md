@@ -22,7 +22,7 @@ The Tarn repo itself ships exactly this layout (see [`opencode.jsonc`](../../ope
 ## Prerequisites
 
 1. **opencode** installed. See [opencode.ai/docs](https://opencode.ai/docs/).
-2. **`tarn-mcp`** and **`tarn-lsp`** binaries on `$PATH`. From a checkout of [NazarKalytiuk/hive](https://github.com/NazarKalytiuk/hive):
+2. **`tarn-mcp`** and **`tarn-lsp`** binaries on `$PATH`. From a checkout of [NazarKalytiuk/tarn](https://github.com/NazarKalytiuk/tarn):
    ```bash
    cargo install --path tarn-mcp
    cargo install --path tarn-lsp

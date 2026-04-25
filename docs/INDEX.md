@@ -61,7 +61,7 @@ This index lists the canonical repository markdown after the roadmap cleanup.
 - `editors/claude-code/tarn-lsp-plugin/README.md`
   - Claude Code plugin that wires `tarn-lsp` into Claude Code via its plugin/LSP system
   - shipped from the repo-root marketplace alongside the `tarn` MCP + skill plugin
-  - installs via `/plugin marketplace add NazarKalytiuk/hive` + `/plugin install tarn-lsp@tarn --scope project`
+  - installs via `/plugin marketplace add NazarKalytiuk/tarn` + `/plugin install tarn-lsp@tarn --scope project`
 - `editors/opencode/README.md`
   - opencode integration: repo-root `opencode.jsonc` + `.opencode/skills/tarn-api-testing/`
   - config-driven (no marketplace / installer); skill reuses `plugin/skills/tarn-api-testing/` via symlink

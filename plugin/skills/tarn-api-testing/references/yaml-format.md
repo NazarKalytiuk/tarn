@@ -303,5 +303,5 @@ All string values support template interpolation:
 Add to the top of test files for IDE autocompletion:
 
 ```yaml
-# yaml-language-server: $schema=https://raw.githubusercontent.com/NazarKalytiuk/hive/main/schemas/v1/testfile.json
+# yaml-language-server: $schema=https://raw.githubusercontent.com/NazarKalytiuk/tarn/main/schemas/v1/testfile.json
 ```

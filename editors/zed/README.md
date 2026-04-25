@@ -1,6 +1,6 @@
 # Tarn for Zed
 
-[Tarn](https://github.com/NazarKalytiuk/hive) is a CLI-first API testing tool. Tests live in `.tarn.yaml` files, run as a single `tarn run`, and produce structured JSON output designed for AI-assisted workflows.
+[Tarn](https://github.com/NazarKalytiuk/tarn) is a CLI-first API testing tool. Tests live in `.tarn.yaml` files, run as a single `tarn run`, and produce structured JSON output designed for AI-assisted workflows.
 
 This extension brings Tarn into [Zed](https://zed.dev):
 
@@ -13,7 +13,7 @@ This extension brings Tarn into [Zed](https://zed.dev):
 
 From Zed: open the Extensions panel (`cmd+shift+x` / `ctrl+shift+x`), search for `Tarn`, click Install.
 
-The extension will auto-download the matching `tarn-lsp` binary from the [Tarn GitHub releases](https://github.com/NazarKalytiuk/hive/releases) on first activation. No manual install required.
+The extension will auto-download the matching `tarn-lsp` binary from the [Tarn GitHub releases](https://github.com/NazarKalytiuk/tarn/releases) on first activation. No manual install required.
 
 If you prefer to manage the binary yourself:
 
@@ -33,7 +33,7 @@ You also need the `tarn` CLI on your `$PATH` to execute tests:
 
 ```sh
 cargo install tarn
-# or: curl -fsSL https://raw.githubusercontent.com/NazarKalytiuk/hive/main/install.sh | sh
+# or: curl -fsSL https://raw.githubusercontent.com/NazarKalytiuk/tarn/main/install.sh | sh
 ```
 
 Open the task picker (`cmd+shift+p` → `task: spawn`) and pick a Tarn task:
@@ -67,7 +67,7 @@ Anything inside `settings` is forwarded to `tarn-lsp` as `workspace/configuratio
 
 ## Contributing
 
-Source lives at [github.com/NazarKalytiuk/hive/tree/main/editors/zed](https://github.com/NazarKalytiuk/hive/tree/main/editors/zed). The public release repo is mirrored to [github.com/NazarKalytiuk/zed-tarn](https://github.com/NazarKalytiuk/zed-tarn) and submitted to the [zed-industries/extensions](https://github.com/zed-industries/extensions) registry.
+Source lives at [github.com/NazarKalytiuk/tarn/tree/main/editors/zed](https://github.com/NazarKalytiuk/tarn/tree/main/editors/zed). The public release repo is mirrored to [github.com/NazarKalytiuk/zed-tarn](https://github.com/NazarKalytiuk/zed-tarn) and submitted to the [zed-industries/extensions](https://github.com/zed-industries/extensions) registry.
 
 ### Local dev
 

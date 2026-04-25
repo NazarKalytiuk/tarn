@@ -516,17 +516,17 @@ Claude Code registers LSP servers through its plugin system — specifically via
 **Install the plugin** (inside a Claude Code session):
 
 ```shell
-/plugin marketplace add NazarKalytiuk/hive
+/plugin marketplace add NazarKalytiuk/tarn
 /plugin install tarn-lsp@tarn --scope project
 /reload-plugins
 ```
 
 The `--scope project` flag matters — see the **Compound-extension caveat** below.
 
-If you prefer a local checkout, substitute `/absolute/path/to/hive-api-test` for `NazarKalytiuk/hive` in the `marketplace add` call. For a one-off session without persistent installation, use `claude --plugin-dir` instead:
+If you prefer a local checkout, substitute `/absolute/path/to/tarn` for `NazarKalytiuk/tarn` in the `marketplace add` call. For a one-off session without persistent installation, use `claude --plugin-dir` instead:
 
 ```shell
-claude --plugin-dir /absolute/path/to/hive-api-test/editors/claude-code/tarn-lsp-plugin
+claude --plugin-dir /absolute/path/to/tarn/editors/claude-code/tarn-lsp-plugin
 ```
 
 **What the plugin registers** (from `editors/claude-code/tarn-lsp-plugin/.lsp.json`):

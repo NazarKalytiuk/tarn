@@ -10,7 +10,7 @@ brew install NazarKalytiuk/tarn/tarn
 cargo install tarn
 
 # Install script
-curl -fsSL https://raw.githubusercontent.com/NazarKalytiuk/hive/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/NazarKalytiuk/tarn/main/install.sh | sh
 ```
 
 Verify with:
