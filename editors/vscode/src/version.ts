@@ -204,7 +204,7 @@ export async function warnIfTarnOutdated(
   );
   if (choice === installAction) {
     await vscode.env.openExternal(
-      vscode.Uri.parse("https://github.com/NazarKalytiuk/hive#install"),
+      vscode.Uri.parse("https://github.com/NazarKalytiuk/tarn#install"),
     );
   }
   return result;

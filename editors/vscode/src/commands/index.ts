@@ -350,7 +350,7 @@ export function registerCommands(deps: CommandDeps): vscode.Disposable {
   registrations.push(
     vscode.commands.registerCommand("tarn.installTarn", async () => {
       await vscode.env.openExternal(
-        vscode.Uri.parse("https://github.com/NazarKalytiuk/hive#install"),
+        vscode.Uri.parse("https://github.com/NazarKalytiuk/tarn#install"),
       );
     }),
   );

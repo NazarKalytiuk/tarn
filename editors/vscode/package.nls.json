@@ -52,7 +52,7 @@
   "walkthrough.gettingStarted.title": "Get started with Tarn",
   "walkthrough.gettingStarted.description": "Run your first Tarn test, inspect failures, and customize your workspace.",
   "walkthrough.step.install.title": "Install the Tarn CLI",
-  "walkthrough.step.install.description": "The extension drives the `tarn` binary. Install it from the [project README](https://github.com/NazarKalytiuk/hive#install) and verify with `tarn --version`.\n[Open install instructions](command:tarn.installTarn)",
+  "walkthrough.step.install.description": "The extension drives the `tarn` binary. Install it from the [project README](https://github.com/NazarKalytiuk/tarn#install) and verify with `tarn --version`.\n[Open install instructions](command:tarn.installTarn)",
   "walkthrough.step.openExample.title": "Open or create a test file",
   "walkthrough.step.openExample.description": "Tarn test files use the `.tarn.yaml` extension. Open an existing file or create `tests/health.tarn.yaml` to get started.\n[Create new file](command:workbench.action.files.newUntitledFile)",
   "walkthrough.step.runFirst.title": "Run your first test",

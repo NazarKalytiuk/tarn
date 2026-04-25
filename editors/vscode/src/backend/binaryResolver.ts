@@ -74,7 +74,7 @@ export async function promptInstallIfMissing(scope?: vscode.Uri): Promise<Resolv
     );
     if (choice === installAction) {
       await vscode.env.openExternal(
-        vscode.Uri.parse("https://github.com/NazarKalytiuk/hive#install"),
+        vscode.Uri.parse("https://github.com/NazarKalytiuk/tarn#install"),
       );
     } else if (choice === settingsAction) {
       await vscode.commands.executeCommand("workbench.action.openSettings", "tarn.binaryPath");

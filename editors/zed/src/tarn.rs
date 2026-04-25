@@ -5,7 +5,7 @@ use zed_extension_api::{
     Result, Worktree,
 };
 
-const GITHUB_REPO: &str = "NazarKalytiuk/hive";
+const GITHUB_REPO: &str = "NazarKalytiuk/tarn";
 const SERVER_BINARY: &str = "tarn-lsp";
 
 struct TarnExtension {
