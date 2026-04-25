@@ -1,8 +1,14 @@
 name: VS Code Extension Release
 
 on:
-  push:
-    tags: ["v*"]
+  # Trigger after the Rust `Release` workflow finishes on a tag push.
+  # `workflow_run` fires once per upstream completion regardless of
+  # GITHUB_TOKEN restrictions on the `release: published` event, so
+  # the binary release is guaranteed to be on disk before we publish
+  # the extension that references it.
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
   workflow_dispatch:
     inputs:
       tag:
@@ -16,6 +22,20 @@ jobs:
   publish:
     name: Publish to VS Code Marketplace + Open VSX
     runs-on: ubuntu-latest
+    # Two valid entry points:
+    #   * manual `workflow_dispatch` (used to retry a failed publish or
+    #     ship a tag whose Release workflow predates this trigger), and
+    #   * the upstream `Release` workflow finishing successfully on a
+    #     tag push (`v*` head_branch).
+    # Branch pushes (where head_branch isn't a tag) and failed Release
+    # runs are filtered out so we never publish a half-baked release.
+    if: >-
+      github.event_name == 'workflow_dispatch' || (
+        github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        startsWith(github.event.workflow_run.head_branch, 'v')
+      )
     defaults:
       run:
         working-directory: editors/vscode
@@ -29,13 +49,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          # `workflow_run`-triggered runs are pinned to the default
+          # branch unless we ask for the tag explicitly. Resolution
+          # order: manual input > upstream tag > whatever ref this run
+          # already points at.
+          ref: ${{ github.event.inputs.tag || github.event.workflow_run.head_branch || github.ref }}
 
       - name: Resolve tag name and pre-release flag
         id: tag
         shell: bash
         run: |
           TAG="${{ github.event.inputs.tag }}"
+          if [ -z "$TAG" ]; then
+            TAG="${{ github.event.workflow_run.head_branch }}"
+          fi
           if [ -z "$TAG" ]; then
             TAG="${GITHUB_REF_NAME}"
           fi
@@ -97,20 +124,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
-          # The Rust `release.yml` workflow creates a GitHub release
-          # with the same tag. If it hasn't completed yet, poll for up
-          # to three minutes before giving up — this keeps the two
-          # workflows loosely coupled without hard inter-workflow
-          # dependencies.
-          for attempt in 1 2 3 4 5 6; do
-            if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-              echo "Binary release $TAG found."
-              exit 0
-            fi
-            echo "Binary release $TAG not yet available (attempt $attempt/6); sleeping 30s..."
-            sleep 30
-          done
-          echo "::error::Binary release $TAG was not published in time. Cut the Rust release first or rerun this workflow once the release.yml job finishes."
+          # `workflow_run`-triggered runs already gate on the upstream
+          # Release succeeding, so the GitHub release for this tag must
+          # exist by now. For `workflow_dispatch` invocations this is a
+          # sanity check rather than a wait — if the binary release is
+          # missing, we fail loudly so the user cuts the Rust release
+          # first instead of publishing an extension that points at a
+          # non-existent download.
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Binary release $TAG found."
+            exit 0
+          fi
+          echo "::error::Binary release $TAG not found. Cut the Rust release (push a tag) first, or rerun this workflow once release.yml finishes."
           exit 1
 
       - name: Set up Node.js
