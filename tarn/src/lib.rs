@@ -20,6 +20,7 @@ pub mod model;
 pub mod outline;
 pub mod parser;
 pub(crate) mod parser_locations;
+pub mod path_util;
 pub mod regex_cache;
 pub mod report;
 pub mod runner;

@@ -3952,9 +3952,14 @@ steps:
     assert_eq!(parsed["summary"]["steps"]["failed"], 1);
 
     // The terminal output should tell the user where the artifact went.
+    // Normalize Windows backslashes so the substring check is platform-agnostic
+    // — `pointer.display()` emits native separators (`C:\…\.tarn\last-run.json`
+    // on Windows), but the announcement contract is "tells the user where it is".
     let stderr = String::from_utf8_lossy(&output.stderr);
+    let normalized_stderr = stderr.replace('\\', "/");
     assert!(
-        stderr.contains("json report saved to") && stderr.contains(".tarn/last-run.json"),
+        normalized_stderr.contains("json report saved to")
+            && normalized_stderr.contains(".tarn/last-run.json"),
         "expected last-run.json path to be announced on stderr; got: {stderr}"
     );
 }

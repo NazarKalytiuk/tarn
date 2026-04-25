@@ -82,8 +82,10 @@ pub struct InspectSource {
 }
 
 impl InspectSource {
+    /// Path string for JSON output. Forward-slash separators on every
+    /// platform so artifacts stay byte-identical between Unix and Windows.
     pub fn display_path(&self) -> String {
-        self.path.display().to_string()
+        crate::path_util::to_forward_slash(&self.path)
     }
 }
 

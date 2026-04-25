@@ -2268,7 +2268,7 @@ fn failures_command(
         }
     };
 
-    let source = path.display().to_string();
+    let source = tarn::path_util::to_forward_slash(&path);
     let report = tarn::report::failures_command::build_report(&doc, source);
 
     let no_color_effective = no_color || !std::io::IsTerminal::is_terminal(&std::io::stdout());

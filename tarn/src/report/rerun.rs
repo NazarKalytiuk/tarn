@@ -120,10 +120,14 @@ pub enum RerunSourcePath {
 }
 
 impl RerunSourcePath {
+    /// Path string for both stderr announcements and the `source_path`
+    /// field on `RerunSource`. Forward-slash on every platform so JSON
+    /// artifacts are byte-identical across Unix and Windows; PowerShell
+    /// and CMD both accept `/` paths so the stderr UX still works.
     pub fn display_path(&self) -> String {
         match self {
-            RerunSourcePath::LatestPointer(p) => p.display().to_string(),
-            RerunSourcePath::Archive { path, .. } => path.display().to_string(),
+            RerunSourcePath::LatestPointer(p) => crate::path_util::to_forward_slash(p),
+            RerunSourcePath::Archive { path, .. } => crate::path_util::to_forward_slash(path),
         }
     }
 
@@ -384,7 +388,10 @@ mod tests {
         std::fs::write(&path, serde_json::to_vec_pretty(&d).unwrap()).unwrap();
         let sel = load_selection(&pointer(path.clone())).unwrap();
         assert_eq!(sel.targets.len(), 2);
-        assert_eq!(sel.source.source_path, path.display().to_string());
+        assert_eq!(
+            sel.source.source_path,
+            crate::path_util::to_forward_slash(&path)
+        );
     }
 
     #[test]
@@ -397,7 +404,10 @@ mod tests {
             path: path.clone(),
         };
         let sel = load_selection(&src).unwrap();
-        assert_eq!(sel.source.source_path, path.display().to_string());
+        assert_eq!(
+            sel.source.source_path,
+            crate::path_util::to_forward_slash(&path)
+        );
     }
 
     #[test]
