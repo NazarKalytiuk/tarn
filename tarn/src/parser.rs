@@ -1582,7 +1582,7 @@ steps:
         .unwrap();
         let test_path = dir.path().join("suite.tarn.yaml");
         let formatted = format_str(
-            r#"# yaml-language-server: $schema=https://raw.githubusercontent.com/NazarKalytiuk/hive/main/schemas/v1/testfile.json
+            r#"# yaml-language-server: $schema=https://raw.githubusercontent.com/NazarKalytiuk/tarn/main/schemas/v1/testfile.json
 name: With include
 steps:
   - include: "./auth.tarn.yaml"
@@ -1598,7 +1598,7 @@ steps:
         .unwrap();
 
         assert!(formatted.starts_with(
-            "# yaml-language-server: $schema=https://raw.githubusercontent.com/NazarKalytiuk/hive/main/schemas/v1/testfile.json\n"
+            "# yaml-language-server: $schema=https://raw.githubusercontent.com/NazarKalytiuk/tarn/main/schemas/v1/testfile.json\n"
         ));
         assert!(formatted.contains("- include: ./auth.tarn.yaml"));
         assert!(formatted.contains("with:\n    tenant: acme"));

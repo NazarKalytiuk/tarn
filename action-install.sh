@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="NazarKalytiuk/hive"
+REPO="NazarKalytiuk/tarn"
 VERSION="${TARN_VERSION:-latest}"
 
 # Detect OS

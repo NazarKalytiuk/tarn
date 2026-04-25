@@ -1,8 +1,8 @@
 #!/bin/sh
-# Tarn installer — curl -fsSL https://raw.githubusercontent.com/NazarKalytiuk/hive/main/install.sh | sh
+# Tarn installer — curl -fsSL https://raw.githubusercontent.com/NazarKalytiuk/tarn/main/install.sh | sh
 set -e
 
-REPO="NazarKalytiuk/hive"
+REPO="NazarKalytiuk/tarn"
 INSTALL_DIR="${TARN_INSTALL_DIR:-${HIVE_INSTALL_DIR:-/usr/local/bin}}"
 
 # Detect OS and architecture

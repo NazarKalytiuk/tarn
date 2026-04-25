@@ -128,7 +128,7 @@ jobs:
           else
             git commit \
               -m "Release v${VERSION}" \
-              -m "Mirrored from NazarKalytiuk/hive@${GITHUB_SHA} (${TAG})."
+              -m "Mirrored from NazarKalytiuk/tarn@${GITHUB_SHA} (${TAG})."
           fi
 
           # Tag with plain `vX.Y.Z` on the mirror side - zed-industries/extensions

@@ -22,8 +22,8 @@
       "author": {
         "name": "Nazar Kalytiuk"
       },
-      "homepage": "https://github.com/NazarKalytiuk/hive/blob/main/docs/TARN_LSP.md",
-      "repository": "https://github.com/NazarKalytiuk/hive",
+      "homepage": "https://github.com/NazarKalytiuk/tarn/blob/main/docs/TARN_LSP.md",
+      "repository": "https://github.com/NazarKalytiuk/tarn",
       "license": "MIT",
       "keywords": ["tarn", "lsp", "api-testing", "yaml"],
       "category": "Code intelligence"

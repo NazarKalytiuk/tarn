@@ -221,7 +221,7 @@ name: Format me
         // the `# yaml-language-server:` directive, which the formatter
         // re-attaches to the top of the document. This test locks that
         // exception in.
-        let input = r#"# yaml-language-server: $schema=https://raw.githubusercontent.com/NazarKalytiuk/hive/main/schemas/v1/testfile.json
+        let input = r#"# yaml-language-server: $schema=https://raw.githubusercontent.com/NazarKalytiuk/tarn/main/schemas/v1/testfile.json
 name: With schema
 steps:
   - name: ping
@@ -232,7 +232,7 @@ steps:
         let formatted = format_document(input).expect("directive input must format");
         assert!(
             formatted.starts_with(
-                "# yaml-language-server: $schema=https://raw.githubusercontent.com/NazarKalytiuk/hive/main/schemas/v1/testfile.json\n"
+                "# yaml-language-server: $schema=https://raw.githubusercontent.com/NazarKalytiuk/tarn/main/schemas/v1/testfile.json\n"
             ),
             "schema directive must stay at the top of the formatted buffer, got: {formatted}"
         );
