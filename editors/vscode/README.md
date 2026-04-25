@@ -4,7 +4,7 @@
 
 **Run, debug, and iterate on API tests without leaving the editor.** Tarn turns your `.tarn.yaml` files into first-class VS Code tests: discovered in the Test Explorer, runnable from CodeLens, streamed live with structured events, and — when something fails — jumped straight to the asserting line with a unified diff of expected vs actual right in the peek view.
 
-Aimed squarely at the tight diagnosis loop that API debugging lives inside: **run → see the failure → fix the YAML or the server → rerun → green**. No terminal juggling, no re-parsing JSON by eye, no guessing which step blew up. The extension drives the [Tarn CLI](https://github.com/NazarKalytiuk/hive) so everything that runs in your editor runs identically in CI — the same binary, the same report, the same exit code.
+Aimed squarely at the tight diagnosis loop that API debugging lives inside: **run → see the failure → fix the YAML or the server → rerun → green**. No terminal juggling, no re-parsing JSON by eye, no guessing which step blew up. The extension drives the [Tarn CLI](https://github.com/NazarKalytiuk/tarn) so everything that runs in your editor runs identically in CI — the same binary, the same report, the same exit code.
 
 ![Test Explorer tree](media/marketplace/screenshot-test-explorer.png)
 

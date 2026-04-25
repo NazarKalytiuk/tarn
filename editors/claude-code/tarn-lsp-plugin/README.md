@@ -21,19 +21,19 @@ Claude Code's plugin system works through **marketplaces**. This plugin is liste
 
 ```bash
 # From inside Claude Code
-/plugin marketplace add NazarKalytiuk/hive
+/plugin marketplace add NazarKalytiuk/tarn
 /plugin install tarn-lsp@tarn --scope project
 /reload-plugins
 ```
 
-Prefer installing from a local checkout? Substitute the absolute path to this repo for `NazarKalytiuk/hive` in the `marketplace add` call.
+Prefer installing from a local checkout? Substitute the absolute path to this repo for `NazarKalytiuk/tarn` in the `marketplace add` call.
 
 `--scope project` is important — see the [Compound-extension caveat](#compound-extension-caveat) below for why you should not install this plugin at user scope.
 
 Alternatively, for a one-off session without installing anything persistently, use `claude --plugin-dir`:
 
 ```bash
-claude --plugin-dir /absolute/path/to/hive-api-test/editors/claude-code/tarn-lsp-plugin
+claude --plugin-dir /absolute/path/to/tarn/editors/claude-code/tarn-lsp-plugin
 ```
 
 ## Verify it works

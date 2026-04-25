@@ -72,8 +72,8 @@ For a published release:
 
 ```bash
 VERSION=vX.Y.Z
-curl -LO https://github.com/NazarKalytiuk/hive/releases/download/${VERSION}/tarn-linux-amd64.tar.gz
-curl -LO https://github.com/NazarKalytiuk/hive/releases/download/${VERSION}/tarn-checksums.txt
+curl -LO https://github.com/NazarKalytiuk/tarn/releases/download/${VERSION}/tarn-linux-amd64.tar.gz
+curl -LO https://github.com/NazarKalytiuk/tarn/releases/download/${VERSION}/tarn-checksums.txt
 shasum -a 256 -c tarn-checksums.txt
 ```
 

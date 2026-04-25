@@ -786,7 +786,7 @@ is docs-only.
   `.claude-plugin/marketplace.json`, so both `tarn` (MCP + skill) and
   `tarn-lsp` (LSP) ship from a single marketplace. New install flow:
   ```
-  /plugin marketplace add NazarKalytiuk/hive
+  /plugin marketplace add NazarKalytiuk/tarn
   /plugin install tarn@tarn
   /plugin install tarn-lsp@tarn --scope project
   ```
@@ -1006,7 +1006,7 @@ zip / Homebrew formula all include the new binary. Fabricated
 `documentation` URLs in all three Cargo manifests that pointed at
 a non-existent `nazarkalytiuk.github.io/tarn/` path were
 corrected to the real docs site at
-`nazarkalytiuk.github.io/hive/`.
+`nazarkalytiuk.github.io/tarn/`.
 
 ### Bug fixes
 

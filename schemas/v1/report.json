@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/NazarKalytiuk/hive/main/schemas/v1/report.json",
+  "$id": "https://raw.githubusercontent.com/NazarKalytiuk/tarn/main/schemas/v1/report.json",
   "title": "Tarn JSON Report v1",
   "type": "object",
   "required": ["schema_version", "version", "timestamp", "duration_ms", "files", "summary"],

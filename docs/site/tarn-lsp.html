@@ -26,7 +26,7 @@
           <a href="./mcp.html">MCP</a>
           <a href="./ci-usage.html">CI</a>
           <a href="./examples.html">Examples</a>
-          <a href="https://github.com/NazarKalytiuk/hive" class="nav__gh" target="_blank" rel="noopener">
+          <a href="https://github.com/NazarKalytiuk/tarn" class="nav__gh" target="_blank" rel="noopener">
             <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
           </a>
         </nav>
@@ -136,21 +136,21 @@
             <p>Any LSP 3.17 client that can spawn a stdio server and speak JSON-RPC works out of the box. The recipes below are the officially supported ones.</p>
 
             <h3 id="claude-code">Claude Code plugin</h3>
-            <p>This repo ships a ready-to-use plugin at <a href="https://github.com/NazarKalytiuk/hive/blob/main/editors/claude-code/tarn-lsp-plugin/README.md" target="_blank" rel="noopener"><code class="ic">editors/claude-code/tarn-lsp-plugin</code></a>, surfaced from the repo-root marketplace alongside the <code class="ic">tarn</code> MCP + skill plugin. Installation is a three-command sequence inside a Claude Code session:</p>
+            <p>This repo ships a ready-to-use plugin at <a href="https://github.com/NazarKalytiuk/tarn/blob/main/editors/claude-code/tarn-lsp-plugin/README.md" target="_blank" rel="noopener"><code class="ic">editors/claude-code/tarn-lsp-plugin</code></a>, surfaced from the repo-root marketplace alongside the <code class="ic">tarn</code> MCP + skill plugin. Installation is a three-command sequence inside a Claude Code session:</p>
             <div class="code-block">
               <div class="code-block__header">
                 <span class="code-block__dot code-block__dot--red"></span>
                 <span class="code-block__dot code-block__dot--yellow"></span>
                 <span class="code-block__dot code-block__dot--green"></span>
               </div>
-              <pre><span class="prompt">$</span> /plugin marketplace add NazarKalytiuk/hive
+              <pre><span class="prompt">$</span> /plugin marketplace add NazarKalytiuk/tarn
 <span class="prompt">$</span> /plugin install tarn-lsp@tarn <span class="flag">--scope</span> <span class="value">project</span>
 <span class="prompt">$</span> /reload-plugins</pre>
             </div>
             <p>Claude Code's LSP plugin format registers servers by simple file extension (<code class="ic">.yaml</code>), and <code class="ic">.tarn.yaml</code> is a compound extension, so the plugin necessarily claims every <code class="ic">.yaml</code> and <code class="ic">.yml</code> file in any project where it is installed. Install with <code class="ic">--scope project</code> in Tarn-focused repositories so it does not shadow <code class="ic">yaml-language-server</code> for Kubernetes manifests, Compose files, or CI configs elsewhere. The plugin README covers prerequisites (Claude Code 2.0.74 or newer, <code class="ic">tarn-lsp</code> on <code class="ic">$PATH</code>) and verification steps.</p>
 
             <h3 id="opencode">opencode</h3>
-            <p><a href="https://opencode.ai" target="_blank" rel="noopener">opencode</a> registers LSP servers directly from its native config &mdash; no plugin wrapper, no marketplace. This repo commits an <a href="https://github.com/NazarKalytiuk/hive/blob/main/opencode.jsonc" target="_blank" rel="noopener"><code class="ic">opencode.jsonc</code></a> at its root so agents running <code class="ic">opencode</code> inside it pick up <code class="ic">tarn-lsp</code> automatically. Mirror the same snippet in your own repo:</p>
+            <p><a href="https://opencode.ai" target="_blank" rel="noopener">opencode</a> registers LSP servers directly from its native config &mdash; no plugin wrapper, no marketplace. This repo commits an <a href="https://github.com/NazarKalytiuk/tarn/blob/main/opencode.jsonc" target="_blank" rel="noopener"><code class="ic">opencode.jsonc</code></a> at its root so agents running <code class="ic">opencode</code> inside it pick up <code class="ic">tarn-lsp</code> automatically. Mirror the same snippet in your own repo:</p>
             <div class="code-block">
               <div class="code-block__header">
                 <span class="code-block__dot code-block__dot--red"></span>
@@ -167,10 +167,10 @@
   }
 }</pre>
             </div>
-            <p>opencode's LSP matcher uses <code class="ic">path.parse(file).ext</code>, so the <code class="ic">tarn</code> entry claims every <code class="ic">.yaml</code> / <code class="ic">.yml</code> file in the workspace (not just <code class="ic">.tarn.yaml</code>) &mdash; the same limitation that applies to the Claude Code plugin. Commit it at project level in Tarn-focused repos; do not put it in your global <code class="ic">~/.config/opencode/config.json</code>. The full install flow (MCP + LSP + skill) is in <a href="https://github.com/NazarKalytiuk/hive/blob/main/editors/opencode/README.md" target="_blank" rel="noopener"><code class="ic">editors/opencode/README.md</code></a>.</p>
+            <p>opencode's LSP matcher uses <code class="ic">path.parse(file).ext</code>, so the <code class="ic">tarn</code> entry claims every <code class="ic">.yaml</code> / <code class="ic">.yml</code> file in the workspace (not just <code class="ic">.tarn.yaml</code>) &mdash; the same limitation that applies to the Claude Code plugin. Commit it at project level in Tarn-focused repos; do not put it in your global <code class="ic">~/.config/opencode/config.json</code>. The full install flow (MCP + LSP + skill) is in <a href="https://github.com/NazarKalytiuk/tarn/blob/main/editors/opencode/README.md" target="_blank" rel="noopener"><code class="ic">editors/opencode/README.md</code></a>.</p>
 
             <h3 id="vscode">VS Code extension</h3>
-            <p>The <a href="https://github.com/NazarKalytiuk/hive/blob/main/editors/vscode/README.md" target="_blank" rel="noopener">Tarn VS Code extension</a> (publisher <code class="ic">nazarkalytiuk</code>) is on the VS Marketplace and Open VSX. It gives agents a test-explorer surface: discovery, CodeLens, live streaming via <code class="ic">--ndjson</code>, unified-diff failure peek, environment picker, status bar, trusted/untrusted workspace handling, and Remote Development across Dev Container, Codespaces, WSL, and Remote SSH. A window-scoped <code class="ic">tarn.experimentalLspClient</code> setting (off by default) spawns <code class="ic">tarn-lsp</code> alongside the existing direct providers &mdash; Phase V scaffolding for migrating onto the LSP with no feature drift in flight. See <a href="https://github.com/NazarKalytiuk/hive/blob/main/editors/vscode/docs/LSP_MIGRATION.md" target="_blank" rel="noopener">docs/LSP_MIGRATION.md</a> for the migration plan.</p>
+            <p>The <a href="https://github.com/NazarKalytiuk/tarn/blob/main/editors/vscode/README.md" target="_blank" rel="noopener">Tarn VS Code extension</a> (publisher <code class="ic">nazarkalytiuk</code>) is on the VS Marketplace and Open VSX. It gives agents a test-explorer surface: discovery, CodeLens, live streaming via <code class="ic">--ndjson</code>, unified-diff failure peek, environment picker, status bar, trusted/untrusted workspace handling, and Remote Development across Dev Container, Codespaces, WSL, and Remote SSH. A window-scoped <code class="ic">tarn.experimentalLspClient</code> setting (off by default) spawns <code class="ic">tarn-lsp</code> alongside the existing direct providers &mdash; Phase V scaffolding for migrating onto the LSP with no feature drift in flight. See <a href="https://github.com/NazarKalytiuk/tarn/blob/main/editors/vscode/docs/LSP_MIGRATION.md" target="_blank" rel="noopener">docs/LSP_MIGRATION.md</a> for the migration plan.</p>
 
             <h3 id="neovim">Neovim</h3>
             <p>Register <code class="ic">tarn-lsp</code> through the built-in <code class="ic">vim.lsp</code> client (0.10+) and add a filetype rule so <code class="ic">.tarn.yaml</code> buffers get the <code class="ic">tarn</code> filetype:</p>
@@ -219,16 +219,16 @@ vim.lsp.start({
             <p><code class="ic">eglot</code> and <code class="ic">lsp-mode</code> both accept <code class="ic">tarn-lsp</code> as a plain stdio server command. Register it against a <code class="ic">tarn-mode</code> (or a <code class="ic">yaml-mode</code> hook filtered to <code class="ic">.tarn.yaml</code> buffers) and the standard LSP affordances light up.</p>
 
             <h2 id="schema">Schema validation</h2>
-            <p>Schema enforcement inside <code class="ic">tarn-lsp</code> uses exactly the same JSON Schema at <a href="https://github.com/NazarKalytiuk/hive/blob/main/schemas/v1/testfile.json" target="_blank" rel="noopener"><code class="ic">schemas/v1/testfile.json</code></a> that the <code class="ic">tarn validate</code> CLI and the <code class="ic">redhat.vscode-yaml</code> extension consume &mdash; one schema, three consumers, zero drift. See <a href="./writing-tests.html">Writing Test Files</a> for the DSL surface the schema describes and the inline <code class="ic">yaml-language-server: $schema=&hellip;</code> comment that wires it up for YAML-aware editors without a Tarn-specific extension.</p>
+            <p>Schema enforcement inside <code class="ic">tarn-lsp</code> uses exactly the same JSON Schema at <a href="https://github.com/NazarKalytiuk/tarn/blob/main/schemas/v1/testfile.json" target="_blank" rel="noopener"><code class="ic">schemas/v1/testfile.json</code></a> that the <code class="ic">tarn validate</code> CLI and the <code class="ic">redhat.vscode-yaml</code> extension consume &mdash; one schema, three consumers, zero drift. See <a href="./writing-tests.html">Writing Test Files</a> for the DSL surface the schema describes and the inline <code class="ic">yaml-language-server: $schema=&hellip;</code> comment that wires it up for YAML-aware editors without a Tarn-specific extension.</p>
 
             <h2 id="reference">Reference</h2>
             <ul>
-              <li><a href="https://github.com/NazarKalytiuk/hive/blob/main/docs/TARN_LSP.md" target="_blank" rel="noopener"><code class="ic">docs/TARN_LSP.md</code></a> &mdash; canonical language server specification.</li>
-              <li><a href="https://github.com/NazarKalytiuk/hive/blob/main/editors/claude-code/tarn-lsp-plugin/README.md" target="_blank" rel="noopener">Claude Code plugin README</a> &mdash; prerequisites, install flow, compound-extension caveat, troubleshooting.</li>
-              <li><a href="https://github.com/NazarKalytiuk/hive/blob/main/editors/opencode/README.md" target="_blank" rel="noopener">opencode integration README</a> &mdash; <code class="ic">opencode.jsonc</code> + <code class="ic">.opencode/skills/</code> layout, MCP + LSP + skill in one repo.</li>
-              <li><a href="https://github.com/NazarKalytiuk/hive/blob/main/editors/vscode/README.md" target="_blank" rel="noopener">VS Code extension README</a> &mdash; test explorer, CodeLens, live streaming, environments, remote setups.</li>
-              <li><a href="https://github.com/NazarKalytiuk/hive/blob/main/editors/vscode/docs/LSP_MIGRATION.md" target="_blank" rel="noopener"><code class="ic">editors/vscode/docs/LSP_MIGRATION.md</code></a> &mdash; Phase V migration plan onto <code class="ic">tarn-lsp</code>.</li>
-              <li><a href="https://github.com/NazarKalytiuk/hive/blob/main/editors/vscode/docs/API.md" target="_blank" rel="noopener"><code class="ic">TarnExtensionApi</code></a> &mdash; stable extension-to-extension surface and semver policy.</li>
+              <li><a href="https://github.com/NazarKalytiuk/tarn/blob/main/docs/TARN_LSP.md" target="_blank" rel="noopener"><code class="ic">docs/TARN_LSP.md</code></a> &mdash; canonical language server specification.</li>
+              <li><a href="https://github.com/NazarKalytiuk/tarn/blob/main/editors/claude-code/tarn-lsp-plugin/README.md" target="_blank" rel="noopener">Claude Code plugin README</a> &mdash; prerequisites, install flow, compound-extension caveat, troubleshooting.</li>
+              <li><a href="https://github.com/NazarKalytiuk/tarn/blob/main/editors/opencode/README.md" target="_blank" rel="noopener">opencode integration README</a> &mdash; <code class="ic">opencode.jsonc</code> + <code class="ic">.opencode/skills/</code> layout, MCP + LSP + skill in one repo.</li>
+              <li><a href="https://github.com/NazarKalytiuk/tarn/blob/main/editors/vscode/README.md" target="_blank" rel="noopener">VS Code extension README</a> &mdash; test explorer, CodeLens, live streaming, environments, remote setups.</li>
+              <li><a href="https://github.com/NazarKalytiuk/tarn/blob/main/editors/vscode/docs/LSP_MIGRATION.md" target="_blank" rel="noopener"><code class="ic">editors/vscode/docs/LSP_MIGRATION.md</code></a> &mdash; Phase V migration plan onto <code class="ic">tarn-lsp</code>.</li>
+              <li><a href="https://github.com/NazarKalytiuk/tarn/blob/main/editors/vscode/docs/API.md" target="_blank" rel="noopener"><code class="ic">TarnExtensionApi</code></a> &mdash; stable extension-to-extension surface and semver policy.</li>
             </ul>
           </article>
 
@@ -255,7 +255,7 @@ vim.lsp.start({
                 <strong>Editor setup</strong>
                 <span>Claude Code, opencode, VS Code, Neovim, Helix</span>
               </a>
-              <a class="sidebar-link" href="https://github.com/NazarKalytiuk/hive/blob/main/docs/TARN_LSP.md" target="_blank" rel="noopener">
+              <a class="sidebar-link" href="https://github.com/NazarKalytiuk/tarn/blob/main/docs/TARN_LSP.md" target="_blank" rel="noopener">
                 <strong>LSP spec on GitHub</strong>
                 <span>Canonical reference</span>
               </a>
@@ -271,7 +271,7 @@ vim.lsp.start({
         <div class="footer__links">
           <a href="./mcp.html">Prev: MCP</a>
           <a href="./ci-usage.html">Next: CI</a>
-          <a href="https://github.com/NazarKalytiuk/hive" target="_blank" rel="noopener">GitHub</a>
+          <a href="https://github.com/NazarKalytiuk/tarn" target="_blank" rel="noopener">GitHub</a>
         </div>
       </div>
     </footer>

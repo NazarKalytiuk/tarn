@@ -4,10 +4,10 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/NazarKalytiuk/hive/actions/workflows/ci.yml"><img src="https://github.com/NazarKalytiuk/hive/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/NazarKalytiuk/hive/blob/main/docs/CONFORMANCE.md"><img src="https://img.shields.io/github/actions/workflow/status/NazarKalytiuk/hive/ci.yml?branch=main&label=conformance" alt="Conformance"></a>
-  <a href="https://github.com/NazarKalytiuk/hive/releases/latest"><img src="https://img.shields.io/github/v/release/NazarKalytiuk/hive" alt="Release"></a>
-  <a href="https://github.com/NazarKalytiuk/hive/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License"></a>
+  <a href="https://github.com/NazarKalytiuk/tarn/actions/workflows/ci.yml"><img src="https://github.com/NazarKalytiuk/tarn/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/NazarKalytiuk/tarn/blob/main/docs/CONFORMANCE.md"><img src="https://img.shields.io/github/actions/workflow/status/NazarKalytiuk/tarn/ci.yml?branch=main&label=conformance" alt="Conformance"></a>
+  <a href="https://github.com/NazarKalytiuk/tarn/releases/latest"><img src="https://img.shields.io/github/v/release/NazarKalytiuk/tarn" alt="Release"></a>
+  <a href="https://github.com/NazarKalytiuk/tarn/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License"></a>
 </p>
 
 ---
@@ -48,16 +48,16 @@ $ tarn run
 
 ```bash
 # One-liner (macOS / Linux)
-curl -fsSL https://raw.githubusercontent.com/NazarKalytiuk/hive/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/NazarKalytiuk/tarn/main/install.sh | sh
 
 # Install to a custom directory
-TARN_INSTALL_DIR="$HOME/.local/bin" curl -fsSL https://raw.githubusercontent.com/NazarKalytiuk/hive/main/install.sh | sh
+TARN_INSTALL_DIR="$HOME/.local/bin" curl -fsSL https://raw.githubusercontent.com/NazarKalytiuk/tarn/main/install.sh | sh
 
 # Or build/install from source
-cargo install --git https://github.com/NazarKalytiuk/hive.git --bin tarn
+cargo install --git https://github.com/NazarKalytiuk/tarn.git --bin tarn
 ```
 
-Binaries for **macOS** (Intel & Apple Silicon), **Linux** (amd64 & arm64), and **Windows** (amd64 zip) are published on the [releases page](https://github.com/NazarKalytiuk/hive/releases).
+Binaries for **macOS** (Intel & Apple Silicon), **Linux** (amd64 & arm64), and **Windows** (amd64 zip) are published on the [releases page](https://github.com/NazarKalytiuk/tarn/releases).
 Each release also includes `tarn-checksums.txt` for SHA256 verification and a generated `tarn.rb` Homebrew formula artifact.
 
 Container path:
@@ -1299,7 +1299,7 @@ Both plugins live in the same marketplace (the repo root `.claude-plugin/marketp
 
 ```bash
 # 1. Register the marketplace (once)
-claude plugin marketplace add NazarKalytiuk/hive
+claude plugin marketplace add NazarKalytiuk/tarn
 
 # 2a. Install the MCP + skill plugin
 claude plugin install tarn@tarn
@@ -1348,12 +1348,12 @@ Separate install from the MCP plugin above (same marketplace though). This one r
 **Install** (from inside a Claude Code session):
 
 ```
-/plugin marketplace add NazarKalytiuk/hive
+/plugin marketplace add NazarKalytiuk/tarn
 /plugin install tarn-lsp@tarn --scope project
 /reload-plugins
 ```
 
-Already registered the marketplace for the `tarn` plugin? Skip the `add` line &mdash; both plugins share the same marketplace now. Substitute `/absolute/path/to/repo` for `NazarKalytiuk/hive` if you want to install from a local checkout instead.
+Already registered the marketplace for the `tarn` plugin? Skip the `add` line &mdash; both plugins share the same marketplace now. Substitute `/absolute/path/to/repo` for `NazarKalytiuk/tarn` if you want to install from a local checkout instead.
 
 **Compound-extension caveat:** Claude Code's LSP plugin system only supports simple file extensions, so the `tarn-lsp` plugin claims **all** `.yaml` and `.yml` files in any project it is installed in (not just `.tarn.yaml`). Always install with `--scope project` in Tarn-focused repos only &mdash; do not install it globally if you also edit unrelated YAML in Claude Code.
 
@@ -1457,7 +1457,7 @@ Tarn does not aim for full Hurl parity. The main intentionally unclosed gaps are
 ## GitHub Action
 
 ```yaml
-- uses: NazarKalytiuk/hive@v1
+- uses: NazarKalytiuk/tarn@v1
   with:
     path: tests/
     format: junit
@@ -1565,7 +1565,7 @@ targeted override for one-off debugging. Bodies exceeding the
 Add to the top of your `.tarn.yaml` files for IDE autocompletion:
 
 ```yaml
-# yaml-language-server: $schema=https://raw.githubusercontent.com/NazarKalytiuk/hive/main/schemas/v1/testfile.json
+# yaml-language-server: $schema=https://raw.githubusercontent.com/NazarKalytiuk/tarn/main/schemas/v1/testfile.json
 name: My test
 steps: ...
 ```
@@ -1648,7 +1648,7 @@ tarn completions fish > ~/.config/fish/completions/tarn.fish
 ## Development
 
 ```bash
-git clone https://github.com/NazarKalytiuk/hive.git
+git clone https://github.com/NazarKalytiuk/tarn.git
 cd tarn
 
 cargo build                    # build
