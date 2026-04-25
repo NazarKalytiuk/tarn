@@ -72,9 +72,9 @@ For a published release:
 
 ```bash
 VERSION=vX.Y.Z
-curl -LO https://github.com/NazarKalytiuk/hive/releases/download/${VERSION}/hive-linux-amd64.tar.gz
-curl -LO https://github.com/NazarKalytiuk/hive/releases/download/${VERSION}/hive-checksums.txt
-shasum -a 256 -c hive-checksums.txt
+curl -LO https://github.com/NazarKalytiuk/hive/releases/download/${VERSION}/tarn-linux-amd64.tar.gz
+curl -LO https://github.com/NazarKalytiuk/hive/releases/download/${VERSION}/tarn-checksums.txt
+shasum -a 256 -c tarn-checksums.txt
 ```
 
 ### Update Path

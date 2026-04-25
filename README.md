@@ -58,17 +58,17 @@ cargo install --git https://github.com/NazarKalytiuk/hive.git --bin tarn
 ```
 
 Binaries for **macOS** (Intel & Apple Silicon), **Linux** (amd64 & arm64), and **Windows** (amd64 zip) are published on the [releases page](https://github.com/NazarKalytiuk/hive/releases).
-Each release also includes `hive-checksums.txt` for SHA256 verification and a generated `tarn.rb` Homebrew formula artifact.
+Each release also includes `tarn-checksums.txt` for SHA256 verification and a generated `tarn.rb` Homebrew formula artifact.
 
 Container path:
 - `ghcr.io/<owner>/tarn:<tag>` from the release workflow
 
 Installer notes:
-- `install.sh` verifies the downloaded archive against `hive-checksums.txt`
+- `install.sh` verifies the downloaded archive against `tarn-checksums.txt`
 - `install.sh` installs `tarn`, `tarn-mcp`, and `tarn-lsp` when those binaries are present in the release archive
 - `TARN_INSTALL_DIR` controls the install destination
 - `HIVE_INSTALL_DIR` is still accepted as a backward-compatible alias during the rename transition
-- Manual verification also works with `shasum -a 256 -c hive-checksums.txt`
+- Manual verification also works with `shasum -a 256 -c tarn-checksums.txt`
 
 ## Quick Start
 

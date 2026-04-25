@@ -21,7 +21,7 @@ case "$ARCH" in
   *)             echo "Unsupported architecture: $ARCH"; exit 1 ;;
 esac
 
-ARTIFACT="hive-${OS_TAG}-${ARCH_TAG}"
+ARTIFACT="tarn-${OS_TAG}-${ARCH_TAG}"
 
 # Get latest release tag
 echo "Fetching latest release..."
@@ -35,7 +35,7 @@ fi
 echo "Installing tarn ${TAG} (${OS_TAG}/${ARCH_TAG})..."
 
 URL="https://github.com/${REPO}/releases/download/${TAG}/${ARTIFACT}.tar.gz"
-CHECKSUM_URL="https://github.com/${REPO}/releases/download/${TAG}/hive-checksums.txt"
+CHECKSUM_URL="https://github.com/${REPO}/releases/download/${TAG}/tarn-checksums.txt"
 
 # Download and extract
 TMPDIR=$(mktemp -d)
@@ -44,8 +44,8 @@ trap 'rm -rf "$TMPDIR"' EXIT
 curl -fsSL "$URL" -o "$TMPDIR/${ARTIFACT}.tar.gz"
 
 # Verify checksum if available
-if curl -fsSL "$CHECKSUM_URL" -o "$TMPDIR/hive-checksums.txt" 2>/dev/null; then
-  EXPECTED_SHA="$(grep " ${ARTIFACT}.tar.gz$" "$TMPDIR/hive-checksums.txt" | awk '{print $1}')"
+if curl -fsSL "$CHECKSUM_URL" -o "$TMPDIR/tarn-checksums.txt" 2>/dev/null; then
+  EXPECTED_SHA="$(grep " ${ARTIFACT}.tar.gz$" "$TMPDIR/tarn-checksums.txt" | awk '{print $1}')"
   if [ -n "$EXPECTED_SHA" ]; then
     if command -v sha256sum >/dev/null 2>&1; then
       ACTUAL_SHA="$(sha256sum "$TMPDIR/${ARTIFACT}.tar.gz" | awk '{print $1}')"

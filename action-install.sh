@@ -39,9 +39,9 @@ if [ "${VERSION}" = "latest" ]; then
 fi
 
 # Build download URL
-ARCHIVE="hive-${OS}-${ARCH}.tar.gz"
+ARCHIVE="tarn-${OS}-${ARCH}.tar.gz"
 DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${VERSION}/${ARCHIVE}"
-CHECKSUM_URL="https://github.com/${REPO}/releases/download/${VERSION}/hive-checksums.txt"
+CHECKSUM_URL="https://github.com/${REPO}/releases/download/${VERSION}/tarn-checksums.txt"
 
 echo "Downloading ${DOWNLOAD_URL}..."
 TMPDIR=$(mktemp -d)
@@ -50,8 +50,8 @@ trap 'rm -rf "${TMPDIR}"' EXIT
 curl -fsSL "${DOWNLOAD_URL}" -o "${TMPDIR}/${ARCHIVE}"
 
 # Verify checksum if available
-if curl -fsSL "${CHECKSUM_URL}" -o "${TMPDIR}/hive-checksums.txt" 2>/dev/null; then
-  EXPECTED_SHA="$(grep " ${ARCHIVE}$" "${TMPDIR}/hive-checksums.txt" | awk '{print $1}')"
+if curl -fsSL "${CHECKSUM_URL}" -o "${TMPDIR}/tarn-checksums.txt" 2>/dev/null; then
+  EXPECTED_SHA="$(grep " ${ARCHIVE}$" "${TMPDIR}/tarn-checksums.txt" | awk '{print $1}')"
   if [ -n "${EXPECTED_SHA}" ]; then
     if command -v sha256sum >/dev/null 2>&1; then
       ACTUAL_SHA="$(sha256sum "${TMPDIR}/${ARCHIVE}" | awk '{print $1}')"

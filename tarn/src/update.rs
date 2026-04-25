@@ -51,7 +51,7 @@ pub fn check_for_update() -> Result<UpdateInfo, String> {
     let is_newer = version_is_newer(current, &latest_version);
 
     // Find the download URL for our platform
-    let asset_name = format!("hive-{}.tar.gz", target);
+    let asset_name = format!("tarn-{}.tar.gz", target);
     let download_url = release["assets"].as_array().and_then(|assets| {
         assets
             .iter()

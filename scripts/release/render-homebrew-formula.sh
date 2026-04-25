@@ -23,20 +23,20 @@ class Tarn < Formula
 
   on_macos do
     if Hardware::CPU.arm?
-      url "https://github.com/NazarKalytiuk/hive/releases/download/${TAG}/hive-darwin-arm64.tar.gz"
+      url "https://github.com/NazarKalytiuk/hive/releases/download/${TAG}/tarn-darwin-arm64.tar.gz"
       sha256 "${DARWIN_ARM64_SHA}"
     else
-      url "https://github.com/NazarKalytiuk/hive/releases/download/${TAG}/hive-darwin-amd64.tar.gz"
+      url "https://github.com/NazarKalytiuk/hive/releases/download/${TAG}/tarn-darwin-amd64.tar.gz"
       sha256 "${DARWIN_AMD64_SHA}"
     end
   end
 
   on_linux do
     if Hardware::CPU.arm?
-      url "https://github.com/NazarKalytiuk/hive/releases/download/${TAG}/hive-linux-arm64.tar.gz"
+      url "https://github.com/NazarKalytiuk/hive/releases/download/${TAG}/tarn-linux-arm64.tar.gz"
       sha256 "${LINUX_ARM64_SHA}"
     else
-      url "https://github.com/NazarKalytiuk/hive/releases/download/${TAG}/hive-linux-amd64.tar.gz"
+      url "https://github.com/NazarKalytiuk/hive/releases/download/${TAG}/tarn-linux-amd64.tar.gz"
       sha256 "${LINUX_AMD64_SHA}"
     end
   end
