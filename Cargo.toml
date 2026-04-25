@@ -1,3 +1,16 @@
 [workspace]
 members = ["tarn", "demo-server", "tarn-mcp", "tarn-lsp"]
 resolver = "2"
+
+# Windows main-thread stack defaults to 1 MB. The `tarn` binary's
+# top-level CLI dispatch (`run_command` takes 31 args; the `Cli`
+# clap-derived enum has dozens of subcommand variants) generates a
+# debug-profile stack frame that exceeds that limit, causing every
+# `cargo test`-spawned `tarn.exe` invocation to abort with
+# STATUS_STACK_OVERFLOW (-1073741571 / 0xC00000FD). At opt-level 1
+# rustc reuses stack slots for non-overlapping locals, which is
+# enough to fit the frame back under 1 MB without measurably
+# slowing down debug builds. Scoped to the `tarn` package so deps
+# and the other workspace crates keep the default opt-level 0.
+[profile.dev.package.tarn]
+opt-level = 1
