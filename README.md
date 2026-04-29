@@ -1,6 +1,6 @@
 <p align="center">
   <strong>Tarn</strong><br>
-  <em>API testing that AI agents can write, run, and debug</em>
+  <em>API tests an AI agent can write, run, and debug.</em>
 </p>
 
 <p align="center">
@@ -10,11 +10,19 @@
   <a href="https://github.com/NazarKalytiuk/tarn/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License"></a>
 </p>
 
+<p align="center">
+  <a href="https://nazarkalytiuk.github.io/tarn/">Docs</a> &middot;
+  <a href="https://nazarkalytiuk.github.io/tarn/getting-started.html">Get started</a> &middot;
+  <a href="https://nazarkalytiuk.github.io/tarn/mcp.html">MCP integration</a> &middot;
+  <a href="./docs/AI_WORKFLOW_DEMO.md">Agent loop demo</a>
+</p>
+
 ---
 
-Tests are `.tarn.yaml` files &mdash; YAML in, structured JSON out. Single binary, zero dependencies. Designed for the AI coding workflow: an LLM writes tests, runs `tarn run --format json`, parses results, iterates.
+Tarn is a CLI-first API testing tool written in Rust. Tests are `.tarn.yaml` files. Output is structured JSON with categorized failures and remediation hints, so an agent &mdash; Claude Code, Cursor, Windsurf, opencode &mdash; can write a test, run it, read what broke, and fix it without scraping logs.
 
 ```yaml
+# tests/health.tarn.yaml
 name: Health check
 steps:
   - name: GET /health
@@ -30,65 +38,58 @@ $ tarn run
  TARN  Running tests/health.tarn.yaml
 
  ● Health check
-
    ✓ GET /health (4ms)
 
  Results: 1 passed (15ms)
 ```
 
+When something breaks, `--format json` returns the same run as machine-readable data with `failure_category`, `error_code`, and the offending request/response. The `tarn-mcp` companion exposes a `tarn_fix_plan` tool that turns that report into actionable suggestions an agent can apply directly.
+
 ## Why Tarn?
 
-- **50% fewer tokens** than equivalent TypeScript/Python tests &mdash; faster LLM generation, lower cost
-- **Structured JSON output** with request/response on failures &mdash; machines parse it, not regex
-- **Single binary** &mdash; `curl | sh` install, runs in any CI, no runtime needed
-- **MCP server** &mdash; direct integration with Claude Code, opencode, Cursor, Windsurf
-- **Everything you need** &mdash; REST, GraphQL, captures, cookies, multipart, includes, polling, Lua scripting, parallel execution, 7 output formats
+- **Structured failures, not log scraping** &mdash; every failure carries a stable category, error code, and remediation hints. Agents branch on taxonomy, not regex.
+- **MCP-native** &mdash; `tarn-mcp` exposes `list`, `validate`, `run`, and `fix_plan` as structured tools for Claude Code, opencode, Cursor, and Windsurf.
+- **YAML the model already knows** &mdash; no DSL to teach, no test framework to bootstrap. An LLM writes a `.tarn.yaml` and ships.
+- **One static binary** &mdash; `curl | sh` install, no runtime, drops into any CI image.
+- **Batteries included** &mdash; REST + GraphQL, captures, cookies, multipart, includes, polling, Lua, parallel execution, 7 output formats.
 
 ## Install
 
 ```bash
-# One-liner (macOS / Linux)
+# macOS / Linux
 curl -fsSL https://raw.githubusercontent.com/NazarKalytiuk/tarn/main/install.sh | sh
 
-# Install to a custom directory
-TARN_INSTALL_DIR="$HOME/.local/bin" curl -fsSL https://raw.githubusercontent.com/NazarKalytiuk/tarn/main/install.sh | sh
-
-# Or build/install from source
+# from source
 cargo install --git https://github.com/NazarKalytiuk/tarn.git --bin tarn
 ```
 
-Binaries for **macOS** (Intel & Apple Silicon), **Linux** (amd64 & arm64), and **Windows** (amd64 zip) are published on the [releases page](https://github.com/NazarKalytiuk/tarn/releases).
-Each release also includes `tarn-checksums.txt` for SHA256 verification and a generated `tarn.rb` Homebrew formula artifact.
-
-Container path:
-- `ghcr.io/<owner>/tarn:<tag>` from the release workflow
-
-Installer notes:
-- `install.sh` verifies the downloaded archive against `tarn-checksums.txt`
-- `install.sh` installs `tarn`, `tarn-mcp`, and `tarn-lsp` when those binaries are present in the release archive
-- `TARN_INSTALL_DIR` controls the install destination
-- Manual verification also works with `shasum -a 256 -c tarn-checksums.txt`
+Pre-built binaries for **macOS** (Intel + Apple Silicon), **Linux** (amd64 + arm64), and **Windows** (amd64 zip) are on the [releases page](https://github.com/NazarKalytiuk/tarn/releases/latest), each with a `tarn-checksums.txt` for SHA-256 verification and a generated `tarn.rb` Homebrew formula artifact. The installer also lays down `tarn-mcp` and `tarn-lsp` when present in the archive. Set `TARN_INSTALL_DIR` to install elsewhere. Container path: `ghcr.io/<owner>/tarn:<tag>` from the release workflow. Manual verification works with `shasum -a 256 -c tarn-checksums.txt`.
 
 ## Quick Start
 
+The 60-second path:
+
 ```bash
-tarn init                              # scaffold tests/health + advanced examples/ templates
-# Edit tarn.env.yaml to point at your API, or start one on http://localhost:3000
-tarn run                               # run all tests
-tarn run tests/health.tarn.yaml        # run the scaffolded test directly
-tarn fmt --check                       # verify canonical YAML formatting
-tarn run --env staging                 # use staging environment
-tarn run --format json                 # structured output for LLM/CI
-tarn run --only-failed                 # show only failing tests in the output
-tarn run --no-progress                 # disable streaming progress (batch dump at end)
-tarn run --watch                       # re-run on file changes
-tarn run --parallel                    # run files in parallel
-tarn list --tag smoke                  # inspect matching tests without running them
+tarn init                              # scaffold tests/ + tarn.env.yaml + advanced templates
+# edit tarn.env.yaml so base_url points at your API
+tarn run                               # runs every .tarn.yaml under tests/
+```
+
+Layer on the flags you actually need:
+
+```bash
+tarn run --format json --json-mode compact   # structured output for agents and CI
+tarn run --env staging                       # use a named environment
+tarn run --only-failed                       # quiet down a noisy run
+tarn run --watch                             # rerun on file changes
+tarn run --parallel                          # run files in parallel
+tarn list --tag smoke                        # what would run, without running
+tarn fmt --check                             # canonical YAML, CI-gateable
 ```
 
 ## Debugging a failed run
 
-Default to the **failures-first loop** — it keeps agents and humans off the megabyte-scale full report until they actually need it:
+Default to the **failures-first loop** &mdash; it keeps agents and humans off the megabyte-scale full report until they actually need it:
 
 ```bash
 tarn validate <path>                  # syntax/config before running
@@ -96,34 +97,46 @@ tarn run <path>                       # writes .tarn/runs/<run_id>/
 tarn failures                         # root-cause groups; cascades collapsed
 tarn inspect last FILE::TEST::STEP    # full context for ONE failure
 # patch tests or application code
-tarn rerun --failed                   # replay only the failing (file, test) pairs
+tarn rerun --failed                   # replay only failing (file, test) pairs
 tarn diff prev last                   # confirm fixed / new / persistent
 ```
 
-`tarn failures` reads `.tarn/failures.json` (or `--run <id>` for a specific archive), groups failures by root-cause fingerprint, and collapses `skipped_due_to_failed_capture` cascades into their upstream entry — so one failing step with five downstream skips surfaces as one entry with `cascades: 5`, not six.
+`tarn failures` groups by root-cause fingerprint and collapses `skipped_due_to_failed_capture` cascades into their upstream entry &mdash; one failing step with five downstream skips surfaces as one entry with `cascades: 5`, not six. `tarn inspect` supports run-id aliases `last` / `latest` / `@latest` / `prev` and drills into one record via `FILE[::TEST[::STEP]]`. `tarn rerun --failed` stamps `rerun_source` onto the new report. `tarn diff prev last` buckets failure fingerprints into `new` / `fixed` / `persistent` so you can confirm a patch without re-reading the full report.
 
-`tarn inspect` supports run-id aliases `last` / `latest` / `@latest` and `prev`. The target `FILE[::TEST[::STEP]]` drills into one record without parsing the full `report.json`.
-
-`tarn rerun --failed` re-executes only the failing `(file, test)` pairs and produces a fresh archive, stamping `rerun_source` onto the new report. `tarn diff prev last` buckets failure fingerprints into `new` / `fixed` / `persistent` so you can confirm a patch without re-reading the full report.
-
-Reach for `.tarn/runs/<run_id>/report.json` only when `failures` + `inspect` cannot answer the question. See [`plugin/skills/tarn-api-testing/SKILL.md`](./plugin/skills/tarn-api-testing/SKILL.md) (Failures-First Loop) and [`docs/TROUBLESHOOTING.md`](./docs/TROUBLESHOOTING.md) (Response-shape drift) for the canonical agent-facing guidance, including a worked example of a mutation endpoint whose response shape changed from `{"uuid": "..."}` to `{"request": {"uuid": "..."}}` and the `$.uuid` → `$.request.uuid` fix.
+Reach for `.tarn/runs/<run_id>/report.json` only when `failures` + `inspect` cannot answer the question. See [`plugin/skills/tarn-api-testing/SKILL.md`](./plugin/skills/tarn-api-testing/SKILL.md) (Failures-First Loop) and [`docs/TROUBLESHOOTING.md`](./docs/TROUBLESHOOTING.md) for the canonical agent-facing guidance, including a worked example of a mutation endpoint whose response shape changed from `{"uuid": "..."}` to `{"request": {"uuid": "..."}}` and the `$.uuid` &rarr; `$.request.uuid` fix.
 
 ## Hello World
 
-Want a fully local demo path from this repo?
+A fully local demo with no external network dependency:
 
 ```bash
 PORT=3000 cargo run -p demo-server &
 cargo run -p tarn -- run examples/demo-server/hello-world.tarn.yaml
 ```
 
-This exercises a local API with no external network dependency.
-There are more local scenarios in `examples/demo-server/` for redirects, cookies, forms, error responses, and authenticated CRUD flows.
+More local scenarios &mdash; redirects, cookies, forms, error responses, authenticated CRUD &mdash; live in `examples/demo-server/`.
+
+## Documentation
+
+Full guides, CLI reference, AI workflow walkthroughs, and editor setup live on the docs site:
+
+**<https://nazarkalytiuk.github.io/tarn/>**
+
+In-repo docs to start with:
+
+- [`docs/INDEX.md`](./docs/INDEX.md) &mdash; canonical map of all in-repo docs
+- [`docs/AI_WORKFLOW_DEMO.md`](./docs/AI_WORKFLOW_DEMO.md) &mdash; end-to-end agent loop walkthrough
+- [`docs/MCP_WORKFLOW.md`](./docs/MCP_WORKFLOW.md) &mdash; MCP server usage patterns
+- [`docs/TARN_PRODUCT_STRATEGY.md`](./docs/TARN_PRODUCT_STRATEGY.md) &mdash; product direction
+- [`docs/TARN_VS_HURL_COMPARISON.md`](./docs/TARN_VS_HURL_COMPARISON.md) and [`docs/HURL_MIGRATION.md`](./docs/HURL_MIGRATION.md) &mdash; comparison and migration
+- [`docs/TARN_LSP.md`](./docs/TARN_LSP.md) &mdash; `tarn-lsp` Language Server (LSP 3.17) for Neovim, Helix, Zed, and other compatible clients
+- [`docs/VSCODE_EXTENSION.md`](./docs/VSCODE_EXTENSION.md) &mdash; VS Code extension in [`editors/vscode`](./editors/vscode)
+- [`editors/zed/README.md`](./editors/zed/README.md) &mdash; Zed extension, published via [zed-industries/extensions](https://github.com/zed-industries/extensions)
+
+The reference sections below mirror what's on the docs site &mdash; useful when reading on GitHub directly.
 
 ## Table of Contents
 
-- [Docs Index](#docs-index)
-- [Debugging a failed run](#debugging-a-failed-run)
 - [Test File Format](#test-file-format)
 - [Assertions](#assertions)
 - [Variables](#variables)
@@ -149,29 +162,6 @@ There are more local scenarios in `examples/demo-server/` for redirects, cookies
 - [Zed Extension](#zed-extension)
 - [Shell Completions](#shell-completions)
 - [Development](#development)
-
-## Docs Index
-
-Canonical project docs live in [`docs/INDEX.md`](./docs/INDEX.md).
-
-If you are looking for product direction or comparisons, start with:
-
-- [`docs/TARN_PRODUCT_STRATEGY.md`](./docs/TARN_PRODUCT_STRATEGY.md)
-- [`docs/TARN_VS_HURL_COMPARISON.md`](./docs/TARN_VS_HURL_COMPARISON.md)
-- [`docs/HURL_MIGRATION.md`](./docs/HURL_MIGRATION.md)
-- [`docs/TARN_COMPETITIVENESS_ROADMAP.md`](./docs/TARN_COMPETITIVENESS_ROADMAP.md)
-
-For AI-assisted workflows, see also:
-- [Claude Code Plugin](#claude-code-plugin) &mdash; install Tarn as a Claude Code plugin
-- [Claude Code Skill](#claude-code-skill) &mdash; structured knowledge for AI agents
-- [`docs/MCP_WORKFLOW.md`](./docs/MCP_WORKFLOW.md) &mdash; MCP server usage patterns
-
-For editor integrations:
-- [`docs/TARN_LSP.md`](./docs/TARN_LSP.md) &mdash; `tarn-lsp` Language Server (LSP 3.17) for Claude Code, Neovim, Helix, Zed, and other compatible clients. Ships diagnostics, hover, nested schema-aware completion, document symbols, go-to-definition, references, rename, code lens (run test / run step), formatting, code actions (extract env var, capture this field, scaffold assert from last response), quick fix via `tarn::fix_plan`, and a JSONPath evaluator (`tarn.evaluateJsonpath` executeCommand).
-- [`docs/VSCODE_EXTENSION.md`](./docs/VSCODE_EXTENSION.md) &mdash; the VS Code extension in [`editors/vscode`](./editors/vscode).
-- [`editors/zed/README.md`](./editors/zed/README.md) &mdash; the Zed extension in [`editors/zed`](./editors/zed), published via the [zed-industries/extensions](https://github.com/zed-industries/extensions) registry.
-
-A lightweight static docs site now lives in [`docs/site/index.html`](./docs/site/index.html) and is deployable via GitHub Pages from `.github/workflows/docs-site.yml`.
 
 ## Test File Format
 

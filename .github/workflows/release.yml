@@ -89,31 +89,40 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: x86_64-unknown-linux-gnu
+          # Linux targets are musl-static — binaries run on any Linux distro
+          # from Alpine to RHEL without GLIBC constraints. Prior gnu builds
+          # required GLIBC 2.39 (Ubuntu 24.04) and broke curl|sh install on
+          # Ubuntu 22.04, Debian 11/12, RHEL 8/9, Amazon Linux 2.
+          - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             artifact: tarn-linux-amd64
             binary: tarn
             archive: tar.gz
-          - target: aarch64-unknown-linux-gnu
+            use_cross: false
+          - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
             artifact: tarn-linux-arm64
             binary: tarn
             archive: tar.gz
+            use_cross: true
           - target: x86_64-apple-darwin
             os: macos-latest
             artifact: tarn-darwin-amd64
             binary: tarn
             archive: tar.gz
+            use_cross: false
           - target: aarch64-apple-darwin
             os: macos-latest
             artifact: tarn-darwin-arm64
             binary: tarn
             archive: tar.gz
+            use_cross: false
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             artifact: tarn-windows-amd64
             binary: tarn.exe
             archive: zip
+            use_cross: false
 
     steps:
       - uses: actions/checkout@v6
@@ -124,15 +133,27 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
-      # Install cross-compilation tools for aarch64-linux
-      - name: Install cross-compilation tools
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
+      # x86_64-musl: native build, musl-tools provides musl-gcc and
+      # the static C runtime.
+      - name: Install musl tools (x86_64)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
-          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          sudo apt-get install -y musl-tools
 
-      - name: Build
+      # aarch64-musl: cross-compile via `cross` (Docker-based toolchain).
+      # cross provides aarch64-linux-musl-gcc and the musl C runtime
+      # without us having to maintain our own toolchain download.
+      - name: Install cross
+        if: matrix.use_cross == true
+        run: cargo install cross --locked --version 0.2.5
+
+      - name: Build (cross)
+        if: matrix.use_cross == true
+        run: cross build --release --target ${{ matrix.target }} -p tarn -p tarn-mcp -p tarn-lsp
+
+      - name: Build (native)
+        if: matrix.use_cross != true
         run: cargo build --release --target ${{ matrix.target }} -p tarn -p tarn-mcp -p tarn-lsp
 
       - name: Package unix archives

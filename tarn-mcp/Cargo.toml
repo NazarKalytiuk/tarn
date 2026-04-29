@@ -1,6 +1,6 @@
 [package]
 name = "tarn-mcp"
-version = "0.11.7"
+version = "0.11.8"
 edition = "2021"
 description = "MCP server for Tarn API testing tool"
 license = "MIT"
@@ -20,7 +20,7 @@ name = "tarn-mcp"
 path = "src/main.rs"
 
 [dependencies]
-tarn = { version = "0.11.7", path = "../tarn" }
+tarn = { version = "0.11.8", path = "../tarn" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # `chrono` is re-used for run_id generation + run artifact timestamps.
