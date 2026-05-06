@@ -54,11 +54,22 @@ pub fn compute_exit_code(run_result: &RunResult) -> i32 {
             // correct category (usually CaptureError → 3). Treating
             // a skip as a fresh runtime error would double-count the
             // same failure.
+            //
+            // `SkippedByPolicy` is also benign: a `command:` step
+            // intentionally skipped because the run did not pass
+            // `--allow-exec`. Its `passed: true` already keeps the
+            // run green when nothing else failed.
+            //
+            // `CommandFailed` is treated like a regular failure (exit
+            // 1) — the underlying child process exited non-zero, but
+            // the *runner* itself is healthy.
             Some(FailureCategory::SkippedDueToFailedCapture)
             | Some(FailureCategory::SkippedDueToFailFast)
             | Some(FailureCategory::SkippedByCondition)
+            | Some(FailureCategory::SkippedByPolicy)
             | Some(FailureCategory::AssertionFailed)
             | Some(FailureCategory::ResponseShapeMismatch)
+            | Some(FailureCategory::CommandFailed)
             | None => {}
         }
     }

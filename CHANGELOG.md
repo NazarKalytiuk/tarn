@@ -2,6 +2,84 @@
 
 ## Unreleased
 
+## 0.12.0 — Shell `command:` steps with deny-by-default execution (NAZ-464)
+
+A test step can now run an arbitrary shell command alongside the existing
+HTTP step shape. Use this for fixture prep, version stamping, and other
+inline scripting that previously required a wrapper around `tarn run`.
+
+```yaml
+setup:
+  - name: Bump fixture version
+    command:
+      run: "python3 bin/bump-version.py --version {{ $timestamp }}"
+      pass_env: [PATH, PYTHON]
+      capture:
+        bumped_version:
+          stdout_regex: "version=([^\\s]+)"
+        exit_status:
+          exit_code: true
+```
+
+### Security: deny-by-default
+
+`command:` is **inert** unless the run was authorized:
+
+- CLI flag: `tarn run --allow-exec`
+- Project config: `allow_exec: true` in `tarn.config.yaml`
+- MCP: `"allow_exec": true` in `tarn_run` / `tarn_run_agent` /
+  `tarn_rerun_failed` tool params
+
+Without an opt-in, the step is recorded as
+`failure_category: skipped_by_policy` with `passed: true` and the child
+process is **never spawned**. A freshly cloned repo therefore never
+executes shell on a default `tarn run`.
+
+### Env scrubbing
+
+The child process gets a tiny baseline env (`PATH`, `HOME` /
+`USERPROFILE`, `TMPDIR` / `TEMP` / `TMP`). Tarn's own `{{ env.x }}`
+chain is **never** implicitly forwarded; secrets in
+`tarn.env.local.yaml` stay scoped to template interpolation.
+Additional parent-process variables must be allowlisted via
+`pass_env: [VAR1, VAR2]`.
+
+### Captures
+
+`command.capture:` accepts exactly one source per entry:
+
+- `stdout_regex: "PATTERN"` — capture group 1 (or full match). Misses
+  fail the step under `command_failed` unless `optional: true`.
+- `exit_code: true` — capture the literal exit code as an integer.
+
+`assert:` and `poll:` are HTTP-only and rejected at parse time on
+`command:` steps.
+
+### Surface-area changes
+
+- New `FailureCategory` variants: `skipped_by_policy`, `command_failed`.
+- New `ErrorCode::CommandFailed`. Skipped-by-policy is exit-code-neutral
+  (run stays green); `command_failed` is treated as a regular failure
+  (exit 1).
+- JSON report always emits `failure_category` when set, including for
+  benign skips on otherwise-passing steps. Lets consumers distinguish
+  `skipped_by_condition` / `skipped_by_policy` without re-deriving from
+  `response_summary`.
+- `tarn list` now marks command steps with a `[command]` suffix in
+  human output and a `kind` field in `--format json` output.
+- Schemas (`schemas/v1/testfile.json`, `schemas/v1/report.json`) and
+  the bundled LSP copy gained `CommandStep`, `CommandCapture`, and the
+  two new `failure_category` / `error_code` enum entries.
+- `tarn-mcp` tool descriptors expose `allow_exec` on `tarn_run`,
+  `tarn_run_agent`, and `tarn_rerun_failed`.
+- Skill (`plugin/skills/tarn-api-testing/`) and docs (README,
+  `docs/MCP_WORKFLOW.md`) updated with end-to-end coverage.
+
+### Bug fix
+
+- Closes NAZ-432: confirmed Windows `tarn-mcp::env_resolution_parity_*`
+  test is green on `main` after the NAZ-423 / 424 / 425 cascade fixes.
+
 ## 0.11.7 — Windows CI green + VS Code Marketplace publish unbroken
 
 CI / release-pipeline release. No CLI surface or behavior changes on

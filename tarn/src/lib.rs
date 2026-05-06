@@ -2,6 +2,7 @@ pub mod assert;
 pub mod bench;
 pub mod builtin;
 pub mod capture;
+pub mod command;
 pub mod config;
 pub mod cookie;
 pub mod env;

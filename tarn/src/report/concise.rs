@@ -256,6 +256,8 @@ fn category_label(cat: FailureCategory) -> &'static str {
         FailureCategory::SkippedDueToFailedCapture => "skipped_due_to_failed_capture",
         FailureCategory::SkippedDueToFailFast => "skipped_due_to_fail_fast",
         FailureCategory::SkippedByCondition => "skipped_by_condition",
+        FailureCategory::SkippedByPolicy => "skipped_by_policy",
+        FailureCategory::CommandFailed => "command_failed",
     }
 }
 

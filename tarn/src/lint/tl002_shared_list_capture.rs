@@ -29,10 +29,13 @@ pub fn lint(file: &TestFile, path: &str) -> Vec<Finding> {
             if !has_positional_capture {
                 continue;
             }
-            if !url_looks_like_shared_list(&step.request.url) {
+            let Some(request) = step.request.as_ref() else {
+                continue;
+            };
+            if !url_looks_like_shared_list(&request.url) {
                 continue;
             }
-            let key = normalize_url(&step.request.url);
+            let key = normalize_url(&request.url);
             let step_path = format!("{}::{}::{}", path, test_name, step.name);
             buckets
                 .entry(key)

@@ -38,6 +38,19 @@ pub enum FailureCategory {
     /// this category are reported with `passed: true` so tests don't
     /// fail when a conditional branch legitimately skips.
     SkippedByCondition,
+    /// A `command:` step (NAZ-464) was not executed because the run
+    /// did not opt in to shell execution. Steps in this state carry
+    /// `passed: true` — the skip is a security default, not fallout —
+    /// and the report carries a one-line note pointing the user at
+    /// `--allow-exec` / `tarn.config.yaml: allow_exec: true`.
+    SkippedByPolicy,
+    /// A `command:` step exited non-zero, was terminated by a signal,
+    /// or its stdout regex capture missed without `optional: true`.
+    /// Distinct from `AssertionFailed` because the failure is rooted
+    /// in the child process result, not an HTTP response, and from
+    /// `Timeout` because the runner does not currently impose its own
+    /// time bound on child processes.
+    CommandFailed,
 }
 
 /// Stable machine-readable failure code for programmatic handling.
@@ -60,6 +73,10 @@ pub enum ErrorCode {
     /// Paired with `SkippedDueToFailedCapture` / `SkippedDueToFailFast`
     /// so consumers can filter cascade fallout from primary failures.
     SkippedDependency,
+    /// A `command:` step exited non-zero, was killed by a signal, or
+    /// failed a stdout regex capture. Paired with
+    /// `FailureCategory::CommandFailed`.
+    CommandFailed,
 }
 
 /// Result of a single assertion check.
@@ -258,6 +275,11 @@ impl StepResult {
             // error code — downstream consumers should treat them as
             // observational, not as cascade fallout.
             Some(FailureCategory::SkippedByCondition) => None,
+            // `SkippedByPolicy` is the same shape: a `command:` step
+            // legitimately skipped because the run was not granted
+            // `--allow-exec`. No error code, `passed: true`.
+            Some(FailureCategory::SkippedByPolicy) => None,
+            Some(FailureCategory::CommandFailed) => Some(ErrorCode::CommandFailed),
             Some(FailureCategory::ParseError) => {
                 if lower.contains("interpolation") {
                     Some(ErrorCode::InterpolationFailed)

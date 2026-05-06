@@ -78,6 +78,16 @@ See [`docs/AI_WORKFLOW_DEMO.md`](./AI_WORKFLOW_DEMO.md) and the Tarn skill's **F
 
 > **Editor consumers:** `tarn_fix_plan` is backed by the same `tarn::fix_plan` library surface that powers `tarn-lsp`'s `CodeActionKind::QUICKFIX` **Apply fix** code action (NAZ-305, L3.4). The MCP tool uses the report-driven path for prioritised advice; the LSP uses the diagnostic-driven path for structured edits that clients apply with one click. See [`docs/TARN_LSP.md`](./TARN_LSP.md#apply-fix-quickfix--new-in-l34) for the LSP-side contract.
 
+## Shell `command:` steps
+
+Tarn 0.12 introduces shell `command:` steps (NAZ-464). Files containing these steps run by default as no-ops over MCP — the runner reports `failure_category: skipped_by_policy` and never spawns the child process. Pass `"allow_exec": true` in the `tarn_run` / `tarn_run_agent` / `tarn_rerun_failed` tool params to authorize execution. The same gate is exposed as `tarn run --allow-exec` on the CLI and `allow_exec: true` in `tarn.config.yaml` for trusted, project-owned repositories.
+
+Treat `allow_exec` as a per-run consent: an agent should never set it implicitly. Surface the `command:` block to the human, confirm trust, and pass it explicitly. The child process gets a minimal env (`PATH`, `HOME`/`USERPROFILE`, `TMPDIR`/`TEMP`/`TMP`); other parent-process variables must be allowlisted via `pass_env:` in the YAML. Tarn's own `{{ env.x }}` chain never leaks into the child without an explicit interpolation in `command.run`.
+
+Failures land in two new categories:
+- `skipped_by_policy` — benign skip; the step has `passed: true` and the run stays green if nothing else failed.
+- `command_failed` — non-zero exit, signal kill, or a non-optional `stdout_regex` miss; treated like a regular step failure for exit-code purposes.
+
 ## Fields That Matter Most
 
 Focus on these first:

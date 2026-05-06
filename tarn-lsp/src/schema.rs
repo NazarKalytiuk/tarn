@@ -418,6 +418,7 @@ const TEST_KEYS: &[&str] = &["description", "tags", "steps"];
 const STEP_KEYS: &[&str] = &[
     "name",
     "request",
+    "command",
     "capture",
     "assert",
     "retries",

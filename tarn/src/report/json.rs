@@ -235,6 +235,16 @@ fn render_step(
         obj["captures_set"] = json!(step.captures_set);
     }
 
+    // Always emit the failure category when present so JSON consumers
+    // can detect benign skips (`skipped_by_condition`,
+    // `skipped_by_policy`) on otherwise-passing steps without
+    // re-deriving the category from response_summary text. Skipped
+    // steps still report `passed: true`; the category just exposes
+    // *why* the step did not execute.
+    if let Some(category) = &step.error_category {
+        obj["failure_category"] = json!(category);
+    }
+
     // Include failures shortcut list
     if !step.passed {
         // Compute diagnostic hints once per step; we attach them to the
@@ -265,10 +275,6 @@ fn render_step(
 
         obj["assertions"]["failures"] = json!(failures);
 
-        // Include failure category for structured error taxonomy
-        if let Some(category) = &step.error_category {
-            obj["failure_category"] = json!(category);
-        }
         if let Some(code) = step.error_code() {
             obj["error_code"] = json!(code);
         }
@@ -410,6 +416,12 @@ fn remediation_hints(step: &StepResult) -> Vec<String> {
         Some(ErrorCode::SkippedDependency) => {
             hints.push(
                 "This step did not execute. Fix the root-cause failure (listed in the failing assertion message) — this cascade entry will clear automatically once the upstream step passes."
+                    .to_string(),
+            );
+        }
+        Some(ErrorCode::CommandFailed) => {
+            hints.push(
+                "The shell `command:` exited non-zero, was killed, or its `stdout_regex` capture missed. Inspect `request.body` (the captured stdout/stderr) and the failing assertion message for details, then rerun the underlying script manually to confirm."
                     .to_string(),
             );
         }

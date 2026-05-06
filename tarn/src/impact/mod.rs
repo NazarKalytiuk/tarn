@@ -267,9 +267,12 @@ fn collect_endpoint_matches(
 
     // Flat steps (simple form).
     for step in &tf.steps {
+        let Some(request) = step.request.as_ref() else {
+            continue;
+        };
         for change in endpoints {
             if let Some(kind) =
-                endpoint_match::match_endpoint(&step.request.method, &step.request.url, change)
+                endpoint_match::match_endpoint(&request.method, &request.url, change)
             {
                 push_endpoint_match(test, None, step, change, kind, out);
             }
@@ -279,9 +282,12 @@ fn collect_endpoint_matches(
     // Named tests.
     for (test_name, group) in &tf.tests {
         for step in &group.steps {
+            let Some(request) = step.request.as_ref() else {
+                continue;
+            };
             for change in endpoints {
                 if let Some(kind) =
-                    endpoint_match::match_endpoint(&step.request.method, &step.request.url, change)
+                    endpoint_match::match_endpoint(&request.method, &request.url, change)
                 {
                     push_endpoint_match(test, Some(test_name.clone()), step, change, kind, out);
                 }
@@ -516,7 +522,10 @@ fn collect_substring_matches(
             let step_urls = group
                 .steps
                 .iter()
-                .map(|s| format!("{} {}", s.name, s.request.url))
+                .map(|s| {
+                    let url = s.request.as_ref().map(|r| r.url.as_str()).unwrap_or("");
+                    format!("{} {}", s.name, url)
+                })
                 .collect::<Vec<_>>()
                 .join(" ");
             let haystack = format!("{test_name} {step_urls}");

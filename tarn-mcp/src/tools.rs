@@ -554,7 +554,7 @@ fn parse_vars(params: &Value) -> Vec<(String, String)> {
         .unwrap_or_default()
 }
 
-fn build_run_opts() -> RunOptions {
+fn build_run_opts_with(allow_exec: bool) -> RunOptions {
     RunOptions {
         verbose: false,
         dry_run: false,
@@ -566,6 +566,12 @@ fn build_run_opts() -> RunOptions {
         // Fixture writing is CLI-facing; the MCP path has no reliable
         // workspace anchor for per-run fixtures, so keep it off.
         fixtures: tarn::report::fixture_writer::FixtureWriteConfig::default(),
+        // NAZ-464: shell `command:` steps remain inert by default in
+        // the MCP path. Agents must pass `allow_exec: true` in their
+        // tool params to opt in — the agent is the human's proxy
+        // here, so we lean on the same explicit-opt-in semantics as
+        // the CLI's `--allow-exec` flag.
+        allow_exec,
     }
 }
 
@@ -605,7 +611,11 @@ pub fn tarn_run(params: &Value) -> Result<Value, ToolError> {
             .with_data(json!({ "path": path_str })));
     }
 
-    let opts = build_run_opts();
+    let allow_exec = params
+        .get("allow_exec")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let opts = build_run_opts_with(allow_exec);
     let outputs = execute_and_persist(
         &cwd,
         &files,
@@ -895,7 +905,11 @@ pub fn tarn_rerun_failed(params: &Value) -> Result<Value, ToolError> {
         None => ReportMode::Agent,
     };
 
-    let opts = build_run_opts();
+    let allow_exec = params
+        .get("allow_exec")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let opts = build_run_opts_with(allow_exec);
     let outputs = execute_and_persist_with_selectors(
         &cwd,
         &files,
@@ -1897,7 +1911,11 @@ pub fn tarn_run_agent(params: &Value) -> Result<Value, ToolError> {
             .with_data(json!({ "path": path_str })));
     }
 
-    let opts = build_run_opts();
+    let allow_exec = params
+        .get("allow_exec")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let opts = build_run_opts_with(allow_exec);
     let outputs = if selectors.is_empty() {
         execute_and_persist(
             &cwd,

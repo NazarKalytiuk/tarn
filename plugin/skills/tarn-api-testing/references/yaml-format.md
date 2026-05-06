@@ -82,9 +82,10 @@ defaults:
 |----------|------|----------|-------------|
 | `name` | string | Yes | Human-readable step name |
 | `description` | string | No | Optional multi-line description, rendered under the step name in human output |
-| `request` | object | Yes | HTTP request definition |
-| `capture` | object | No | Extract values from response |
-| `assert` | object | No | Assertions on response |
+| `request` | object | One of `request`/`command` is required | HTTP request definition |
+| `command` | object | One of `request`/`command` is required | Shell command definition (NAZ-464). Mutually exclusive with `request`. Inert unless `--allow-exec` / `allow_exec: true` |
+| `capture` | object | No | Extract values from response (`request:` steps) or from stdout/exit code (`command:` steps) |
+| `assert` | object | No | Assertions on response. Only valid on `request:` steps |
 | `retries` | integer | No | Retry count on failure |
 | `timeout` | integer | No | Step timeout in ms |
 | `connect_timeout` | integer | No | Connect timeout in ms |
@@ -97,6 +98,33 @@ defaults:
 | `if` | string | No | Run step only when interpolated expression is truthy (mutually exclusive with `unless`) |
 | `unless` | string | No | Run step only when interpolated expression is falsy (mutually exclusive with `if`) |
 | `debug` | boolean | No | Embed request/response in the report for this step even when it passes (opts out of the default `only-on-failure` shape) |
+
+## Command Step Properties (NAZ-464)
+
+When a step uses `command:` instead of `request:`, the runner spawns a child process via `sh -c` (Unix) / `cmd /C` (Windows). The step is inert unless `--allow-exec` is on the CLI or `allow_exec: true` is set in `tarn.config.yaml`.
+
+| Property | Type | Required | Description |
+|----------|------|----------|-------------|
+| `run` | string | Yes | Shell command. Templates (`{{ env.x }}`, `{{ capture.x }}`, built-ins) interpolate before the shell sees the string |
+| `pass_env` | string[] | No | Allowlist of parent env vars forwarded to the child. Default child env is `PATH`, `HOME`/`USERPROFILE`, `TMPDIR`/`TEMP`/`TMP` only |
+| `workdir` | string | No | Working directory; relative paths resolve from the project root |
+| `capture` | object | No | Map of `name` → `{ stdout_regex: ..., optional: bool }` or `{ exit_code: true }`. Use exactly one source per entry |
+
+`assert:` and `poll:` are not allowed on `command:` steps and produce a parse-time error. Tarn's env chain (`{{ env.x }}` / `{{ capture.x }}`) is never automatically forwarded to the child — interpolate it into `run:` or list it in `pass_env`.
+
+```yaml
+setup:
+  - name: Bump fixture version
+    command:
+      run: "python3 bin/bump-version.py --version {{ $timestamp }}"
+      pass_env: [PATH, PYTHON]
+      workdir: "scripts/fixtures"
+      capture:
+        bumped_version:
+          stdout_regex: "version=([^\\s]+)"
+        exit_status:
+          exit_code: true
+```
 
 ## Test Group Properties (under `tests:`)
 

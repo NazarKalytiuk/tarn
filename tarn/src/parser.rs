@@ -52,6 +52,7 @@ const STEP_FIELDS: &[(&str, &str)] = &[
     ("name", "name"),
     ("description", "description"),
     ("request", "request"),
+    ("command", "command"),
     ("capture", "capture"),
     ("assert", "assert"),
     ("if", "if"),
@@ -124,6 +125,22 @@ const STATUS_ASSERT_FIELDS: &[(&str, &str)] = &[
     ("lte", "lte"),
     ("lt", "lt"),
 ];
+// NAZ-464: shell-command step keys. Mirror `model::CommandStep`.
+const COMMAND_FIELDS: &[(&str, &str)] = &[
+    ("run", "run"),
+    ("pass_env", "pass_env"),
+    ("pass-env", "pass_env"),
+    ("workdir", "workdir"),
+    ("capture", "capture"),
+];
+const COMMAND_CAPTURE_FIELDS: &[(&str, &str)] = &[
+    ("stdout_regex", "stdout_regex"),
+    ("stdout-regex", "stdout_regex"),
+    ("exit_code", "exit_code"),
+    ("exit-code", "exit_code"),
+    ("optional", "optional"),
+];
+
 // Extending this list? Also extend `CAPTURE_EXT_FIELDS` above so
 // capture-side validation stays in lockstep with assertion-side.
 const CAPTURE_EXT_FIELDS: &[(&str, &str)] = &[
@@ -373,6 +390,7 @@ fn normalize_step_value(value: &mut serde_yaml::Value) {
     }
     normalize_known_mapping_in_place(map, STEP_FIELDS, |key, value| match key {
         "request" => normalize_request_value(value),
+        "command" => normalize_command_value(value),
         "capture" => normalize_capture_map_value(value),
         "assert" => normalize_assertion_value(value),
         "poll" => normalize_poll_value(value),
@@ -386,10 +404,32 @@ fn normalize_include_override_value(value: &mut serde_yaml::Value) {
     };
     normalize_known_mapping_in_place(map, STEP_FIELDS, |key, value| match key {
         "request" => normalize_request_value(value),
+        "command" => normalize_command_value(value),
         "capture" => normalize_capture_map_value(value),
         "assert" => normalize_assertion_value(value),
         "poll" => normalize_poll_value(value),
         _ => {}
+    });
+}
+
+fn normalize_command_value(value: &mut serde_yaml::Value) {
+    let Some(map) = value.as_mapping_mut() else {
+        return;
+    };
+    normalize_known_mapping_in_place(map, COMMAND_FIELDS, |key, value| {
+        if key == "capture" {
+            if let serde_yaml::Value::Mapping(capture_map) = value {
+                for (_, capture_value) in capture_map.iter_mut() {
+                    if let serde_yaml::Value::Mapping(spec_map) = capture_value {
+                        normalize_known_mapping_in_place(
+                            spec_map,
+                            COMMAND_CAPTURE_FIELDS,
+                            |_key, _value| {},
+                        );
+                    }
+                }
+            }
+        }
     });
 }
 
@@ -626,17 +666,131 @@ fn validate_step(value: &serde_yaml::Value, context: &str, path: &Path) -> Resul
 
     validate_mapping_keys(step, STEP_FIELDS, context, path)?;
 
+    let has_request = mapping_value(step, "request").is_some();
+    let has_command = mapping_value(step, "command").is_some();
+    match (has_request, has_command) {
+        (true, true) => {
+            return Err(TarnError::Validation(format!(
+                "{}: {} sets both `request:` and `command:` — a step is either an HTTP request or a shell command, not both",
+                path.display(),
+                context
+            )));
+        }
+        (false, false) => {
+            return Err(TarnError::Validation(format!(
+                "{}: {} must define either a `request:` (HTTP) or `command:` (shell) block",
+                path.display(),
+                context
+            )));
+        }
+        _ => {}
+    }
+
     if let Some(request) = mapping_value(step, "request") {
         validate_request(request, &format!("{context}.request"), path)?;
     }
-    if let Some(capture) = mapping_value(step, "capture") {
-        validate_capture_map(capture, &format!("{context}.capture"), path)?;
+    if let Some(command) = mapping_value(step, "command") {
+        validate_command(command, &format!("{context}.command"), path)?;
+        // Command steps cannot share request-only sub-blocks. The
+        // capture map shape is also different (regex/exit_code rather
+        // than JSONPath/header), and `assert:` / `poll:` only make sense
+        // for HTTP responses — flag them early so users do not silently
+        // get ignored fields.
+        for forbidden in ["assert", "poll"] {
+            if mapping_value(step, forbidden).is_some() {
+                return Err(TarnError::Validation(format!(
+                    "{}: {} sets `{}:` on a `command:` step, but it is only valid on `request:` steps",
+                    path.display(),
+                    context,
+                    forbidden
+                )));
+            }
+        }
+    } else {
+        if let Some(capture) = mapping_value(step, "capture") {
+            validate_capture_map(capture, &format!("{context}.capture"), path)?;
+        }
+        if let Some(assertion) = mapping_value(step, "assert") {
+            validate_assertion(assertion, &format!("{context}.assert"), path)?;
+        }
+        if let Some(poll) = mapping_value(step, "poll") {
+            validate_poll(poll, &format!("{context}.poll"), path)?;
+        }
     }
-    if let Some(assertion) = mapping_value(step, "assert") {
-        validate_assertion(assertion, &format!("{context}.assert"), path)?;
+
+    Ok(())
+}
+
+fn validate_command(
+    value: &serde_yaml::Value,
+    context: &str,
+    path: &Path,
+) -> Result<(), TarnError> {
+    let command = as_mapping(value, path, context)?;
+    validate_mapping_keys(command, COMMAND_FIELDS, context, path)?;
+
+    let run = mapping_value(command, "run").ok_or_else(|| {
+        TarnError::Validation(format!(
+            "{}: {} is missing the required `run:` field",
+            path.display(),
+            context
+        ))
+    })?;
+    if !run.is_string() {
+        return Err(TarnError::Validation(format!(
+            "{}: {}.run must be a string",
+            path.display(),
+            context
+        )));
     }
-    if let Some(poll) = mapping_value(step, "poll") {
-        validate_poll(poll, &format!("{context}.poll"), path)?;
+    if run.as_str().is_some_and(|s| s.trim().is_empty()) {
+        return Err(TarnError::Validation(format!(
+            "{}: {}.run must not be empty",
+            path.display(),
+            context
+        )));
+    }
+
+    if let Some(pass_env) = mapping_value(command, "pass_env") {
+        let names = as_sequence(pass_env, path, &format!("{context}.pass_env"))?;
+        for (i, name) in names.iter().enumerate() {
+            if !name.is_string() {
+                return Err(TarnError::Validation(format!(
+                    "{}: {}.pass_env[{i}] must be a string",
+                    path.display(),
+                    context,
+                )));
+            }
+        }
+    }
+
+    if let Some(captures) = mapping_value(command, "capture") {
+        let map = as_mapping(captures, path, &format!("{context}.capture"))?;
+        for (capture_name, capture_spec) in map {
+            let name = yaml_key_as_string(capture_name).unwrap_or("<capture>");
+            let spec_context = format!("{context}.capture.{name}");
+            let spec = as_mapping(capture_spec, path, &spec_context)?;
+            validate_mapping_keys(spec, COMMAND_CAPTURE_FIELDS, &spec_context, path)?;
+
+            let has_regex = mapping_value(spec, "stdout_regex").is_some();
+            let exit_code = mapping_value(spec, "exit_code")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if has_regex && exit_code {
+                return Err(TarnError::Validation(format!(
+                    "{}: {} sets both `stdout_regex` and `exit_code: true` — pick one source per capture",
+                    path.display(),
+                    spec_context
+                )));
+            }
+            if !has_regex && !exit_code {
+                return Err(TarnError::Validation(format!(
+                    "{}: {} must set one of `stdout_regex:` or `exit_code: true`",
+                    path.display(),
+                    spec_context
+                )));
+            }
+        }
     }
 
     Ok(())
@@ -1342,21 +1496,9 @@ fn validate_test_file(tf: &TestFile, path: &Path) -> Result<(), TarnError> {
                 path.display()
             )));
         }
-        if step.request.method.trim().is_empty() {
-            return Err(TarnError::Parse(format!(
-                "{}: Step '{}' has empty HTTP method",
-                path.display(),
-                step.name
-            )));
-        }
-        if step.request.url.trim().is_empty() {
-            return Err(TarnError::Parse(format!(
-                "{}: Step '{}' has empty URL",
-                path.display(),
-                step.name
-            )));
-        }
-        // Reject steps with both poll and retries
+        // Reject steps with both poll and retries (applies to both
+        // request and command steps, though `poll` only makes sense on
+        // requests — that conflict is caught at deserialization).
         if step.poll.is_some() && step.retries.is_some() && step.retries.unwrap() > 0 {
             return Err(TarnError::Validation(format!(
                 "{}: Step '{}' cannot have both 'poll' and 'retries'",
@@ -1364,59 +1506,90 @@ fn validate_test_file(tf: &TestFile, path: &Path) -> Result<(), TarnError> {
                 step.name
             )));
         }
-        // Reject GraphQL with non-POST method
-        if step.request.graphql.is_some() && !step.request.method.eq_ignore_ascii_case("POST") {
-            return Err(TarnError::Validation(format!(
-                "{}: Step '{}' has 'graphql' but method is '{}' (must be POST)",
-                path.display(),
-                step.name,
-                step.request.method
-            )));
-        }
-        // Reject steps with both body and graphql
-        if step.request.body.is_some() && step.request.graphql.is_some() {
-            return Err(TarnError::Validation(format!(
-                "{}: Step '{}' cannot have both 'body' and 'graphql' on request",
-                path.display(),
-                step.name
-            )));
-        }
-        // Reject steps with both body and form
-        if step.request.body.is_some() && step.request.form.is_some() {
-            return Err(TarnError::Validation(format!(
-                "{}: Step '{}' cannot have both 'body' and 'form' on request",
-                path.display(),
-                step.name
-            )));
-        }
-        // Reject steps with both body and multipart
-        if step.request.body.is_some() && step.request.multipart.is_some() {
-            return Err(TarnError::Validation(format!(
-                "{}: Step '{}' cannot have both 'body' and 'multipart' on request",
-                path.display(),
-                step.name
-            )));
-        }
-        // Reject form with graphql
-        if step.request.form.is_some() && step.request.graphql.is_some() {
-            return Err(TarnError::Validation(format!(
-                "{}: Step '{}' cannot have both 'form' and 'graphql' on request",
-                path.display(),
-                step.name
-            )));
-        }
-        // Reject form with multipart
-        if step.request.form.is_some() && step.request.multipart.is_some() {
-            return Err(TarnError::Validation(format!(
-                "{}: Step '{}' cannot have both 'form' and 'multipart' on request",
-                path.display(),
-                step.name
-            )));
-        }
-        // Reject multipart with graphql
-        if step.request.multipart.is_some() && step.request.graphql.is_some() {
-            return Err(TarnError::Validation(format!(
-                "{}: Step '{}' cannot have both 'multipart' and 'graphql' on request",
+
+        if let Some(request) = step.request.as_ref() {
+            if request.method.trim().is_empty() {
+                return Err(TarnError::Parse(format!(
+                    "{}: Step '{}' has empty HTTP method",
+                    path.display(),
+                    step.name
+                )));
+            }
+            if request.url.trim().is_empty() {
+                return Err(TarnError::Parse(format!(
+                    "{}: Step '{}' has empty URL",
+                    path.display(),
+                    step.name
+                )));
+            }
+            // Reject GraphQL with non-POST method
+            if request.graphql.is_some() && !request.method.eq_ignore_ascii_case("POST") {
+                return Err(TarnError::Validation(format!(
+                    "{}: Step '{}' has 'graphql' but method is '{}' (must be POST)",
+                    path.display(),
+                    step.name,
+                    request.method
+                )));
+            }
+            // Reject steps with both body and graphql
+            if request.body.is_some() && request.graphql.is_some() {
+                return Err(TarnError::Validation(format!(
+                    "{}: Step '{}' cannot have both 'body' and 'graphql' on request",
+                    path.display(),
+                    step.name
+                )));
+            }
+            // Reject steps with both body and form
+            if request.body.is_some() && request.form.is_some() {
+                return Err(TarnError::Validation(format!(
+                    "{}: Step '{}' cannot have both 'body' and 'form' on request",
+                    path.display(),
+                    step.name
+                )));
+            }
+            // Reject steps with both body and multipart
+            if request.body.is_some() && request.multipart.is_some() {
+                return Err(TarnError::Validation(format!(
+                    "{}: Step '{}' cannot have both 'body' and 'multipart' on request",
+                    path.display(),
+                    step.name
+                )));
+            }
+            // Reject form with graphql
+            if request.form.is_some() && request.graphql.is_some() {
+                return Err(TarnError::Validation(format!(
+                    "{}: Step '{}' cannot have both 'form' and 'graphql' on request",
+                    path.display(),
+                    step.name
+                )));
+            }
+            // Reject form with multipart
+            if request.form.is_some() && request.multipart.is_some() {
+                return Err(TarnError::Validation(format!(
+                    "{}: Step '{}' cannot have both 'form' and 'multipart' on request",
+                    path.display(),
+                    step.name
+                )));
+            }
+            // Reject multipart with graphql
+            if request.multipart.is_some() && request.graphql.is_some() {
+                return Err(TarnError::Validation(format!(
+                    "{}: Step '{}' cannot have both 'multipart' and 'graphql' on request",
+                    path.display(),
+                    step.name
+                )));
+            }
+        } else if let Some(command) = step.command.as_ref() {
+            if command.run.trim().is_empty() {
+                return Err(TarnError::Parse(format!(
+                    "{}: Step '{}' has empty `command.run`",
+                    path.display(),
+                    step.name
+                )));
+            }
+        } else {
+            return Err(TarnError::Parse(format!(
+                "{}: Step '{}' must define a `request:` or `command:` block",
                 path.display(),
                 step.name
             )));
@@ -2392,13 +2565,13 @@ steps:
         let tf = parse_file(&main_path).unwrap();
         assert_eq!(tf.steps.len(), 1);
         let step = &tf.steps[0];
-        assert_eq!(step.request.url, "http://localhost:3000/acme/users/42");
+        assert_eq!(step.request().url, "http://localhost:3000/acme/users/42");
         assert_eq!(
-            step.request.headers.get("X-Base").map(String::as_str),
+            step.request().headers.get("X-Base").map(String::as_str),
             Some("base")
         );
         assert_eq!(
-            step.request.headers.get("X-Trace").map(String::as_str),
+            step.request().headers.get("X-Trace").map(String::as_str),
             Some("trace-1")
         );
     }
@@ -2432,7 +2605,7 @@ steps:
 
         let tf = parse_file(&main_path).unwrap();
         assert_eq!(tf.steps.len(), 1);
-        let body = tf.steps[0].request.body.as_ref().unwrap();
+        let body = tf.steps[0].request().body.as_ref().unwrap();
         assert_eq!(body["name"], "Jane");
         assert_eq!(body["role"], "admin");
     }

@@ -4,6 +4,10 @@
       "description": "Run API tests defined in .tarn.yaml files. Writes artifacts under .tarn/runs/<run_id>/ and returns a compact agent report by default plus paths to the full artifacts so agents do not need to keep large JSON blobs in context.",
       "inputSchema": {
         "properties": {
+          "allow_exec": {
+            "description": "Authorize `command:` steps (NAZ-464) to spawn child processes. False by default — every shell command in the file is otherwise reported as failure_category: skipped_by_policy. Mirrors the CLI `--allow-exec` flag and tarn.config.yaml allow_exec; pass true only after confirming the test file you're about to run is trusted to execute its embedded scripts.",
+            "type": "boolean"
+          },
           "cwd": {
             "description": "Absolute path to the project root. tarn.config.yaml, tarn.env.yaml, and relative paths are resolved against this directory. Defaults to the workspace root captured during MCP `initialize`, or the server process's current directory.",
             "type": "string"
@@ -158,6 +162,10 @@
       "description": "Rerun only the failing `(file, test)` pairs from a prior run. Response shape matches `tarn_run` (run_id, artifacts, report) so agents can loop run → inspect → rerun without switching tool surfaces.",
       "inputSchema": {
         "properties": {
+          "allow_exec": {
+            "description": "Authorize `command:` steps (NAZ-464) to spawn child processes during the rerun. Same gate semantics as `tarn_run`.",
+            "type": "boolean"
+          },
           "cwd": {
             "description": "Absolute path to the project root. Defaults to the workspace root captured during MCP `initialize`, or the server process's current directory.",
             "type": "string"
@@ -414,6 +422,10 @@
       "description": "Run a suite with `report_mode=agent` pre-selected, surfacing the compact AgentReport (NAZ-412) plus artifact paths. Preferred entry point when the caller will iterate on failures. Equivalent to: tarn run --agent.",
       "inputSchema": {
         "properties": {
+          "allow_exec": {
+            "description": "Authorize `command:` steps (NAZ-464) to spawn child processes. Same gate semantics as `tarn_run` — false by default.",
+            "type": "boolean"
+          },
           "cwd": {
             "description": "Absolute path to the project root. Defaults to the workspace root captured during MCP `initialize`, or the server process's current directory.",
             "type": "string"

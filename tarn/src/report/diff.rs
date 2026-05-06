@@ -336,6 +336,8 @@ fn failure_category_as_str(cat: crate::assert::types::FailureCategory) -> &'stat
         SkippedDueToFailedCapture => "skipped_due_to_failed_capture",
         SkippedDueToFailFast => "skipped_due_to_fail_fast",
         SkippedByCondition => "skipped_by_condition",
+        SkippedByPolicy => "skipped_by_policy",
+        CommandFailed => "command_failed",
     }
 }
 

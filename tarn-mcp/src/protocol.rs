@@ -231,6 +231,10 @@ pub fn tools_list() -> Value {
                             "type": "string",
                             "enum": ["full", "summary", "failures", "agent"],
                             "description": "Which slice of the run to return inline. `agent` (default) is the compact root-cause-first payload; `summary` and `failures` return the NAZ-401 artifacts; `full` returns the verbose JSON report. The run still writes every artifact regardless of the chosen mode."
+                        },
+                        "allow_exec": {
+                            "type": "boolean",
+                            "description": "Authorize `command:` steps (NAZ-464) to spawn child processes. False by default — every shell command in the file is otherwise reported as failure_category: skipped_by_policy. Mirrors the CLI `--allow-exec` flag and tarn.config.yaml allow_exec; pass true only after confirming the test file you're about to run is trusted to execute its embedded scripts."
                         }
                     }
                 }
@@ -370,6 +374,10 @@ pub fn tools_list() -> Value {
                             "type": "string",
                             "enum": ["full", "summary", "failures", "agent"],
                             "description": "Which slice of the rerun's report to return inline. Defaults to `agent`."
+                        },
+                        "allow_exec": {
+                            "type": "boolean",
+                            "description": "Authorize `command:` steps (NAZ-464) to spawn child processes during the rerun. Same gate semantics as `tarn_run`."
                         }
                     }
                 }
@@ -586,6 +594,10 @@ pub fn tools_list() -> Value {
                         "no_default_excludes": {
                             "type": "boolean",
                             "description": "Disable the default discovery ignore rules."
+                        },
+                        "allow_exec": {
+                            "type": "boolean",
+                            "description": "Authorize `command:` steps (NAZ-464) to spawn child processes. Same gate semantics as `tarn_run` — false by default."
                         }
                     }
                 }

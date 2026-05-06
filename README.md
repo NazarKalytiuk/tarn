@@ -883,6 +883,60 @@ steps:
 - `json.decode(string)` &mdash; parse a JSON string into a Lua table
 - `json.encode(value)` &mdash; serialize a Lua value to a JSON string
 
+## Shell Command Steps
+
+Some test suites need to prep, stamp, or transform fixture files before running HTTP tests &mdash; for example, generating XML fixtures from a template or bumping a `<ClassLibrary version>` to a per-run unique value. A `command:` step runs an arbitrary shell command via `sh -c` (Unix) or `cmd /C` (Windows), with captured outputs feeding `{{ capture.x }}` like any HTTP step. Each step is either `request:` (HTTP) or `command:` (shell), never both.
+
+```yaml
+setup:
+  - name: Bump fixture version
+    command:
+      run: "python3 bin/bump-version.py --version {{ $timestamp }}"
+      pass_env: [PATH, PYTHON]
+      workdir: "scripts/fixtures"
+      capture:
+        bumped_version:
+          stdout_regex: "version=([^\\s]+)"
+        exit_status:
+          exit_code: true
+```
+
+### Security: inert by default
+
+Shell commands inside a `.tarn.yaml` could otherwise be a supply-chain attack vector &mdash; a malicious test file could exfiltrate secrets from the environment if cloning and running a freshly checked-out project executed shell automatically. Tarn refuses to spawn `command:` children unless one of these is set:
+
+- CLI flag: `tarn run --allow-exec` (preferred for ad-hoc runs, CI, and reruns)
+- Project config: `allow_exec: true` in `tarn.config.yaml` (for trusted, project-owned repos)
+- MCP: pass `"allow_exec": true` in the `tarn_run` / `tarn_run_agent` / `tarn_rerun_failed` tool params
+
+Without an opt-in, every `command:` step is recorded with `failure_category: skipped_by_policy` and `passed: true`. The child process is never spawned. A freshly cloned repo therefore never executes shell on a default `tarn run`.
+
+### Env scrubbing &mdash; `pass_env`
+
+The child process gets a tiny baseline env: `PATH`, `HOME` (`USERPROFILE` on Windows), and `TMPDIR` / `TEMP` / `TMP`. **Tarn's own `{{ env.x }}` chain is never implicitly forwarded** &mdash; secrets in `tarn.env.local.yaml` stay scoped to template interpolation. To forward an additional parent-process variable to the child:
+
+```yaml
+command:
+  run: "deploy --token $API_TOKEN"
+  pass_env: [API_TOKEN]
+```
+
+If you need a Tarn env variable in the shell, either interpolate it into `command.run` directly (`run: "TOKEN={{ env.api_token }} deploy"`) or list the corresponding parent-process variable in `pass_env`.
+
+### Captures from commands
+
+Each entry under `command.capture:` must use exactly one of:
+
+- `stdout_regex: "PATTERN"` &mdash; capture group 1 (full match if no group). A miss fails the step under `failure_category: command_failed` unless `optional: true`.
+- `exit_code: true` &mdash; capture the literal exit code as an integer.
+
+`assert:` and `poll:` are HTTP-only and rejected at parse time on `command:` steps.
+
+### Failure surfaces
+
+- **`failure_category: skipped_by_policy`** &mdash; benign skip; the run did not opt in. Step `passed: true`, exit code unaffected.
+- **`failure_category: command_failed`** &mdash; non-zero exit, signal kill (Unix), or a non-optional `stdout_regex` that did not match. Step `passed: false`, the run exits with 1.
+
 ## CLI Reference
 
 ```

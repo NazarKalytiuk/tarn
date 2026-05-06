@@ -3,6 +3,7 @@ use crate::assert::types::{
     AssertionResult, FailureCategory, FileResult, RequestInfo, ResponseInfo, StepResult, TestResult,
 };
 use crate::capture;
+use crate::command;
 use crate::cookie::CookieJar;
 use crate::error::TarnError;
 use crate::fixtures;
@@ -57,6 +58,12 @@ pub struct RunOptions {
     /// [`FixtureWriteConfig::enabled`] is false no fixtures are
     /// persisted — this is the `--no-fixtures` CLI path.
     pub fixtures: FixtureWriteConfig,
+    /// Authorize `command:` steps (NAZ-464) to actually execute. When
+    /// `false` (the default), every `command:` step is reported as
+    /// `failure_category: skipped_by_policy` and the underlying child
+    /// process is never spawned. Set via the CLI `--allow-exec` flag
+    /// or `tarn.config.yaml: allow_exec: true`.
+    pub allow_exec: bool,
 }
 
 /// Default cap for verbose/debug response body embedding.
@@ -73,6 +80,7 @@ impl Default for RunOptions {
             verbose_responses: false,
             max_body_bytes: DEFAULT_MAX_BODY_BYTES,
             fixtures: FixtureWriteConfig::default(),
+            allow_exec: false,
         }
     }
 }
@@ -722,9 +730,11 @@ fn emit_step_events(
                 let fallback = steps.get(index);
                 (
                     fallback
-                        .map(|s| s.request.method.clone())
+                        .and_then(|s| s.request.as_ref().map(|r| r.method.clone()))
                         .unwrap_or_default(),
-                    fallback.map(|s| s.request.url.clone()).unwrap_or_default(),
+                    fallback
+                        .and_then(|s| s.request.as_ref().map(|r| r.url.clone()))
+                        .unwrap_or_default(),
                 )
             }
         };
@@ -1003,31 +1013,38 @@ fn step_references_failed_captures(step: &Step, failed_captures: &BTreeSet<Strin
         }
     }
 
-    collect(&mut refs, &step.request.url);
-    for v in step.request.headers.values() {
-        collect(&mut refs, v);
-    }
-    if let Some(ref body) = step.request.body {
-        collect_json(&mut refs, body);
-    }
-    if let Some(ref form) = step.request.form {
-        for v in form.values() {
+    if let Some(request) = step.request.as_ref() {
+        collect(&mut refs, &request.url);
+        for v in request.headers.values() {
             collect(&mut refs, v);
         }
-    }
-    if let Some(ref auth) = step.request.auth {
-        if let Some(ref bearer) = auth.bearer {
-            collect(&mut refs, bearer);
+        if let Some(ref body) = request.body {
+            collect_json(&mut refs, body);
         }
-        if let Some(ref basic) = auth.basic {
-            collect(&mut refs, &basic.username);
-            collect(&mut refs, &basic.password);
+        if let Some(ref form) = request.form {
+            for v in form.values() {
+                collect(&mut refs, v);
+            }
         }
-    }
-    if let Some(ref graphql) = step.request.graphql {
-        collect(&mut refs, &graphql.query);
-        if let Some(ref vars) = graphql.variables {
-            collect_json(&mut refs, vars);
+        if let Some(ref auth) = request.auth {
+            if let Some(ref bearer) = auth.bearer {
+                collect(&mut refs, bearer);
+            }
+            if let Some(ref basic) = auth.basic {
+                collect(&mut refs, &basic.username);
+                collect(&mut refs, &basic.password);
+            }
+        }
+        if let Some(ref graphql) = request.graphql {
+            collect(&mut refs, &graphql.query);
+            if let Some(ref vars) = graphql.variables {
+                collect_json(&mut refs, vars);
+            }
+        }
+    } else if let Some(command) = step.command.as_ref() {
+        collect(&mut refs, &command.run);
+        if let Some(ref workdir) = command.workdir {
+            collect(&mut refs, workdir);
         }
     }
 
@@ -1164,6 +1181,185 @@ fn condition_skipped_step(step: &Step, message: String) -> StepResult {
         captures_set: vec![],
         location: step.location.clone(),
         response_shape_mismatch: None,
+    }
+}
+
+/// Execute a `command:` step (NAZ-464). Routed from `run_step_inner`
+/// once the runner knows the step is a shell command rather than an
+/// HTTP request. Owns the policy gate (`--allow-exec` /
+/// `tarn.config.yaml: allow_exec`) and the result-shape mapping —
+/// command failures land in the same `StepResult` shape every other
+/// step uses, so reporters and the JSON envelope keep working without
+/// special-casing.
+#[allow(clippy::too_many_arguments)]
+fn run_command_step(
+    step: &Step,
+    env: &HashMap<String, String>,
+    captures: &mut HashMap<String, serde_json::Value>,
+    optional_unset: &mut HashSet<String>,
+    redaction: &RedactionConfig,
+    redacted_values: &mut BTreeSet<String>,
+    opts: &RunOptions,
+    base_dir: &Path,
+) -> StepResult {
+    let location = step.location.clone();
+    let description = step.description.clone();
+    let debug = step.debug;
+    let name = step.name.clone();
+    let spec = step.command();
+
+    if !opts.allow_exec {
+        return StepResult {
+            name,
+            description,
+            debug,
+            passed: true,
+            duration_ms: 0,
+            assertion_results: vec![AssertionResult::pass(
+                "command",
+                "allow_exec",
+                "skipped: shell command steps are inert without `--allow-exec` (CLI) or `allow_exec: true` in tarn.config.yaml",
+            )],
+            request_info: None,
+            response_info: None,
+            error_category: Some(FailureCategory::SkippedByPolicy),
+            response_status: None,
+            response_summary: Some("skipped (policy)".into()),
+            captures_set: vec![],
+            location,
+            response_shape_mismatch: None,
+        };
+    }
+
+    if opts.dry_run {
+        let interpolated = interpolation::interpolate(
+            &spec.run,
+            &Context {
+                env: env.clone(),
+                captures: captures.clone(),
+                optional_unset: optional_unset.clone(),
+            },
+        );
+        eprintln!("  [dry-run] command: {}", interpolated);
+        return StepResult {
+            name,
+            description,
+            debug,
+            passed: true,
+            duration_ms: 0,
+            assertion_results: vec![],
+            request_info: None,
+            response_info: None,
+            error_category: None,
+            response_status: None,
+            response_summary: Some(format!("dry-run command: {}", interpolated)),
+            captures_set: vec![],
+            location,
+            response_shape_mismatch: None,
+        };
+    }
+
+    let ctx = Context {
+        env: env.clone(),
+        captures: captures.clone(),
+        optional_unset: optional_unset.clone(),
+    };
+
+    let started = std::time::Instant::now();
+    let result = command::run_command(spec, &ctx, base_dir, &command::ProcessEnv);
+    let elapsed_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+
+    match result {
+        Ok(success) => {
+            let mut captures_set: Vec<String> = Vec::new();
+            for (name, value) in &success.captures {
+                if let Some(value) = value {
+                    captures.insert(name.clone(), value.clone());
+                    captures_set.push(name.clone());
+                }
+            }
+            // Apply redaction policy in one shot — the helper expects
+            // the full capture map and walks the configured names.
+            record_redacted_named_values(captures, redaction, redacted_values);
+            for name in &success.optional_unset {
+                optional_unset.insert(name.clone());
+            }
+            let exit_str = match success.exit_code {
+                Some(code) => format!("exit {}", code),
+                None => "no exit code".to_string(),
+            };
+            StepResult {
+                name,
+                description,
+                debug,
+                passed: true,
+                duration_ms: elapsed_ms.max(success.duration_ms),
+                assertion_results: vec![AssertionResult::pass("command", "exit_code: 0", exit_str)],
+                request_info: None,
+                response_info: None,
+                error_category: None,
+                response_status: None,
+                response_summary: Some(format!(
+                    "command exit 0 ({} bytes stdout)",
+                    success.stdout.len()
+                )),
+                captures_set,
+                location,
+                response_shape_mismatch: None,
+            }
+        }
+        Err(reason) => {
+            let (assertion, message) = format_command_failure(&reason);
+            StepResult {
+                name,
+                description,
+                debug,
+                passed: false,
+                duration_ms: elapsed_ms,
+                assertion_results: vec![AssertionResult::fail(
+                    "command",
+                    "exit_code: 0",
+                    assertion,
+                    message,
+                )],
+                request_info: None,
+                response_info: None,
+                error_category: Some(FailureCategory::CommandFailed),
+                response_status: None,
+                response_summary: Some("command failed".into()),
+                captures_set: vec![],
+                location,
+                response_shape_mismatch: None,
+            }
+        }
+    }
+}
+
+fn format_command_failure(reason: &command::CommandFailureReason) -> (String, String) {
+    match reason {
+        command::CommandFailureReason::NonZeroExit { code } => (
+            format!("exit {}", code),
+            format!("command exited with status {}", code),
+        ),
+        command::CommandFailureReason::SignalTerminated => (
+            "signal".into(),
+            "command was terminated by a signal".into(),
+        ),
+        command::CommandFailureReason::CaptureMissed { name, pattern } => (
+            "no match".into(),
+            format!(
+                "capture '{}' regex `{}` did not match command stdout (mark `optional: true` to allow misses)",
+                name, pattern
+            ),
+        ),
+        command::CommandFailureReason::SpawnFailed { message } => (
+            "spawn failed".into(),
+            format!("could not spawn shell: {}", message),
+        ),
+        command::CommandFailureReason::InvalidRegex { name, error } => (
+            "invalid regex".into(),
+            format!("capture '{}' regex did not compile: {}", name, error),
+        ),
     }
 }
 
@@ -1624,8 +1820,8 @@ fn resolve_multipart_for_report(
 }
 
 fn build_request_info(step: &Step, request: &PreparedRequest, base_dir: &Path) -> RequestInfo {
-    let multipart = step
-        .request
+    let req = step.request();
+    let multipart = req
         .multipart
         .as_ref()
         .map(|multipart| resolve_multipart_for_report(multipart, base_dir));
@@ -1635,7 +1831,7 @@ fn build_request_info(step: &Step, request: &PreparedRequest, base_dir: &Path) -
     }
 
     RequestInfo {
-        method: step.request.method.clone(),
+        method: req.method.clone(),
         url: request.url.clone(),
         headers,
         body: request.body.clone(),
@@ -1695,7 +1891,7 @@ fn form_to_report_body(form: &IndexMap<String, String>) -> serde_json::Value {
 }
 
 fn effective_auth<'a>(step: &'a Step, test_file: &'a TestFile) -> Option<&'a AuthConfig> {
-    step.request.auth.as_ref().or_else(|| {
+    step.request().auth.as_ref().or_else(|| {
         test_file
             .defaults
             .as_ref()
@@ -1748,14 +1944,15 @@ fn prepare_request(
         optional_unset: optional_unset.clone(),
     };
 
-    let url = interpolation::interpolate(&step.request.url, &ctx);
+    let request_spec = step.request();
+    let url = interpolation::interpolate(&request_spec.url, &ctx);
 
     let mut merged_headers = test_file
         .defaults
         .as_ref()
         .map(|d| d.headers.clone())
         .unwrap_or_default();
-    for (k, v) in &step.request.headers {
+    for (k, v) in &request_spec.headers {
         merged_headers.insert(k.clone(), v.clone());
     }
     apply_auth_header(&mut merged_headers, effective_auth(step, test_file), &ctx);
@@ -1773,7 +1970,7 @@ fn prepare_request(
     }
 
     // GraphQL: build body from graphql block and auto-set Content-Type
-    let (body, form) = if let Some(ref gql) = step.request.graphql {
+    let (body, form) = if let Some(ref gql) = request_spec.graphql {
         let mut gql_body = serde_json::json!({
             "query": interpolation::interpolate(&gql.query, &ctx),
         });
@@ -1791,7 +1988,7 @@ fn prepare_request(
             merged_headers.insert("Content-Type".to_string(), "application/json".to_string());
         }
         (Some(gql_body), None)
-    } else if let Some(ref form) = step.request.form {
+    } else if let Some(ref form) = request_spec.form {
         // Ensure the content type is form-urlencoded. Override any non-form
         // content type (e.g. application/json from defaults), but preserve
         // form-urlencoded variants (e.g. with charset param).
@@ -1810,7 +2007,7 @@ fn prepare_request(
         (Some(form_to_report_body(&form)), Some(form))
     } else {
         (
-            step.request
+            request_spec
                 .body
                 .as_ref()
                 .map(|b| interpolation::interpolate_json(b, &ctx)),
@@ -1850,10 +2047,11 @@ fn execute_prepared_request(
     request: &PreparedRequest,
     base_dir: &Path,
 ) -> Result<http::HttpResponse, TarnError> {
-    if let Some(ref multipart) = step.request.multipart {
+    let req = step.request();
+    if let Some(ref multipart) = req.multipart {
         http::execute_multipart_request(
             client,
-            &step.request.method,
+            &req.method,
             &request.url,
             &request.headers,
             multipart,
@@ -1863,7 +2061,7 @@ fn execute_prepared_request(
     } else if let Some(ref form) = request.form {
         http::execute_form_request(
             client,
-            &step.request.method,
+            &req.method,
             &request.url,
             &request.headers,
             form,
@@ -1872,7 +2070,7 @@ fn execute_prepared_request(
     } else {
         http::execute_request(
             client,
-            &step.request.method,
+            &req.method,
             &request.url,
             &request.headers,
             request.body.as_ref(),
@@ -1958,6 +2156,21 @@ fn run_step_inner(
         }
     }
 
+    // NAZ-464: shell `command:` steps. Routed before HTTP setup so
+    // they never trip cookie / multipart / capture-prep machinery.
+    if step.is_command() {
+        return Ok(run_command_step(
+            step,
+            env,
+            captures,
+            optional_unset,
+            redaction,
+            redacted_values,
+            opts,
+            base_dir,
+        ));
+    }
+
     // Resolve which cookie jar to use (None = disabled)
     let jar_name = if cookies_enabled {
         resolve_jar_name(step)
@@ -2010,7 +2223,7 @@ fn run_step_inner(
     if opts.verbose {
         eprintln!(
             "  --> {} {} (timeout: {})",
-            step.request.method,
+            step.request().method,
             request.url,
             format_transport(request.transport)
         );
@@ -2020,7 +2233,9 @@ fn run_step_inner(
     if opts.dry_run {
         eprintln!(
             "  [dry-run] {} {} {}",
-            step.name, step.request.method, request.url
+            step.name,
+            step.request().method,
+            request.url
         );
         return Ok(StepResult {
             name: step.name.clone(),
@@ -2321,7 +2536,7 @@ fn run_step_poll(
                 "  [poll {}/{}] {} {}",
                 attempt + 1,
                 poll.max_attempts,
-                step.request.method,
+                step.request().method,
                 request.url
             );
         }

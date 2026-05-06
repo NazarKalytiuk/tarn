@@ -227,6 +227,14 @@ enum Commands {
         /// so humans watching the run see progress (NAZ-412).
         #[arg(long = "agent")]
         agent: bool,
+
+        /// Authorize `command:` steps (NAZ-464) to spawn child
+        /// processes. Without this flag (and without
+        /// `allow_exec: true` in `tarn.config.yaml`) every shell
+        /// command is recorded as `failure_category: skipped_by_policy`
+        /// — the security default for freshly cloned repositories.
+        #[arg(long = "allow-exec")]
+        allow_exec: bool,
     },
 
     /// Validate test files without running
@@ -629,6 +637,11 @@ enum Commands {
         /// Override the rolling-history retention cap for per-step fixtures.
         #[arg(long = "fixture-retention", value_name = "N", default_value_t = tarn::fixtures::DEFAULT_RETENTION)]
         fixture_retention: usize,
+
+        /// Authorize `command:` steps to spawn child processes during
+        /// the rerun. Same gate as `tarn run --allow-exec`.
+        #[arg(long = "allow-exec")]
+        allow_exec: bool,
     },
 
     /// Inspect a prior run's report at run, file, test, or step level (NAZ-405).
@@ -952,6 +965,7 @@ fn main() {
             no_fixtures,
             fixture_retention,
             agent,
+            allow_exec,
         } => run_command(
             path,
             &format,
@@ -992,6 +1006,7 @@ fn main() {
             fixture_retention,
             None,
             agent,
+            allow_exec,
         ),
         Commands::Bench {
             path,
@@ -1122,6 +1137,7 @@ fn main() {
             no_last_run_json,
             no_fixtures,
             fixture_retention,
+            allow_exec,
         } => rerun_command(
             failed,
             run.as_deref(),
@@ -1159,6 +1175,7 @@ fn main() {
             no_last_run_json,
             no_fixtures,
             fixture_retention,
+            allow_exec,
         ),
         Commands::Inspect {
             run_id,
@@ -1281,6 +1298,7 @@ fn run_command(
     fixture_retention: usize,
     rerun_selection: Option<tarn::report::rerun::RerunSelection>,
     agent: bool,
+    allow_exec_cli: bool,
 ) -> i32 {
     let project =
         match load_project_context(path.as_deref().map(Path::new).unwrap_or(Path::new("."))) {
@@ -1449,6 +1467,11 @@ fn run_command(
         verbose_responses,
         max_body_bytes: max_body,
         fixtures: fixture_config,
+        // CLI overrides config: `--allow-exec` always wins; the
+        // project file is the trusted-by-default fallback for
+        // user-owned repos. Both are off by default — `command:`
+        // steps stay inert until someone explicitly opts in.
+        allow_exec: allow_exec_cli || project.config.allow_exec,
     };
     let effective_parallel = parallel || project.config.parallel;
 
@@ -2809,6 +2832,7 @@ fn rerun_command(
     no_last_run_json: bool,
     no_fixtures: bool,
     fixture_retention: usize,
+    allow_exec: bool,
 ) -> i32 {
     if !failed {
         eprintln!(
@@ -2884,6 +2908,7 @@ fn rerun_command(
         // not want the rerun path to accidentally print a second JSON
         // blob to stdout.
         false,
+        allow_exec,
     )
 }
 
@@ -4452,7 +4477,7 @@ fn list_files_human(files: &[String], tag_filter: &[String]) -> i32 {
                     .iter()
                     .filter(|_| matches_simple || tag_filter.is_empty())
                 {
-                    println!("    - {}", step.name);
+                    println!("    - {}{}", step.name, list_kind_marker(step));
                 }
                 for (name, group) in matching_groups {
                     let desc = group
@@ -4462,7 +4487,7 @@ fn list_files_human(files: &[String], tag_filter: &[String]) -> i32 {
                         .unwrap_or_default();
                     println!("    {}{}", name, desc);
                     for step in &group.steps {
-                        println!("      - {}", step.name);
+                        println!("      - {}{}", step.name, list_kind_marker(step));
                     }
                 }
                 if !tf.teardown.is_empty() {
@@ -4507,29 +4532,20 @@ fn list_files_json(files: &[String], tag_filter: &[String], scoped_to_file: bool
                     .steps
                     .iter()
                     .filter(|_| matches_simple || tag_filter.is_empty())
-                    .map(|s| serde_json::json!({ "name": s.name }))
+                    .map(list_step_json)
                     .collect();
 
-                let setup_json: Vec<serde_json::Value> = tf
-                    .setup
-                    .iter()
-                    .map(|s| serde_json::json!({ "name": s.name }))
-                    .collect();
+                let setup_json: Vec<serde_json::Value> =
+                    tf.setup.iter().map(list_step_json).collect();
 
-                let teardown_json: Vec<serde_json::Value> = tf
-                    .teardown
-                    .iter()
-                    .map(|s| serde_json::json!({ "name": s.name }))
-                    .collect();
+                let teardown_json: Vec<serde_json::Value> =
+                    tf.teardown.iter().map(list_step_json).collect();
 
                 let tests_json: Vec<serde_json::Value> = matching_groups
                     .iter()
                     .map(|(name, group)| {
-                        let group_steps: Vec<serde_json::Value> = group
-                            .steps
-                            .iter()
-                            .map(|s| serde_json::json!({ "name": s.name }))
-                            .collect();
+                        let group_steps: Vec<serde_json::Value> =
+                            group.steps.iter().map(list_step_json).collect();
                         let mut obj = serde_json::Map::new();
                         obj.insert(
                             "name".into(),
@@ -4585,6 +4601,29 @@ fn list_files_json(files: &[String], tag_filter: &[String], scoped_to_file: bool
     } else {
         0
     }
+}
+
+/// Distinct marker shown next to `command:` step names in `tarn list`
+/// (NAZ-464). HTTP steps render with no marker so existing output
+/// stays byte-stable for users who diff list output between runs.
+fn list_kind_marker(step: &tarn::model::Step) -> &'static str {
+    if step.is_command() {
+        "  [command]"
+    } else {
+        ""
+    }
+}
+
+/// JSON shape for `tarn list --format json`: each step carries a
+/// `kind` field (`request` or `command`) so machine consumers can
+/// route command-only flows without re-reading the YAML.
+fn list_step_json(step: &tarn::model::Step) -> serde_json::Value {
+    let kind = if step.is_command() {
+        "command"
+    } else {
+        "request"
+    };
+    serde_json::json!({ "name": step.name, "kind": kind })
 }
 
 fn import_hurl_command(path: &str, output: Option<&str>) -> i32 {
@@ -5496,6 +5535,7 @@ steps:
                 insecure: false,
                 fail_fast_within_test: false,
                 parallel_opt_in: None,
+                allow_exec: false,
                 faker: None,
             },
         );
@@ -5565,6 +5605,7 @@ steps:
                 insecure: false,
                 fail_fast_within_test: false,
                 parallel_opt_in: None,
+                allow_exec: false,
                 faker: None,
             },
         );
@@ -5602,6 +5643,7 @@ steps:
             insecure: false,
             fail_fast_within_test: false,
             parallel_opt_in: None,
+            allow_exec: false,
             faker: None,
         };
 
@@ -5645,6 +5687,7 @@ steps:
             insecure: true,
             fail_fast_within_test: false,
             parallel_opt_in: None,
+            allow_exec: false,
             faker: None,
         };
 

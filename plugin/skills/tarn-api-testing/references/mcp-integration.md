@@ -113,6 +113,7 @@ Run API tests and return structured JSON results.
 - `tag` (optional) — run only tests matching this tag
 - `vars` (optional) — object of key/value string overrides
 - `cwd` (optional) — absolute working directory (see above)
+- `allow_exec` (optional, boolean) — authorize shell `command:` steps (NAZ-464) to spawn child processes. Off by default; without it, every `command:` step is reported as `failure_category: skipped_by_policy`. Mirrors the CLI `--allow-exec` flag.
 
 **Returns:** Full JSON report matching `schemas/v1/report.json`.
 

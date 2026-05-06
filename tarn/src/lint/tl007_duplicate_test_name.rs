@@ -113,7 +113,7 @@ mod tests {
         Step {
             name: name.into(),
             description: None,
-            request: Request {
+            request: Some(Request {
                 method: "GET".into(),
                 url: "http://example.com".into(),
                 headers: std::collections::HashMap::new(),
@@ -122,7 +122,8 @@ mod tests {
                 form: None,
                 graphql: None,
                 multipart: None,
-            },
+            }),
+            command: None,
             capture: std::collections::HashMap::new(),
             assertions: None,
             run_if: None,

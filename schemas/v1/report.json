@@ -32,7 +32,9 @@
         "unresolved_template",
         "skipped_due_to_failed_capture",
         "skipped_due_to_fail_fast",
-        "skipped_by_condition"
+        "skipped_by_condition",
+        "skipped_by_policy",
+        "command_failed"
       ]
     },
     "errorCode": {
@@ -51,7 +53,8 @@
         "validation_failed",
         "configuration_error",
         "parse_error",
-        "skipped_dependency"
+        "skipped_dependency",
+        "command_failed"
       ]
     },
     "requestInfo": {

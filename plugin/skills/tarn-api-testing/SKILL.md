@@ -427,6 +427,8 @@ See `references/json-output.md` for the full schema.
 | `skipped_due_to_failed_capture` | Downstream step skipped because a capture it needed failed earlier | Fix the root cause; skips are suppressed noise, not new failures |
 | `skipped_due_to_fail_fast` | Downstream step skipped after an earlier failure in the same test | Fix the first failing step |
 | `skipped_by_condition` | Step-level `if:` / `unless:` evaluated to skip | Intentional; `passed: true`, never flips exit code |
+| `skipped_by_policy` | Shell `command:` step skipped because the run was not granted `--allow-exec` | Intentional security default; pass `--allow-exec` (CLI) or set `allow_exec: true` in `tarn.config.yaml` once the file is trusted |
+| `command_failed` | Shell `command:` step exited non-zero, was killed, or its `stdout_regex` capture missed | Inspect the failure message for the exit code / signal / regex pattern; rerun the script manually to reproduce |
 
 ### Diagnosis Loop (structured report, step level)
 
@@ -502,6 +504,51 @@ Shape drift is disproportionately common on mutation endpoints. Use these defaul
 - **Mutation endpoints (`POST`/`PUT`/`PATCH`)** often return an envelope distinct from the read shape — e.g. `{"request": {...}, "meta": {...}}` vs the read endpoint's `{"uuid": "..."}`. Assert the envelope explicitly with a type assertion and capture from the wrapped path (`$.request.uuid`, not `$.uuid`). Do NOT reuse a read-shape capture on a mutation response.
 - **Read endpoints (`GET /resource/:id`)** typically return the resource directly and drift less, but paginated/list endpoints wrap in `{"items": [...], "page": N}` and must never be flattened — capture from `$.items[0].id`, not `$[0].id`.
 - **When authoring a new capture**, do a one-shot `GET /resource/:id` (or, for mutations, a live `POST` with `--dry-run: false` and `debug: true` on the step) and copy the minimal JSONPath from the *observed* body. Never capture from memory.
+
+## Shell `command:` steps (NAZ-464)
+
+A step can be either a `request:` (HTTP) or a `command:` (shell) — never both. `command:` lets you run fixture-prep / version-stamping helpers inline with your suite without a wrapper script.
+
+```yaml
+setup:
+  - name: Bump fixture version
+    command:
+      run: "python3 bin/bump-version.py --version {{ $timestamp }}"
+      pass_env: [PATH, PYTHON]
+      workdir: "scripts/fixtures"
+      capture:
+        bumped_version:
+          stdout_regex: "version=([^\\s]+)"
+        result_code:
+          exit_code: true
+```
+
+### Security model — `command:` is INERT by default
+
+Without an explicit opt-in, every `command:` step is skipped with `failure_category: skipped_by_policy`. The runner does not spawn the child process at all. To authorize execution:
+
+- CLI: `tarn run --allow-exec ...` (preferred for ad-hoc runs and CI)
+- Project config: `allow_exec: true` in `tarn.config.yaml` (for trusted, project-owned repos)
+- MCP: pass `"allow_exec": true` in the `tarn_run` / `tarn_run_agent` / `tarn_rerun_failed` tool params
+
+A freshly cloned repo never executes commands until the human opts in. This is intentional — a malicious `.tarn.yaml` cannot exfiltrate secrets just by being cloned and a default `tarn run`.
+
+### Env scrubbing (`pass_env`)
+
+The child process gets a tiny baseline env: `PATH`, `HOME` (`USERPROFILE` on Windows), `TMPDIR`/`TEMP`/`TMP`. Anything else must be allowlisted via `pass_env: [VAR1, VAR2]`. **Tarn's own `{{ env.x }}` and `{{ capture.x }}` chain is NEVER implicitly forwarded** — secrets in `tarn.env.local.yaml` stay scoped to template interpolation. If you need a tarn env variable in the shell, add it to `pass_env` only if the parent process actually exports it; otherwise interpolate it into `command.run` directly (`run: "FOO={{ env.foo }} python3 ..."`).
+
+### Captures from commands
+
+Each entry under `command.capture:` must use exactly one of:
+
+- `stdout_regex: "PATTERN"` — capture group 1 (or full match if no group). A miss fails the step under `failure_category: command_failed` unless `optional: true`.
+- `exit_code: true` — capture the literal exit code as an integer.
+
+`assert:` and `poll:` are **only** valid on `request:` steps; the runner rejects them on command steps at parse time.
+
+### When commands fail
+
+`failure_category: command_failed` covers all of: non-zero exit, signal kill (Unix), and required-but-missed stdout regex. The error message identifies which case fired. `skipped_by_policy` is a benign skip (`passed: true`) — the run keeps green when nothing else failed.
 
 ## Exit Codes
 

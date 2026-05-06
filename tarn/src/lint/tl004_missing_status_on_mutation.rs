@@ -17,7 +17,10 @@ use crate::model::TestFile;
 pub fn lint(file: &TestFile, path: &str) -> Vec<Finding> {
     let mut findings = Vec::new();
     for (step_path, step) in walk_steps(file, path) {
-        let method = step.request.method.to_ascii_uppercase();
+        let Some(request) = step.request.as_ref() else {
+            continue;
+        };
+        let method = request.method.to_ascii_uppercase();
         let is_mutation = matches!(method.as_str(), "POST" | "PUT" | "PATCH" | "DELETE");
         if !is_mutation {
             continue;

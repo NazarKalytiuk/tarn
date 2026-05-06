@@ -270,7 +270,20 @@ pub struct Step {
     /// the JSON report under the step node.
     pub description: Option<String>,
 
-    pub request: Request,
+    /// HTTP request to execute. Mutually exclusive with `command`; the
+    /// parser rejects steps that set both, and steps with neither field
+    /// fail validation. Optional at the type level so command-only
+    /// steps can deserialize through the same `Step` shape.
+    #[serde(default)]
+    pub request: Option<Request>,
+
+    /// Shell command step (NAZ-464). When present, this step runs a
+    /// child process via `sh -c` (Unix) / `cmd /C` (Windows) instead
+    /// of issuing an HTTP request. Inert unless the runner was given
+    /// `--allow-exec` (CLI) or `allow_exec: true` in `tarn.config.yaml`.
+    /// Mutually exclusive with `request`.
+    #[serde(default)]
+    pub command: Option<CommandStep>,
 
     /// Captures from the response (JSONPath or header with optional regex)
     #[serde(default)]
@@ -344,6 +357,36 @@ pub struct Step {
     /// Populated by `parser::parse_str` after deserialization.
     #[serde(skip)]
     pub assertion_locations: HashMap<String, Location>,
+}
+
+impl Step {
+    /// Whether this step is a shell-command step (NAZ-464). Mutually
+    /// exclusive with `is_request()`; the parser enforces exactly one.
+    pub fn is_command(&self) -> bool {
+        self.command.is_some()
+    }
+
+    /// Whether this step is an HTTP-request step. Mutually exclusive
+    /// with `is_command()`.
+    pub fn is_request(&self) -> bool {
+        self.request.is_some()
+    }
+
+    /// Borrow the request payload. Panics for non-request (command)
+    /// steps — call sites under the HTTP dispatch path can rely on the
+    /// runner having already routed the step.
+    pub fn request(&self) -> &Request {
+        self.request
+            .as_ref()
+            .expect("Step::request() called on non-request step")
+    }
+
+    /// Borrow the command payload. Panics for non-command steps.
+    pub fn command(&self) -> &CommandStep {
+        self.command
+            .as_ref()
+            .expect("Step::command() called on non-command step")
+    }
 }
 
 /// Step-level cookie control.
@@ -505,6 +548,66 @@ pub struct PollConfig {
     pub interval: String,
     /// Maximum number of polling attempts
     pub max_attempts: u32,
+}
+
+/// Shell-command step (NAZ-464). Executes a child process via the
+/// platform shell so users can run arbitrary fixture-prep / version-
+/// stamping helpers in setup/teardown without a separate wrapper
+/// script. Disabled by default — see `RunOptions::allow_exec`.
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+pub struct CommandStep {
+    /// Shell command string. Interpreted by `sh -c` on Unix and
+    /// `cmd /C` on Windows. Templates (`{{ env.x }}`, `{{ capture.x }}`,
+    /// `{{ $timestamp }}`) are interpolated before the shell sees the
+    /// string. Required.
+    pub run: String,
+
+    /// Allowlist of environment variable names forwarded to the child
+    /// process. The default child env is intentionally minimal
+    /// (`PATH`, `HOME`/`USERPROFILE`, `TMPDIR`/`TEMP`/`TMP`); any
+    /// additional variable from the parent process is forwarded only
+    /// when listed here. Tarn's own env chain (`{{ env.x }}` /
+    /// `{{ capture.x }}`) is *never* implicitly mapped to shell env —
+    /// secrets in `tarn.env.local.yaml` stay scoped to template
+    /// interpolation.
+    #[serde(default)]
+    pub pass_env: Vec<String>,
+
+    /// Working directory for the child process, relative to the test
+    /// file (or absolute). Defaults to the project root when unset so
+    /// `python3 bin/...` resolves the same way as for a manual invocation.
+    pub workdir: Option<String>,
+
+    /// Capture spec extracting values from the child process result.
+    /// Captures behave like the existing HTTP-step capture map: the
+    /// extracted value lands under `capture.<name>` for downstream
+    /// templates.
+    #[serde(default)]
+    pub capture: indexmap::IndexMap<String, CommandCaptureSpec>,
+}
+
+/// Capture spec for command-step results. Either pull capture group 1
+/// out of stdout via regex, or capture the literal exit code.
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+pub struct CommandCaptureSpec {
+    /// Regex applied to stdout. The first capture group is captured;
+    /// when no group is declared the full match is captured. A miss
+    /// fails the step under `failure_category: command_failed` unless
+    /// `optional: true` is set.
+    pub stdout_regex: Option<String>,
+
+    /// Capture the child process exit code (i32). Mutually exclusive
+    /// with `stdout_regex`.
+    #[serde(default)]
+    pub exit_code: bool,
+
+    /// When true, a missing source (regex with no match) leaves the
+    /// capture explicitly unset instead of failing the step. Mirrors
+    /// the HTTP capture semantics — downstream `{{ capture.x }}`
+    /// references resolve to the optional-unset error rather than a
+    /// generic interpolation failure.
+    #[serde(default)]
+    pub optional: bool,
 }
 
 /// HTTP request definition.
@@ -699,8 +802,8 @@ steps:
         assert_eq!(tf.name, "Health check");
         assert_eq!(tf.steps.len(), 1);
         assert_eq!(tf.steps[0].name, "GET /health");
-        assert_eq!(tf.steps[0].request.method, "GET");
-        assert_eq!(tf.steps[0].request.url, "http://localhost:3000/health");
+        assert_eq!(tf.steps[0].request().method, "GET");
+        assert_eq!(tf.steps[0].request().url, "http://localhost:3000/health");
         assert!(matches!(
             tf.steps[0].assertions.as_ref().unwrap().status,
             Some(StatusAssertion::Exact(200))
@@ -794,8 +897,8 @@ tests:
 
         let step = &test.steps[0];
         assert_eq!(step.name, "Create");
-        assert_eq!(step.request.method, "POST");
-        assert!(step.request.body.is_some());
+        assert_eq!(step.request().method, "POST");
+        assert!(step.request().body.is_some());
         assert!(matches!(
             step.capture.get("user_id"),
             Some(CaptureSpec::JsonPath(p)) if p == "$.id"
@@ -892,7 +995,7 @@ steps:
           key: "value"
 "#;
         let tf: TestFile = serde_yaml::from_str(yaml).unwrap();
-        let req = &tf.steps[0].request;
+        let req = tf.steps[0].request();
         assert_eq!(req.headers.get("Authorization").unwrap(), "Bearer xyz");
         assert_eq!(req.headers.get("X-Custom").unwrap(), "hello");
 
@@ -915,7 +1018,7 @@ steps:
         bearer: "{{ env.token }}"
 "#;
         let tf: TestFile = serde_yaml::from_str(yaml).unwrap();
-        let auth = tf.steps[0].request.auth.as_ref().unwrap();
+        let auth = tf.steps[0].request().auth.as_ref().unwrap();
         assert_eq!(auth.bearer.as_deref(), Some("{{ env.token }}"));
         assert!(auth.basic.is_none());
     }
@@ -1230,7 +1333,7 @@ steps:
             content_type: "image/jpeg"
 "#;
         let tf: TestFile = serde_yaml::from_str(yaml).unwrap();
-        let mp = tf.steps[0].request.multipart.as_ref().unwrap();
+        let mp = tf.steps[0].request().multipart.as_ref().unwrap();
         assert_eq!(mp.fields.len(), 1);
         assert_eq!(mp.fields[0].name, "title");
         assert_eq!(mp.fields[0].value, "My Photo");
@@ -1254,7 +1357,7 @@ steps:
         password: "secret"
 "#;
         let tf: TestFile = serde_yaml::from_str(yaml).unwrap();
-        let form = tf.steps[0].request.form.as_ref().unwrap();
+        let form = tf.steps[0].request().form.as_ref().unwrap();
         assert_eq!(
             form.get("email").map(String::as_str),
             Some("user@example.com")

@@ -224,10 +224,15 @@ fn lint_step(step: &crate::model::Step, messages: &mut Vec<ValidationMessage>) {
     // mutating request's URL or body. Heuristic-only, limited to POST /
     // PATCH / PUT / DELETE so we don't over-warn on `/health/<version>`
     // style read paths where the value is a deliberate constant.
-    let method = step.request.method.to_ascii_uppercase();
+    let Some(request) = step.request.as_ref() else {
+        // Command-only steps don't have an HTTP method or URL — the
+        // brittle-identifier heuristic doesn't apply.
+        return;
+    };
+    let method = request.method.to_ascii_uppercase();
     let is_mutating = matches!(method.as_str(), "POST" | "PUT" | "PATCH" | "DELETE");
     if is_mutating {
-        if let Some(ident) = find_static_identifier(&step.request.url) {
+        if let Some(ident) = find_static_identifier(&request.url) {
             messages.push(ValidationMessage {
                 severity: Severity::Warning,
                 code: ValidationCode::BrittlePattern,
@@ -239,7 +244,7 @@ fn lint_step(step: &crate::model::Step, messages: &mut Vec<ValidationMessage>) {
                 location: step.location.clone(),
             });
         }
-        if let Some(ref body) = step.request.body {
+        if let Some(ref body) = request.body {
             if let Some(ident) = find_static_identifier_in_json(body) {
                 messages.push(ValidationMessage {
                     severity: Severity::Warning,

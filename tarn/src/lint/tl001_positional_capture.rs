@@ -19,6 +19,9 @@ use crate::model::TestFile;
 pub fn lint(file: &TestFile, path: &str) -> Vec<Finding> {
     let mut findings = Vec::new();
     for (step_path, step) in walk_steps(file, path) {
+        let Some(request) = step.request.as_ref() else {
+            continue;
+        };
         for (name, spec) in &step.capture {
             let Some(jsonpath) = capture_jsonpath(spec) else {
                 continue;
@@ -26,7 +29,7 @@ pub fn lint(file: &TestFile, path: &str) -> Vec<Finding> {
             if !is_positional_index_path(jsonpath) {
                 continue;
             }
-            if !url_looks_like_shared_list(&step.request.url) {
+            if !url_looks_like_shared_list(&request.url) {
                 continue;
             }
             findings.push(finding_from_step(
@@ -37,7 +40,7 @@ pub fn lint(file: &TestFile, path: &str) -> Vec<Finding> {
                 step,
                 format!(
                     "Capture `{}` uses positional index `{}` on what looks like a shared list endpoint ({}).",
-                    name, jsonpath, step.request.url
+                    name, jsonpath, request.url
                 ),
                 Some(
                     "Capturing from element 0 of a shared list depends on sort order and state from other tests. Filter the request or match by a stable attribute (e.g. `?email=...` or JSONPath predicate).".to_string(),

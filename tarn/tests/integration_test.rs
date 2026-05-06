@@ -8080,7 +8080,7 @@ fn scaffold_explicit_mode_writes_parseable_yaml_to_out() {
     // Round-trip through the parser — the ticket's acceptance criterion.
     let parsed = tarn::parser::parse_file(&out_path).expect("scaffold output must parse");
     assert_eq!(parsed.steps.len(), 1);
-    assert_eq!(parsed.steps[0].request.method, "POST");
+    assert_eq!(parsed.steps[0].request().method, "POST");
 
     let contents = fs::read_to_string(&out_path).unwrap();
     assert!(contents.contains("# TODO:"), "scaffold must emit TODOs");
@@ -8131,8 +8131,8 @@ fn scaffold_from_curl_happy_path() {
         .success();
 
     let parsed = tarn::parser::parse_file(&out_path).expect("curl scaffold must parse");
-    assert_eq!(parsed.steps[0].request.method, "POST");
-    assert_eq!(parsed.steps[0].request.url, "http://api/users");
+    assert_eq!(parsed.steps[0].request().method, "POST");
+    assert_eq!(parsed.steps[0].request().url, "http://api/users");
 }
 
 #[test]

@@ -212,6 +212,12 @@ fn failure_label(step: &StepResult) -> String {
     ) {
         return "Response shape mismatch".to_string();
     }
+    if matches!(step.error_category, Some(FailureCategory::CommandFailed)) {
+        return "Command failed".to_string();
+    }
+    if matches!(step.error_category, Some(FailureCategory::SkippedByPolicy)) {
+        return "Skipped (policy)".to_string();
+    }
 
     if let Some(ErrorCode::AssertionMismatch) = step.error_code() {
         if let Some(status_assertion) = step
@@ -249,6 +255,7 @@ fn failure_label(step: &StepResult) -> String {
         Some(ErrorCode::PollConditionNotMet) => "Poll condition not met".to_string(),
         Some(ErrorCode::SkippedDependency) => "Skipped (cascade)".to_string(),
         Some(ErrorCode::AssertionMismatch) => "Assertion mismatch".to_string(),
+        Some(ErrorCode::CommandFailed) => "Command failed".to_string(),
         None => "Unknown failure".to_string(),
     }
 }

@@ -106,6 +106,16 @@ pub struct TarnConfig {
     #[serde(default, alias = "parallel-opt-in")]
     pub parallel_opt_in: Option<bool>,
 
+    /// Authorize `command:` steps (NAZ-464) to actually execute. Off
+    /// by default — without this set (and without `--allow-exec` on
+    /// the CLI), shell-command steps are reported as
+    /// `failure_category: skipped_by_policy` with a one-line note
+    /// pointing at the gate. Set this in `tarn.config.yaml` once the
+    /// project is trusted to run the embedded scripts; freshly cloned
+    /// repos never execute commands until the user opts in.
+    #[serde(default, alias = "allow-exec")]
+    pub allow_exec: bool,
+
     /// Faker/RNG configuration. Setting `faker.seed` makes every
     /// randomness-backed built-in (`$uuid`, `$uuid_v4`, `$random_hex`,
     /// `$random_int`, the faker generators added in NAZ-398, etc.)
@@ -157,6 +167,7 @@ impl Default for TarnConfig {
             insecure: false,
             fail_fast_within_test: false,
             parallel_opt_in: None,
+            allow_exec: false,
             faker: None,
         }
     }
@@ -371,6 +382,7 @@ mod tests {
             insecure: true,
             fail_fast_within_test: false,
             parallel_opt_in: None,
+            allow_exec: false,
             faker: None,
         };
 
@@ -405,6 +417,7 @@ mod tests {
             insecure: false,
             fail_fast_within_test: false,
             parallel_opt_in: None,
+            allow_exec: false,
             faker: None,
         }
         .normalized();

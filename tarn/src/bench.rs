@@ -54,12 +54,15 @@ enum BenchPayload {
 }
 
 fn effective_auth<'a>(step: &'a Step, test_file: &'a TestFile) -> Option<&'a AuthConfig> {
-    step.request.auth.as_ref().or_else(|| {
-        test_file
-            .defaults
-            .as_ref()
-            .and_then(|defaults| defaults.auth.as_ref())
-    })
+    step.request
+        .as_ref()
+        .and_then(|r| r.auth.as_ref())
+        .or_else(|| {
+            test_file
+                .defaults
+                .as_ref()
+                .and_then(|defaults| defaults.auth.as_ref())
+        })
 }
 
 fn apply_auth_header(
@@ -153,6 +156,14 @@ pub fn run_bench(
 ) -> Result<BenchResult, TarnError> {
     let step = resolve_step(test_file, step_index)?;
 
+    if !step.is_request() {
+        return Err(TarnError::Config(format!(
+            "tarn bench targets HTTP request steps; '{}' is a `command:` step and cannot be benchmarked",
+            step.name
+        )));
+    }
+    let request = step.request();
+
     // Build interpolation context
     let ctx = Context {
         env: env.clone(),
@@ -161,31 +172,31 @@ pub fn run_bench(
     };
 
     // Interpolate the request once (captures won't work in bench mode)
-    let url = interpolation::interpolate(&step.request.url, &ctx);
+    let url = interpolation::interpolate(&request.url, &ctx);
     let mut merged_headers = test_file
         .defaults
         .as_ref()
         .map(|d| d.headers.clone())
         .unwrap_or_default();
-    for (k, v) in &step.request.headers {
+    for (k, v) in &request.headers {
         merged_headers.insert(k.clone(), v.clone());
     }
     apply_auth_header(&mut merged_headers, effective_auth(step, test_file), &ctx);
-    let payload = if let Some(ref form) = step.request.form {
+    let payload = if let Some(ref form) = request.form {
         let form = interpolation::interpolate_string_map(form, &ctx);
         merged_headers
             .entry("Content-Type".to_string())
             .or_insert_with(|| "application/x-www-form-urlencoded".to_string());
         Some(BenchPayload::Form(form))
     } else {
-        step.request
+        request
             .body
             .as_ref()
             .map(|b| BenchPayload::Json(interpolation::interpolate_json(b, &ctx)))
     };
     let headers = interpolation::interpolate_headers(&merged_headers, &ctx);
 
-    let method = step.request.method.clone();
+    let method = request.method.clone();
     let step_name = step.name.clone();
 
     // Expected status from assertions (if any) — extract exact status for bench mode

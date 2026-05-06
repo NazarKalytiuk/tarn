@@ -27,6 +27,11 @@
       "items": { "type": "string" },
       "default": []
     },
+    "openapi_operation_ids": {
+      "type": "array",
+      "description": "Optional list of OpenAPI operation ids this test file exercises. Consumed by `tarn impact` to map changed operations to tests. Adopting the field is additive and never required.",
+      "items": { "type": "string", "minLength": 1 }
+    },
     "env": {
       "type": "object",
       "description": "Inline environment variables (lowest priority in resolution chain)",
@@ -37,6 +42,16 @@
       "description": "Cookie handling mode: 'auto' (default), 'off' (no cookie jar), or 'per-test' (clear the default jar between named tests; named jars are preserved). The CLI flag --cookie-jar-per-test overrides this, except when the value is 'off'.",
       "enum": ["auto", "off", "per-test"],
       "default": "auto"
+    },
+    "serial_only": {
+      "type": "boolean",
+      "description": "When true, this file must never run concurrently with other files under --parallel. The scheduler pins serial_only files onto a single worker that runs after every parallel-safe bucket completes. Use this for tests that share mutable state (DB fixtures, singletons).",
+      "default": false
+    },
+    "group": {
+      "type": "string",
+      "description": "Optional resource group name. Files sharing the same `group` land in the same parallel bucket and run sequentially within the group, while different groups run in parallel. Useful for 'all the postgres tests' or 'all the S3 tests' where an external resource forces per-resource serialization.",
+      "minLength": 1
     },
     "redaction": {
       "$ref": "#/$defs/RedactionConfig",
@@ -163,6 +178,11 @@
           "description": "Steps in this test group. Supports include directives.",
           "items": { "$ref": "#/$defs/StepOrInclude" },
           "minItems": 1
+        },
+        "serial_only": {
+          "type": "boolean",
+          "description": "When true, this test must never run concurrently with other work under --parallel. Because Tarn's parallelism unit is the file, this escalates the whole file to the serial bucket to preserve per-file isolation (setup, teardown, cookie jars, captures).",
+          "default": false
         }
       },
       "required": ["steps"]
@@ -196,15 +216,24 @@
     },
     "Step": {
       "type": "object",
-      "description": "A single test step: one HTTP request with optional capture and assertions",
-      "required": ["name", "request"],
+      "description": "A single test step. Either a `request:` (HTTP) or a `command:` (shell) — exactly one must be set. Command steps are inert unless the run was started with `--allow-exec` or `tarn.config.yaml: allow_exec: true` (NAZ-464).",
+      "required": ["name"],
+      "oneOf": [
+        { "required": ["request"], "not": { "required": ["command"] } },
+        { "required": ["command"], "not": { "required": ["request"] } }
+      ],
       "properties": {
         "name": {
           "type": "string",
           "description": "Human-readable step name",
           "minLength": 1
         },
+        "description": {
+          "type": "string",
+          "description": "Optional human-readable description of this step. Supports multi-line YAML block scalars (`|`, `>`)."
+        },
         "request": { "$ref": "#/$defs/Request" },
+        "command": { "$ref": "#/$defs/CommandStep" },
         "capture": {
           "type": "object",
           "description": "Capture values from the response. Values can be JSONPath strings or extended capture objects with header/cookie/jsonpath/body/status/url/regex fields.",
@@ -279,6 +308,11 @@
           "type": "string",
           "description": "Conditionally run this step only when the interpolated expression is falsy (inverse of 'if'). Mutually exclusive with 'if'.",
           "examples": ["{{ capture.already_provisioned }}"]
+        },
+        "debug": {
+          "type": "boolean",
+          "description": "When true, record request/response details for this step in the report even when it passes. Equivalent to running `tarn run --verbose-responses` for just this step. Useful for keeping one hot debugging step loud without enabling verbose capture across the whole file.",
+          "default": false
         }
       },
       "additionalProperties": false
@@ -339,6 +373,59 @@
         { "required": ["body"] },
         { "required": ["status"] },
         { "required": ["url"] }
+      ],
+      "additionalProperties": false
+    },
+    "CommandStep": {
+      "type": "object",
+      "description": "Shell-command step (NAZ-464). The runner executes `run` via `sh -c` on Unix and `cmd /C` on Windows. Disabled by default — the runner reports `failure_category: skipped_by_policy` unless invoked with `tarn run --allow-exec` or with `allow_exec: true` in `tarn.config.yaml`. The child env is scrubbed to a minimal baseline (`PATH`, `HOME`/`USERPROFILE`, `TMPDIR`/`TEMP`/`TMP`); additional variables must be allowlisted via `pass_env`. Tarn's own `{{ env.x }}` chain is never implicitly forwarded — secrets in `tarn.env.local.yaml` stay scoped to template interpolation.",
+      "required": ["run"],
+      "properties": {
+        "run": {
+          "type": "string",
+          "description": "Shell command string. Templates ({{ env.x }}, {{ capture.x }}, {{ $timestamp }}) are interpolated before the shell sees the value.",
+          "minLength": 1,
+          "examples": ["python3 bin/bump-version.py --version {{ $timestamp }}"]
+        },
+        "pass_env": {
+          "type": "array",
+          "description": "Allowlist of parent-process environment variables forwarded to the child. The default child env is intentionally minimal — anything outside the baseline (PATH, HOME/USERPROFILE, TMPDIR/TEMP/TMP) must be listed explicitly.",
+          "items": { "type": "string", "minLength": 1 },
+          "examples": [["PATH", "PYTHON"]]
+        },
+        "workdir": {
+          "type": "string",
+          "description": "Working directory for the child process. Relative paths resolve from the test file's project root; absolute paths are used verbatim. Templates interpolate before path resolution."
+        },
+        "capture": {
+          "type": "object",
+          "description": "Capture values from the child output. Each entry must use either `stdout_regex` or `exit_code: true` — not both.",
+          "additionalProperties": { "$ref": "#/$defs/CommandCapture" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "CommandCapture": {
+      "type": "object",
+      "description": "Capture spec for `command:` steps. Pull a substring out of stdout via regex, or capture the literal exit code.",
+      "properties": {
+        "stdout_regex": {
+          "type": "string",
+          "description": "Regex applied to stdout. Capture group 1 is captured; without an explicit group the whole match is captured. A miss fails the step under `failure_category: command_failed` unless `optional: true` is set."
+        },
+        "exit_code": {
+          "type": "boolean",
+          "description": "When true, the captured value is the child process exit code (an integer). Mutually exclusive with `stdout_regex`."
+        },
+        "optional": {
+          "type": "boolean",
+          "description": "When true, a missing source (regex with no match) leaves the capture unset instead of failing the step. Downstream {{ capture.X }} references for X surface a precise optional-unset diagnostic.",
+          "default": false
+        }
+      },
+      "oneOf": [
+        { "required": ["stdout_regex"], "not": { "required": ["exit_code"] } },
+        { "required": ["exit_code"] }
       ],
       "additionalProperties": false
     },
@@ -668,7 +755,17 @@
         },
         "is_uuid": {
           "type": "boolean",
-          "description": "Assert value is a valid UUID",
+          "description": "Assert value is a valid UUID (any version)",
+          "const": true
+        },
+        "is_uuid_v4": {
+          "type": "boolean",
+          "description": "Assert value is a valid UUID v4 (random)",
+          "const": true
+        },
+        "is_uuid_v7": {
+          "type": "boolean",
+          "description": "Assert value is a valid UUID v7 (time-ordered)",
           "const": true
         },
         "is_date": {

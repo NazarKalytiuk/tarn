@@ -21,7 +21,10 @@ pub fn lint(file: &TestFile, path: &str, opts: &LintOptions) -> Vec<Finding> {
     }
     let mut findings = Vec::new();
     for (step_path, step) in walk_steps(file, path) {
-        let url = step.request.url.trim();
+        let Some(request) = step.request.as_ref() else {
+            continue;
+        };
+        let url = request.url.trim();
         if !is_absolute_http_url(url) {
             continue;
         }

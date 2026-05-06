@@ -408,7 +408,9 @@ pub fn fingerprint_for(entry: &FailureEntry) -> String {
         FailureCategory::ParseError => "parse_error".to_string(),
         FailureCategory::SkippedDueToFailedCapture
         | FailureCategory::SkippedDueToFailFast
-        | FailureCategory::SkippedByCondition => unclassified_fingerprint(entry),
+        | FailureCategory::SkippedByCondition
+        | FailureCategory::SkippedByPolicy => unclassified_fingerprint(entry),
+        FailureCategory::CommandFailed => "command_failed".to_string(),
     }
 }
 
@@ -518,6 +520,8 @@ fn category_label(cat: FailureCategory) -> &'static str {
         FailureCategory::SkippedDueToFailedCapture => "skipped_due_to_failed_capture",
         FailureCategory::SkippedDueToFailFast => "skipped_due_to_fail_fast",
         FailureCategory::SkippedByCondition => "skipped_by_condition",
+        FailureCategory::SkippedByPolicy => "skipped_by_policy",
+        FailureCategory::CommandFailed => "command_failed",
     }
 }
 
