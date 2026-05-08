@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+## 0.12.1 — Tag-filter and project TLS regression fixes (NAZ-465, NAZ-466)
+
+Two bug fixes for regressions in 0.12.0.
+
+### `tarn run --tag` now actually filters (NAZ-465)
+
+`tarn run --tag <TAG>` was running the full discovered suite instead of only the matching files. `tarn list --tag <TAG>` filtered correctly, so the two surfaces had drifted out of lock-step.
+
+Root cause: the runner's file-level skip guard only fired for simple-format files. Full-format files (with `tests:`) whose every named test group was filtered out still had their `setup:` block executed, so every discovered file showed up in the run summary even though no real test ran.
+
+Fix: extracted `runner::file_matches_tag_filter` and used it on both the `tarn run` and `tarn list` paths so they share one predicate. Files with no matching simple-format steps **and** no matching named test groups now skip setup, tests, and teardown entirely.
+
+### `insecure: true` and `cacert:` from `tarn.config.yaml` reach the runner (NAZ-466)
+
+TLS settings declared in `tarn.config.yaml` (`insecure`, `cacert`, `cert`, `key`, `proxy`, `no_proxy`) were silently dropped when tests were launched via the MCP server (`tarn-mcp`) or the LSP (`tarn-lsp` from VS Code, Neovim, etc.). The CLI path was unaffected.
+
+Root cause: both the MCP and LSP code paths constructed `RunOptions` with `http: HttpTransportConfig::default()` and never merged the project config. The HTTP client was therefore built without the project's TLS bypass / custom CA chain, so requests against self-signed endpoints kept aborting with `UnknownIssuer` even though the user had set `insecure: true`.
+
+Fix:
+- `tarn-mcp` now merges `project_config.http_transport()` into the per-file `RunOptions.http` in both `execute_and_persist` and `execute_and_persist_with_selectors`.
+- `tarn-lsp` now walks up from the test file to find the project root via `config::find_project_root`, loads `tarn.config.yaml`, and merges its HTTP transport block into the runner's options. Previously the LSP used the test file's parent directory as the project root and ignored project config entirely.
+
+Both fixes have proof-by-side-effect regression tests: pointing `cacert:` at a missing file now surfaces a config error from the runner, demonstrating that the project config truly reaches `HttpClient::new`.
+
 ## 0.12.0 — Shell `command:` steps with deny-by-default execution (NAZ-464)
 
 A test step can now run an arbitrary shell command alongside the existing

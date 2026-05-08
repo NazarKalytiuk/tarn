@@ -358,11 +358,22 @@ fn execute_and_persist(
             ToolError::new(ERR_PARSE, e.to_string()).with_data(json!({ "file": file_path }))
         })?;
 
+        // NAZ-466: merge `tarn.config.yaml` HTTP transport (insecure,
+        // cacert, cert/key, proxy, etc.) into the per-file RunOptions
+        // before invoking the runner. The MCP path previously called
+        // `runner::run_file` with `opts.http` left at default, which
+        // silently dropped TLS bypass and custom CA settings configured
+        // in the project file.
+        let file_opts = RunOptions {
+            http: HttpTransportConfig::merge(&project_config.http_transport(), &opts.http),
+            ..opts.clone()
+        };
+
         // The runner's `run_file` already emits file/test/step events
         // via its observer hook when one is provided; the agent path
         // only needs the terminal run_completed envelope so tools/list
         // consumers still get a clean stream for --agent-style tailing.
-        let result = runner::run_file(&test_file, file_path, &resolved_env, tag_filter, opts)
+        let result = runner::run_file(&test_file, file_path, &resolved_env, tag_filter, &file_opts)
             .map_err(|e| {
                 ToolError::new(ERR_RUN_FAILED, e.to_string())
                     .with_data(json!({ "file": file_path }))
@@ -1033,6 +1044,15 @@ fn execute_and_persist_with_selectors(
             ToolError::new(ERR_PARSE, e.to_string()).with_data(json!({ "file": file_path }))
         })?;
 
+        // NAZ-466: same project-config TLS merge as `execute_and_persist`
+        // — without it the rerun path (`tarn_rerun_failed`) would skip
+        // `insecure`/`cacert` from `tarn.config.yaml` even when the
+        // original run honored them via the CLI.
+        let file_opts = RunOptions {
+            http: HttpTransportConfig::merge(&project_config.http_transport(), &opts.http),
+            ..opts.clone()
+        };
+
         let mut cookie_jars: std::collections::HashMap<String, tarn::cookie::CookieJar> =
             std::collections::HashMap::new();
         let result = runner::run_file_with_cookie_jars(
@@ -1041,7 +1061,7 @@ fn execute_and_persist_with_selectors(
             &resolved_env,
             tag_filter,
             selectors,
-            opts,
+            &file_opts,
             &mut cookie_jars,
             None,
         )

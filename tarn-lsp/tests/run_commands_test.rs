@@ -123,6 +123,47 @@ fn run_test_filters_down_to_the_named_test() {
     assert_eq!(tests[0]["name"], "alpha");
 }
 
+// NAZ-466 regression: TLS settings (`insecure`, `cacert`) declared in
+// `tarn.config.yaml` must reach the runner when tests are launched
+// from VS Code via `tarn.runFile`. The LSP path previously used
+// `RunOptions::default()` and never consulted the project config, so
+// `insecure: true` and custom `cacert` paths were silently ignored.
+//
+// Proof-by-side-effect: pointing `cacert` at a missing file makes the
+// merged transport invalid, and `HttpClient::new` surfaces it as a
+// runtime error before any request is sent. Without the merge, the
+// LSP would happily run the fixture (which would fail on connection,
+// not on cacert).
+#[test]
+fn run_file_merges_project_cacert_into_runtime() {
+    let dir = TempDir::new().unwrap();
+    let path = write_fixture(&dir);
+
+    let bogus_cacert = dir.path().join("missing-ca.pem");
+    fs::write(
+        dir.path().join("tarn.config.yaml"),
+        format!("test_dir: \".\"\ncacert: \"{}\"\n", bogus_cacert.display()),
+    )
+    .unwrap();
+
+    let sink = CapturingSink::new();
+    let result = execute_run_file(
+        &RunFileArgs {
+            file: path.display().to_string(),
+            env: None,
+        },
+        &sink,
+    );
+
+    let err = result.expect_err("missing cacert from tarn.config.yaml must surface as an error");
+    let msg = err.message.to_lowercase();
+    assert!(
+        msg.contains("cacert") || msg.contains("ca certificate") || msg.contains("read"),
+        "error must mention the cacert read failure, got: {}",
+        err.message
+    );
+}
+
 #[test]
 fn extract_failures_returns_matching_pairs() {
     let artifact = LastRunArtifact {

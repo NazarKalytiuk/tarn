@@ -472,6 +472,50 @@ Every major LSP client ends up feeding the same three facts to its launcher: a l
 
 Adapt the field names to whatever your client's config actually calls them. Nothing about `tarn-lsp` is specific to any one client — it is a plain LSP 3.17 stdio server.
 
+### Neovim (built-in `vim.lsp`, 0.11+)
+
+If you do not use `nvim-lspconfig`, wire `tarn-lsp` up through Neovim's built-in client. The two patterns below are both correct; pick whichever fits your config.
+
+A common pitfall is calling `vim.lsp.start({...})` once at the top level of `init.lua`. `vim.lsp.start` only attaches the **current** buffer at the moment of the call — it does not subscribe to future buffers, and the `filetypes = { "tarn" }` field is informational, not an autocmd. The result is an active client with an empty `Attached buffers:` list when you run `:checkhealth vim.lsp` after opening a `.tarn.yaml` file. Use one of the patterns below instead.
+
+**(a) `vim.lsp.config` + `vim.lsp.enable` (Neovim 0.11+, recommended):**
+
+```lua
+vim.filetype.add({
+  pattern = { [".*%.tarn%.yaml"] = "tarn", [".*%.tarn%.yml"] = "tarn" },
+})
+
+vim.lsp.config.tarn = {
+  cmd = { "tarn-lsp" },
+  filetypes = { "tarn" },
+  root_markers = { "tarn.config.yaml", ".git" },
+}
+vim.lsp.enable("tarn")
+```
+
+**(b) `FileType` autocmd (works on every Neovim version that has `vim.lsp.start`):**
+
+```lua
+vim.filetype.add({
+  pattern = { [".*%.tarn%.yaml"] = "tarn", [".*%.tarn%.yml"] = "tarn" },
+})
+
+vim.api.nvim_create_autocmd("FileType", {
+  pattern = "tarn",
+  callback = function()
+    vim.lsp.start({
+      name = "tarn",
+      cmd = { "tarn-lsp" },
+      root_dir = vim.fs.dirname(
+        vim.fs.find({ "tarn.config.yaml", ".git" }, { upward = true })[1]
+      ),
+    })
+  end,
+})
+```
+
+After reloading, open a `.tarn.yaml` file and run `:checkhealth vim.lsp` — the `tarn` client should list the buffer under `Attached buffers:`. If `Attached buffers:` is still empty, the buffer's filetype is not `tarn`; run `:set filetype?` to confirm and re-check the `vim.filetype.add` pattern.
+
 ### Neovim (`nvim-lspconfig`)
 
 `nvim-lspconfig` does not ship a built-in entry for Tarn yet, so register the server manually. Drop this into your Neovim config (`init.lua` or a filetype plugin):
@@ -655,6 +699,14 @@ The client will report "language server binary not found" or "failed to spawn". 
 The most common cause is the file type: your client needs a filetype mapping from `.tarn.yaml` → `tarn`. Neovim users: see the `vim.filetype.add` snippet above. Other clients usually have a similar "file association" or "language assignment" setting.
 
 The second-most common cause: the client only starts the server once a matching document is opened. Open a `.tarn.yaml` file and check the client's "server status" view.
+
+### Neovim: client is active but `Attached buffers:` is empty
+
+`:checkhealth vim.lsp` shows the `tarn` client running with the right command and root directory, but the `Attached buffers:` list is empty even when a `.tarn.yaml` buffer is open. This means the server started but the buffer was never routed to it.
+
+Cause: `vim.lsp.start({...})` was called once at the top level of `init.lua`. That call only attaches the **current** buffer at the moment of the call — `filetypes = { "tarn" }` is informational and does not install any FileType autocmd. The fix is to call `vim.lsp.start` per matching buffer (or use `vim.lsp.config` + `vim.lsp.enable`); see the **Neovim (built-in `vim.lsp`)** snippets above for both patterns.
+
+If `Attached buffers:` is still empty after switching to one of those patterns, run `:set filetype?` in the buffer — it must report `filetype=tarn`. If it reports `yaml`, the `vim.filetype.add` pattern is not matching; double-check the Lua pattern (`%.tarn%.yaml`, escaping each `.`).
 
 ### Diagnostics do not show up
 

@@ -4448,6 +4448,9 @@ fn list_files_human(files: &[String], tag_filter: &[String]) -> i32 {
         let path = Path::new(file_path);
         match parser::parse_file(path) {
             Ok(tf) => {
+                if !runner::file_matches_tag_filter(&tf, tag_filter) {
+                    continue;
+                }
                 let matches_simple =
                     !tf.steps.is_empty() && runner::matches_tags(&tf.tags, tag_filter);
                 let matching_groups: Vec<_> = tf
@@ -4459,10 +4462,6 @@ fn list_files_human(files: &[String], tag_filter: &[String]) -> i32 {
                         runner::matches_tags(&combined_tags, tag_filter)
                     })
                     .collect();
-
-                if !tag_filter.is_empty() && !matches_simple && matching_groups.is_empty() {
-                    continue;
-                }
 
                 println!("{}", file_path);
                 println!("  \u{25cf} {}", tf.name);
@@ -4512,6 +4511,9 @@ fn list_files_json(files: &[String], tag_filter: &[String], scoped_to_file: bool
         let path = Path::new(file_path);
         match parser::parse_file(path) {
             Ok(tf) => {
+                if !runner::file_matches_tag_filter(&tf, tag_filter) {
+                    continue;
+                }
                 let matches_simple =
                     !tf.steps.is_empty() && runner::matches_tags(&tf.tags, tag_filter);
                 let matching_groups: Vec<(&String, &tarn::model::TestGroup)> = tf
@@ -4523,10 +4525,6 @@ fn list_files_json(files: &[String], tag_filter: &[String], scoped_to_file: bool
                         runner::matches_tags(&combined_tags, tag_filter)
                     })
                     .collect();
-
-                if !tag_filter.is_empty() && !matches_simple && matching_groups.is_empty() {
-                    continue;
-                }
 
                 let steps_json: Vec<serde_json::Value> = tf
                     .steps

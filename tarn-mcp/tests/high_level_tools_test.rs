@@ -408,3 +408,44 @@ fn tarn_pack_context_markdown_format_returns_string_body() {
         "markdown output should include fenced blocks"
     );
 }
+
+// NAZ-466 regression: TLS settings (`insecure`, `cacert`) declared in
+// `tarn.config.yaml` must reach the runner when tests are launched via
+// MCP. The MCP path previously called `runner::run_file` with a
+// default `RunOptions.http`, silently dropping the project config's
+// HTTP transport block — so an HTTPS test against a self-signed cert
+// kept aborting even with `insecure: true` set.
+//
+// Proof-by-side-effect: pointing `cacert` at a missing file makes the
+// merged config invalid, and the runner surfaces that as a config
+// error during HttpClient construction. If the MCP path were still
+// dropping the project config, the run would proceed against the HTTP
+// fixture and report a normal HTTP failure instead.
+#[test]
+fn tarn_run_merges_project_cacert_into_runtime() {
+    let _g = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let server = FlakyServer::always_200();
+    let tmp = tempfile::TempDir::new().unwrap();
+    scaffold_project(tmp.path(), &server.base_url());
+
+    let bogus_cacert = tmp.path().join("definitely-missing-ca.pem");
+    std::fs::write(
+        tmp.path().join("tarn.config.yaml"),
+        format!("test_dir: tests\ncacert: \"{}\"\n", bogus_cacert.display()),
+    )
+    .unwrap();
+
+    let resp = tarn_mcp::tools::tarn_run(&json!({
+        "cwd": tmp.path().to_string_lossy(),
+        "path": "tests",
+    }));
+
+    let err =
+        resp.expect_err("missing cacert from tarn.config.yaml must surface as a config error");
+    let msg = err.message.to_lowercase();
+    assert!(
+        msg.contains("cacert") || msg.contains("ca certificate") || msg.contains("read"),
+        "error must mention the cacert read failure, got: {}",
+        err.message
+    );
+}

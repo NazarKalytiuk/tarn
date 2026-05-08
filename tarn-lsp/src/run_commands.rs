@@ -42,8 +42,9 @@ use lsp_server::{ErrorCode, Notification, ResponseError};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tarn::assert::types::{FileResult, RunResult, StepResult, TestResult};
+use tarn::config;
 use tarn::env;
-use tarn::model::TestFile;
+use tarn::model::{HttpTransportConfig, TestFile};
 use tarn::parser;
 use tarn::report::progress::{ProgressReporter, ReportContext};
 use tarn::runner::{self, RunOptions};
@@ -418,19 +419,26 @@ fn run_file_internal(
     let mut test_file: TestFile = parser::parse_file(file_path)
         .map_err(|e| invalid_params(format!("failed to parse `{}`: {}", file_path.display(), e)))?;
 
-    let project_root = file_path.parent().unwrap_or(Path::new(".")).to_path_buf();
+    let file_dir = file_path.parent().unwrap_or(Path::new("."));
+    // NAZ-466: discover the workspace root the same way the CLI does,
+    // walking up from the test file to find `tarn.config.yaml` /
+    // `tarn.env.yaml`. The previous behavior used the file's immediate
+    // parent as `project_root`, so a project config sitting at the repo
+    // root was invisible — env resolution worked by accident (the LSP
+    // does not require env files), but TLS settings (`insecure`,
+    // `cacert`) were silently dropped.
+    let project_root =
+        config::find_project_root(file_dir).unwrap_or_else(|| file_dir.to_path_buf());
+    let project_config = config::load_config(&project_root)
+        .map_err(|e| invalid_params(format!("failed to load tarn.config.yaml: {e}")))?;
 
-    // Resolve environment using the same layered chain the CLI uses so
-    // interpolation placeholders see the same values. We pass no CLI
-    // vars — the LSP command does not accept arbitrary key=value
-    // overrides (clients go through `tarn run` with `--var` instead).
     let resolved_env = env::resolve_env_with_profiles(
         &test_file.env,
         env_name,
         &[],
         &project_root,
-        "tarn.env.yaml",
-        &std::collections::HashMap::new(),
+        &project_config.env_file,
+        &project_config.environments,
     )
     .map_err(|e| invalid_params(format!("env resolution failed: {e}")))?;
 
@@ -439,7 +447,13 @@ fn run_file_internal(
     }
 
     let reporter = ProgressSinkReporter::new(sink);
-    let opts = RunOptions::default();
+    let opts = RunOptions {
+        http: HttpTransportConfig::merge(
+            &project_config.http_transport(),
+            &HttpTransportConfig::default(),
+        ),
+        ..RunOptions::default()
+    };
     let selectors_vec = selectors.unwrap_or_default();
     let mut cookie_jars = std::collections::HashMap::new();
 

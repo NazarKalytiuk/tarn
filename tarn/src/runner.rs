@@ -273,6 +273,33 @@ pub fn parse_tag_filter(tag_str: &str) -> Vec<String> {
         .collect()
 }
 
+/// Whether a test file should be kept under the given tag filter.
+///
+/// Empty filter ⇒ always keep. Otherwise keep iff at least one of:
+/// - the file is in simple format (`steps:` populated) and its file-level
+///   tags match the filter, or
+/// - it has a named test group whose tags (combined with file-level tags)
+///   match the filter.
+///
+/// Both `tarn run` and `tarn list` use this predicate so their discovery
+/// surfaces stay in lock-step.
+pub fn file_matches_tag_filter(test_file: &TestFile, tag_filter: &[String]) -> bool {
+    if tag_filter.is_empty() {
+        return true;
+    }
+    let matches_simple = !test_file.steps.is_empty() && matches_tags(&test_file.tags, tag_filter);
+    let any_group_matches = test_file.tests.iter().any(|(_, group)| {
+        let combined: Vec<String> = test_file
+            .tags
+            .iter()
+            .chain(group.tags.iter())
+            .cloned()
+            .collect();
+        matches_tags(&combined, tag_filter)
+    });
+    matches_simple || any_group_matches
+}
+
 /// Compose the `--test-filter` / `--step-filter` CLI shorthand flags into
 /// a single wildcard [`Selector`] that applies to every discovered file.
 ///
@@ -385,12 +412,11 @@ pub fn run_file_with_observers(
     let redaction = test_file.redaction.clone().unwrap_or_default();
     let mut redacted_values = collect_redacted_env_values(env, &redaction);
 
-    // Check if file-level tags match filter
-    if !tag_filter.is_empty()
-        && !test_file.steps.is_empty()
-        && !matches_tags(&test_file.tags, tag_filter)
-    {
-        // Simple format files: check file-level tags
+    // NAZ-465: skip the entire file (including setup/teardown) when no
+    // simple-format steps and no named test groups match the filter. The
+    // previous guard fired only for simple-format files, so full-format
+    // files still ran their setup even when every group was filtered out.
+    if !file_matches_tag_filter(test_file, tag_filter) {
         return Ok(FileResult {
             file: file_path.to_string(),
             name: test_file.name.clone(),

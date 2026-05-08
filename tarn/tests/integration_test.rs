@@ -1088,6 +1088,59 @@ tests:
     assert_eq!(json["summary"]["steps"]["total"], 1);
 }
 
+// NAZ-465 regression: when --tag matches no test groups in a full-format
+// file, the file's setup must NOT execute. Previously the file-level skip
+// only fired for simple-format files, so setup steps ran for every
+// discovered file even when every test group was filtered out.
+#[test]
+fn tag_filter_skips_setup_when_no_groups_match() {
+    let server = DemoServer::start();
+    let dir = TempDir::new().unwrap();
+
+    let test_file = write_test_file(
+        &dir,
+        "tag-skip-setup.tarn.yaml",
+        &format!(
+            r#"
+name: Tag-skip setup test
+setup:
+  - name: setup_should_not_run
+    request:
+      method: GET
+      url: "{}/health"
+    assert:
+      status: 200
+tests:
+  smoke_test:
+    tags: [smoke]
+    steps:
+      - name: smoke_step
+        request:
+          method: GET
+          url: "{}/health"
+        assert:
+          status: 200
+"#,
+            server.base_url(),
+            server.base_url()
+        ),
+    );
+
+    let output = tarn()
+        .args(["run", &test_file, "--tag", "missing", "--format", "json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["summary"]["steps"]["total"], 0);
+    let files = json["files"].as_array().expect("files array");
+    assert_eq!(files.len(), 1);
+    assert!(files[0]["setup"].as_array().unwrap().is_empty());
+    assert!(files[0]["tests"].as_array().unwrap().is_empty());
+    assert!(files[0]["teardown"].as_array().unwrap().is_empty());
+}
+
 #[test]
 fn junit_output_is_valid_xml() {
     let server = DemoServer::start();
@@ -1997,6 +2050,220 @@ steps:
             "--cacert",
             server.cert_path().to_str().unwrap(),
         ])
+        .assert()
+        .success();
+}
+
+// NAZ-466 regression: `insecure: true` in `tarn.config.yaml` was being
+// read into the project config but the per-file `RunOptions.http` was
+// rebuilt from a stale base, so the flag never reached the reqwest
+// `ClientBuilder` and TLS verification still aborted self-signed
+// requests.
+#[test]
+fn insecure_in_project_config_allows_self_signed_https() {
+    let server = SelfSignedHttpsServer::start();
+    let dir = TempDir::new().unwrap();
+
+    write_test_file(
+        &dir,
+        "tarn.config.yaml",
+        "test_dir: \".\"\ninsecure: true\n",
+    );
+
+    let test_file = write_test_file(
+        &dir,
+        "insecure-config.tarn.yaml",
+        &format!(
+            r#"
+name: Insecure TLS via config
+steps:
+  - name: Self-signed health
+    request:
+      method: GET
+      url: "{}/health"
+    assert:
+      status: 200
+"#,
+            server.base_url()
+        ),
+    );
+
+    tarn()
+        .current_dir(dir.path())
+        .args(["run", &test_file])
+        .assert()
+        .success();
+}
+
+// NAZ-466 regression: `insecure: true` from `tarn.config.yaml` must
+// also reach setup/test/teardown steps in full-format files. The
+// run-files path rebuilds `RunOptions.http` per file and previously
+// dropped project TLS settings on full-format inputs.
+#[test]
+fn insecure_in_project_config_full_format_with_setup() {
+    let server = SelfSignedHttpsServer::start();
+    let dir = TempDir::new().unwrap();
+
+    write_test_file(
+        &dir,
+        "tarn.config.yaml",
+        "test_dir: \".\"\ninsecure: true\n",
+    );
+
+    let test_file = write_test_file(
+        &dir,
+        "insecure-full.tarn.yaml",
+        &format!(
+            r#"
+name: Insecure full-format
+setup:
+  - name: setup_health
+    request:
+      method: GET
+      url: "{}/health"
+    assert:
+      status: 200
+tests:
+  smoke:
+    steps:
+      - name: smoke_health
+        request:
+          method: GET
+          url: "{}/health"
+        assert:
+          status: 200
+"#,
+            server.base_url(),
+            server.base_url()
+        ),
+    );
+
+    tarn()
+        .current_dir(dir.path())
+        .args(["run", &test_file])
+        .assert()
+        .success();
+}
+
+// NAZ-466 regression: parallel execution must also pick up project
+// TLS settings. The parallel executor rebuilds `RunOptions.http` per
+// file just like the sequential path; if it accidentally drops the
+// project config, every parallel run against an HTTPS server with a
+// self-signed cert fails.
+#[test]
+fn insecure_in_project_config_parallel_mode() {
+    let server = SelfSignedHttpsServer::start();
+    let dir = TempDir::new().unwrap();
+
+    write_test_file(
+        &dir,
+        "tarn.config.yaml",
+        "test_dir: \".\"\ninsecure: true\n",
+    );
+
+    let test_file = write_test_file(
+        &dir,
+        "insecure-parallel.tarn.yaml",
+        &format!(
+            r#"
+name: Insecure parallel
+steps:
+  - name: Self-signed health
+    request:
+      method: GET
+      url: "{}/health"
+    assert:
+      status: 200
+"#,
+            server.base_url()
+        ),
+    );
+
+    tarn()
+        .current_dir(dir.path())
+        .args(["run", &test_file, "--parallel", "--no-parallel-warning"])
+        .assert()
+        .success();
+}
+
+// NAZ-466 regression: project config in a subdirectory of CWD must
+// still be discovered. The user runs `tarn run tests/foo.tarn.yaml`
+// from the project root; `tarn.config.yaml` sits next to `tests/`.
+#[test]
+fn insecure_in_project_config_with_nested_test_file() {
+    let server = SelfSignedHttpsServer::start();
+    let dir = TempDir::new().unwrap();
+
+    write_test_file(
+        &dir,
+        "tarn.config.yaml",
+        "test_dir: \"tests\"\ninsecure: true\n",
+    );
+
+    std::fs::create_dir(dir.path().join("tests")).unwrap();
+    let test_file_path = dir.path().join("tests").join("nested.tarn.yaml");
+    std::fs::write(
+        &test_file_path,
+        format!(
+            r#"
+name: Nested insecure
+steps:
+  - name: Self-signed health
+    request:
+      method: GET
+      url: "{}/health"
+    assert:
+      status: 200
+"#,
+            server.base_url()
+        ),
+    )
+    .unwrap();
+
+    tarn()
+        .current_dir(dir.path())
+        .args(["run", "tests/nested.tarn.yaml"])
+        .assert()
+        .success();
+}
+
+// NAZ-466 regression: `cacert: <path>` in `tarn.config.yaml` was loaded
+// into the project config but never reached the reqwest client.
+#[test]
+fn cacert_in_project_config_allows_self_signed_https() {
+    let server = SelfSignedHttpsServer::start();
+    let dir = TempDir::new().unwrap();
+
+    write_test_file(
+        &dir,
+        "tarn.config.yaml",
+        &format!(
+            "test_dir: \".\"\ncacert: \"{}\"\n",
+            server.cert_path().display()
+        ),
+    );
+
+    let test_file = write_test_file(
+        &dir,
+        "cacert-config.tarn.yaml",
+        &format!(
+            r#"
+name: Custom CA via config
+steps:
+  - name: Trusted self-signed health
+    request:
+      method: GET
+      url: "{}/health"
+    assert:
+      status: 200
+"#,
+            server.base_url()
+        ),
+    );
+
+    tarn()
+        .current_dir(dir.path())
+        .args(["run", &test_file])
         .assert()
         .success();
 }
