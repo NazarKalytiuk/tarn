@@ -2,7 +2,10 @@
 
 ## Unreleased
 
-## 0.13.0 — Per-step `[X/Y]` progress indicator
+## 0.13.1 — Per-step `[X/Y]` progress indicator
+
+> The v0.13.0 tag was pushed but the release pipeline rejected it because `editors/vscode/package.json` had not been bumped, so no artifacts shipped. v0.13.1 is the first published release that carries the progress-indicator feature; the changes below are otherwise identical to what v0.13.0 staged.
+
 
 Every test-phase step now carries a global `[index/total]` position that streams during the run and persists into the final report. The total is computed up front after tag/selector filtering, so running `tarn run --tag smoke` against a 345-step suite that selects 12 will print `[1/12] … [12/12]` — not `[1/345]`. Setup and teardown steps are intentionally excluded; only real test work participates in the sequence.
 
