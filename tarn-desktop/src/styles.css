@@ -1,0 +1,142 @@
+/* Tarn Studio — design tokens
+   Dark theme only. Calm cool slate. Status colors are the only saturated colors.
+   Ported from /docs/design/handoff: tarn/project/styles.css. */
+
+@import "tailwindcss";
+
+:root {
+  /* Surfaces — cool slate, never blue-pure */
+  --bg-canvas:     #0a0b0e;
+  --bg-base:       #0d0f13;
+  --bg-surface:    #15171c;
+  --bg-elevated:   #1c1f26;
+  --bg-input:      #0f1116;
+  --bg-selected:   #232634;
+
+  /* Borders */
+  --line:          #20232a;
+  --line-strong:   #2a2d36;
+  --line-faint:    #181a20;
+
+  /* Text */
+  --fg-primary:    #e7e8ec;
+  --fg-secondary:  #a0a2ab;
+  --fg-tertiary:   #6a6d77;
+  --fg-quaternary: #45474f;
+  --fg-on-accent:  #f4f4ff;
+
+  /* Status — the only saturated colors */
+  --passed:        oklch(0.72 0.13 152);
+  --passed-dim:    oklch(0.72 0.13 152 / 0.16);
+  --failed:        oklch(0.70 0.15 32);
+  --failed-dim:    oklch(0.70 0.15 32 / 0.16);
+  --running:       oklch(0.80 0.13 78);
+  --running-dim:   oklch(0.80 0.13 78 / 0.16);
+  --skipped:       #6a6d77;
+  --pending:       #3a3d45;
+
+  /* Accent — one color for primary CTAs and active selection */
+  --accent:        oklch(0.70 0.13 275);
+  --accent-hover:  oklch(0.74 0.13 275);
+  --accent-dim:    oklch(0.70 0.13 275 / 0.18);
+  --accent-line:   oklch(0.70 0.13 275 / 0.45);
+
+  /* Type */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter",
+               system-ui, sans-serif;
+  --font-mono: "SF Mono", "JetBrains Mono", ui-monospace, "Menlo",
+               "Consolas", monospace;
+
+  /* Radii */
+  --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 8px;
+  --r-xl: 10px;
+}
+
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  width: 100%;
+}
+
+body {
+  background: var(--bg-canvas);
+  color: var(--fg-primary);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+.tarn-window {
+  background: var(--bg-base);
+  color: var(--fg-primary);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.45;
+  font-feature-settings: "ss01", "cv11";
+  -webkit-font-smoothing: antialiased;
+}
+
+.tarn-window *,
+.tarn-window *::before,
+.tarn-window *::after {
+  box-sizing: border-box;
+}
+
+/* Scrollbars: invisible until hover */
+.tarn-window .scroll {
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.tarn-window .scroll:hover {
+  scrollbar-color: var(--line-strong) transparent;
+}
+.tarn-window .scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+.tarn-window .scroll::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 4px;
+}
+.tarn-window .scroll:hover::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+}
+
+.tarn-window .mono {
+  font-family: var(--font-mono);
+  font-feature-settings: "calt" 0;
+}
+
+/* 1Hz pulse for running status */
+@keyframes tarn-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.42; }
+}
+.tarn-pulse {
+  animation: tarn-pulse 1.05s ease-in-out infinite;
+}
+
+/* Faint stripe for placeholder regions */
+.tarn-stripe {
+  background-image: repeating-linear-gradient(
+    135deg,
+    rgba(255,255,255,0.018) 0 8px,
+    transparent 8px 16px
+  );
+}
+
+.tarn-window ::selection {
+  background: var(--accent-dim);
+  color: var(--fg-primary);
+}
+
+.tarn-window :focus-visible {
+  outline: 1px solid var(--accent-line);
+  outline-offset: 1px;
+}
+
+/* Buttons used for reset of native styles */
+.tarn-window button {
+  font-family: inherit;
+  color: inherit;
+}

@@ -1,0 +1,36 @@
+# Tarn Studio is intentionally kept out of the top-level Cargo workspace
+# so its Tauri/WebView build pipeline (Node, Vite, esbuild, Tailwind v4,
+# auto-update / signing later) stays decoupled from the CLI's. This
+# minimal `[workspace]` table makes tarn-desktop its own workspace root.
+[workspace]
+
+[package]
+name = "tarn-desktop"
+version = "0.1.0"
+edition = "2021"
+description = "Tarn Studio — native desktop app for the Tarn API testing tool"
+license = "MIT"
+repository = "https://github.com/NazarKalytiuk/tarn"
+homepage = "https://nazarkalytiuk.github.io/tarn/"
+readme = "../README.md"
+publish = false
+
+[lib]
+name = "tarn_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-store = "2"
+tauri-plugin-fs = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "process", "io-util"] }
+thiserror = "2"
+uuid = { version = "1", features = ["v4"] }
+dashmap = "6"

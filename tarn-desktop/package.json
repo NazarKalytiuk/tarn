@@ -1,0 +1,37 @@
+{
+  "name": "tarn-desktop",
+  "version": "0.1.0",
+  "description": "Tarn Studio — native desktop app for the Tarn API testing tool",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "serve": "vite preview",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "typecheck": "tsc --noEmit"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@codemirror/lang-yaml": "^6.1.1",
+    "@codemirror/state": "^6.4.1",
+    "@codemirror/view": "^6.34.1",
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-dialog": "^2",
+    "@tauri-apps/plugin-fs": "^2",
+    "@tauri-apps/plugin-opener": "^2",
+    "@tauri-apps/plugin-store": "^2",
+    "codemirror": "^6.0.1",
+    "solid-js": "^1.9.3"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "@tailwindcss/vite": "^4.0.0",
+    "tailwindcss": "^4.0.0",
+    "typescript": "~5.6.2",
+    "vite": "^6.0.3",
+    "vite-plugin-solid": "^2.11.0"
+  }
+}
