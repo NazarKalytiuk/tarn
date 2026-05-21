@@ -1,0 +1,61 @@
+version: "1"
+name: "Intentional failures"
+description: "Deliberate failures so Studio's failure UI can be exercised. Run these to see expected/actual diffs, cascade skips, and the red dots in the tree."
+tags: [regression, flaky]
+
+defaults:
+  headers:
+    Accept: "application/json"
+
+tests:
+  "Wrong status":
+    description: "Expect 200, server returns 404 / 500"
+    steps:
+      - name: "GET /status/404"
+        request:
+          method: GET
+          url: "{{ env.httpbin }}/status/404"
+        assert:
+          status: 200
+
+      - name: "GET /status/500"
+        request:
+          method: GET
+          url: "{{ env.httpbin }}/status/500"
+        assert:
+          status: 200
+
+  "Body mismatch":
+    description: "Expected email value doesn't match what the API returns"
+    steps:
+      - name: "GET /users/1"
+        request:
+          method: GET
+          url: "{{ env.base_url }}/users/1"
+        assert:
+          status: 200
+          body:
+            "$.email": "this-will-never-match@example.com"
+
+  "Cascade failure":
+    description: "First step fails on assertion → captured token is missing → second step cascade-skips"
+    steps:
+      - name: "POST /auth/login"
+        request:
+          method: POST
+          url: "{{ env.httpbin }}/status/500"
+          body:
+            email: "qa@example.com"
+        capture:
+          token: "$.token"
+        assert:
+          status: 200
+
+      - name: "GET /users/me"
+        request:
+          method: GET
+          url: "{{ env.httpbin }}/bearer"
+          headers:
+            Authorization: "Bearer {{ capture.token }}"
+        assert:
+          status: 200

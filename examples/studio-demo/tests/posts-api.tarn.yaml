@@ -1,0 +1,47 @@
+version: "1"
+name: "Posts API"
+description: "Read posts and nested comments. All green."
+tags: [crud, regression, posts]
+
+defaults:
+  headers:
+    Accept: "application/json"
+
+tests:
+  "List posts":
+    steps:
+      - name: "GET /posts"
+        request:
+          method: GET
+          url: "{{ env.base_url }}/posts"
+        assert:
+          status: 200
+
+      - name: "GET /posts/1"
+        request:
+          method: GET
+          url: "{{ env.base_url }}/posts/1"
+        capture:
+          post_id: "$.id"
+        assert:
+          status: 200
+          body:
+            "$.id":     { type: number }
+            "$.userId": { type: number }
+            "$.title":  { type: string, not_empty: true }
+
+  "Nested comments":
+    steps:
+      - name: "GET /posts/1/comments"
+        request:
+          method: GET
+          url: "{{ env.base_url }}/posts/1/comments"
+        assert:
+          status: 200
+
+      - name: "GET /comments?postId=1"
+        request:
+          method: GET
+          url: "{{ env.base_url }}/comments?postId=1"
+        assert:
+          status: 200

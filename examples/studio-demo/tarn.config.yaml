@@ -1,0 +1,2 @@
+test_dir: "tests"
+timeout: 10000

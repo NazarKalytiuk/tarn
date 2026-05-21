@@ -1,0 +1,49 @@
+version: "1"
+name: "Smoke checks"
+description: "Quick green-path checks. All steps should pass on a healthy network."
+tags: [smoke]
+
+defaults:
+  headers:
+    Accept: "application/json"
+    User-Agent: "tarn-studio-demo"
+
+tests:
+  "Service health":
+    description: "Two-step service ping via httpbin"
+    steps:
+      - name: "GET /status/200"
+        request:
+          method: GET
+          url: "{{ env.httpbin }}/status/200"
+        assert:
+          status: 200
+
+      - name: "GET /headers"
+        request:
+          method: GET
+          url: "{{ env.httpbin }}/headers"
+        assert:
+          status: 200
+
+  "Catalogue available":
+    description: "Sample-data CRUD endpoints are reachable and well-shaped"
+    steps:
+      - name: "GET /users/1"
+        request:
+          method: GET
+          url: "{{ env.base_url }}/users/{{ env.user_id }}"
+        assert:
+          status: 200
+          body:
+            "$.id":    { type: number }
+            "$.email": { type: string }
+
+      - name: "GET /posts/1"
+        request:
+          method: GET
+          url: "{{ env.base_url }}/posts/1"
+        assert:
+          status: 200
+          body:
+            "$.userId": { type: number }

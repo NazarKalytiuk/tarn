@@ -1,0 +1,49 @@
+version: "1"
+name: "Authentication"
+description: "Login + protected resource via httpbin's echo endpoints."
+tags: [auth, smoke]
+
+defaults:
+  headers:
+    Content-Type: "application/json"
+    Accept:       "application/json"
+
+tests:
+  "Login flow":
+    description: "Echo the credentials and use the captured email to call a 'protected' resource"
+    steps:
+      - name: "POST /auth/login"
+        request:
+          method: POST
+          url: "{{ env.httpbin }}/post"
+          body:
+            email:    "qa@example.com"
+            password: "{{ env.user_id }}-secret"
+        capture:
+          email: "$.json.email"
+        assert:
+          status: 200
+          body:
+            "$.json.email": "qa@example.com"
+
+      - name: "GET /users/me"
+        request:
+          method: GET
+          url: "{{ env.httpbin }}/bearer"
+          headers:
+            Authorization: "Bearer eyJfakeXYZ.{{ capture.email }}"
+        assert:
+          status: 200
+          body:
+            "$.authenticated": true
+
+  "Logout":
+    steps:
+      - name: "POST /auth/logout"
+        request:
+          method: POST
+          url: "{{ env.httpbin }}/post"
+          body:
+            action: "logout"
+        assert:
+          status: 200

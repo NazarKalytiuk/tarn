@@ -1,0 +1,2 @@
+# Tarn's per-project run artifacts. Rebuilt on every `tarn run`.
+.tarn/

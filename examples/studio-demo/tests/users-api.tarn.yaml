@@ -1,0 +1,68 @@
+version: "1"
+name: "User CRUD"
+description: "Create / read / update / delete on jsonplaceholder's /users resource."
+tags: [crud, regression]
+
+defaults:
+  headers:
+    Content-Type: "application/json"
+    Accept:       "application/json"
+
+tests:
+  "List and read":
+    steps:
+      - name: "GET /users"
+        request:
+          method: GET
+          url: "{{ env.base_url }}/users"
+        assert:
+          status: 200
+
+      - name: "GET /users/1"
+        request:
+          method: GET
+          url: "{{ env.base_url }}/users/{{ env.user_id }}"
+        assert:
+          status: 200
+          body:
+            "$.id":   { type: number }
+            "$.name": { type: string, not_empty: true }
+
+  "Create user":
+    steps:
+      - name: "POST /users"
+        request:
+          method: POST
+          url: "{{ env.base_url }}/users"
+          body:
+            name:     "Sasha QA"
+            email:    "sasha@example.com"
+            username: "sashaq"
+        capture:
+          new_id: "$.id"
+        assert:
+          status: 201
+          body:
+            "$.id": { type: number }
+
+  "Update user":
+    steps:
+      - name: "PATCH /users/1"
+        request:
+          method: PATCH
+          url: "{{ env.base_url }}/users/1"
+          body:
+            email: "patched@example.com"
+        assert:
+          status: 200
+          body:
+            "$.email": "patched@example.com"
+
+  "Delete user":
+    steps:
+      - name: "DELETE /users/1"
+        request:
+          method: DELETE
+          url: "{{ env.base_url }}/users/1"
+        assert:
+          status: 200
