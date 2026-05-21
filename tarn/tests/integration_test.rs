@@ -393,6 +393,7 @@ fn golden_run_result() -> RunResult {
                 captures_set: vec![],
                 location: None,
                 response_shape_mismatch: None,
+                ..Default::default()
             }],
             test_results: vec![TestResult {
                 name: "smoke".into(),
@@ -418,6 +419,7 @@ fn golden_run_result() -> RunResult {
                         captures_set: vec![],
                         location: None,
                         response_shape_mismatch: None,
+                        ..Default::default()
                     },
                     StepResult {
                         name: "Fetch item".into(),
@@ -460,6 +462,7 @@ fn golden_run_result() -> RunResult {
                         captures_set: vec![],
                         location: None,
                         response_shape_mismatch: None,
+                        ..Default::default()
                     },
                 ],
                 captures: HashMap::new(),
@@ -479,6 +482,7 @@ fn golden_run_result() -> RunResult {
                 captures_set: vec![],
                 location: None,
                 response_shape_mismatch: None,
+                ..Default::default()
             }],
         }],
     }

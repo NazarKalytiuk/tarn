@@ -405,6 +405,7 @@ mod tests {
             captures_set: vec![],
             location: None,
             response_shape_mismatch: None,
+            ..Default::default()
         }
     }
 
@@ -441,6 +442,7 @@ mod tests {
             captures_set: vec![],
             location: None,
             response_shape_mismatch: None,
+            ..Default::default()
         }
     }
 
@@ -604,6 +606,7 @@ mod tests {
             captures_set: vec![],
             location: None,
             response_shape_mismatch: None,
+            ..Default::default()
         };
         let mut file = wrap_file("a.tarn.yaml", vec![upstream, cascade], "happy");
         // Mark the upstream step's declared capture as unfulfilled by

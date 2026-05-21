@@ -182,16 +182,29 @@ fn render_step_description_into(output: &mut String, step: &StepResult) {
     }
 }
 
+/// Render the `[X/Y] ` progress prefix for a step. Returns an empty
+/// string when the step was not stamped with a counter (setup,
+/// teardown, or any library caller that did not attach a
+/// [`crate::runner::ProgressCounter`]).
+pub(crate) fn progress_prefix(step: &StepResult) -> String {
+    match (step.progress_index, step.progress_total) {
+        (Some(index), Some(total)) => format!("[{}/{}] ", index, total).dimmed().to_string(),
+        _ => String::new(),
+    }
+}
+
 fn render_step_into(
     output: &mut String,
     step: &StepResult,
     redaction: &RedactionConfig,
     redacted_values: &[String],
 ) {
+    let prefix = progress_prefix(step);
     if step.passed {
         output.push_str(&format!(
-            "   {} {} ({}ms)\n",
+            "   {} {}{} ({}ms)\n",
             "✓".green(),
+            prefix,
             step.name,
             step.duration_ms
         ));
@@ -204,8 +217,9 @@ fn render_step_into(
         // Skipped-cascade steps use a distinct glyph so operators can
         // tell cascade fallout apart from primary failures at a glance.
         output.push_str(&format!(
-            "   {} {} (skipped)\n",
+            "   {} {}{} (skipped)\n",
             "⊘".yellow(),
+            prefix,
             step.name.yellow(),
         ));
         render_step_description_into(output, step);
@@ -219,8 +233,9 @@ fn render_step_into(
         }
     } else {
         output.push_str(&format!(
-            "   {} {} ({}ms)\n",
+            "   {} {}{} ({}ms)\n",
             "✗".red(),
+            prefix,
             step.name.red(),
             step.duration_ms
         ));
@@ -315,6 +330,7 @@ mod tests {
                         captures_set: vec![],
                         location: None,
                         response_shape_mismatch: None,
+                        ..Default::default()
                     }],
                     captures: HashMap::new(),
                 }],
@@ -366,6 +382,7 @@ mod tests {
                     captures_set: vec![],
                     location: None,
                     response_shape_mismatch: None,
+                    ..Default::default()
                 }],
                 test_results: vec![],
                 teardown_results: vec![StepResult {
@@ -383,6 +400,7 @@ mod tests {
                     captures_set: vec![],
                     location: None,
                     response_shape_mismatch: None,
+                    ..Default::default()
                 }],
             }],
         };
@@ -433,6 +451,7 @@ mod tests {
                         captures_set: vec![],
                         location: None,
                         response_shape_mismatch: None,
+                        ..Default::default()
                     }],
                     captures: HashMap::new(),
                 }],
@@ -482,6 +501,7 @@ mod tests {
                         captures_set: vec![],
                         location: None,
                         response_shape_mismatch: None,
+                        ..Default::default()
                     }],
                     captures: HashMap::new(),
                 }],
@@ -553,6 +573,7 @@ mod tests {
                         captures_set: vec![],
                         location: None,
                         response_shape_mismatch: None,
+                        ..Default::default()
                     }],
                     captures: HashMap::new(),
                 }],
@@ -626,6 +647,7 @@ mod tests {
                         captures_set: vec![],
                         location: None,
                         response_shape_mismatch: None,
+                        ..Default::default()
                     }],
                     captures: HashMap::new(),
                 }],
@@ -689,6 +711,7 @@ mod tests {
                         captures_set: vec![],
                         location: None,
                         response_shape_mismatch: None,
+                        ..Default::default()
                     }],
                     captures: HashMap::new(),
                 }],
@@ -741,6 +764,7 @@ mod tests {
                         captures_set: vec![],
                         location: None,
                         response_shape_mismatch: None,
+                        ..Default::default()
                     }],
                     captures: HashMap::new(),
                 }],
@@ -827,6 +851,7 @@ mod tests {
                         captures_set: vec![],
                         location: None,
                         response_shape_mismatch: None,
+                        ..Default::default()
                     }],
                     captures: HashMap::new(),
                 }],
@@ -895,5 +920,79 @@ mod tests {
         // by the description block so the two lines align under the step.
         assert!(output.contains("     First line"));
         assert!(output.contains("     Second line"));
+    }
+
+    fn run_with_progress(
+        progress_index: Option<u32>,
+        progress_total: Option<u32>,
+        passed: bool,
+    ) -> RunResult {
+        RunResult {
+            duration_ms: 10,
+            file_results: vec![FileResult {
+                file: "p.tarn.yaml".into(),
+                name: "S".into(),
+                passed,
+                duration_ms: 10,
+                redaction: crate::model::RedactionConfig::default(),
+                redacted_values: vec![],
+                setup_results: vec![],
+                test_results: vec![TestResult {
+                    name: "t".into(),
+                    description: None,
+                    passed,
+                    duration_ms: 10,
+                    step_results: vec![StepResult {
+                        name: "GET /x".into(),
+                        passed,
+                        duration_ms: 5,
+                        assertion_results: if passed {
+                            vec![AssertionResult::pass("status", "200", "200")]
+                        } else {
+                            vec![AssertionResult::fail("status", "200", "500", "boom")]
+                        },
+                        progress_index,
+                        progress_total,
+                        ..Default::default()
+                    }],
+                    captures: HashMap::new(),
+                }],
+                teardown_results: vec![],
+            }],
+        }
+    }
+
+    #[test]
+    fn human_prefixes_passing_step_with_progress_index() {
+        let result = run_with_progress(Some(121), Some(345), true);
+        let output = strip_ansi(&render(&result));
+        assert!(
+            output.contains("✓ [121/345] GET /x"),
+            "expected `[121/345]` prefix in output:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn human_prefixes_failing_step_with_progress_index() {
+        let result = run_with_progress(Some(7), Some(9), false);
+        let output = strip_ansi(&render(&result));
+        assert!(
+            output.contains("✗ [7/9] GET /x"),
+            "expected `[7/9]` prefix on failed step:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn human_omits_progress_prefix_when_unset() {
+        let result = run_with_progress(None, None, true);
+        let output = strip_ansi(&render(&result));
+        assert!(
+            !output.contains("[") || !output.contains("/"),
+            "no progress prefix should appear when fields are None:\n{}",
+            output
+        );
+        assert!(output.contains("✓ GET /x"));
     }
 }

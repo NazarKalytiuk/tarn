@@ -811,6 +811,7 @@ mod tests {
                     captures_set: vec![],
                     location: None,
                     response_shape_mismatch: None,
+                    ..Default::default()
                 }],
                 test_results: vec![TestResult {
                     name: "my_test".into(),
@@ -836,6 +837,7 @@ mod tests {
                             captures_set: vec![],
                             location: None,
                             response_shape_mismatch: None,
+                            ..Default::default()
                         },
                         StepResult {
                             name: "POST /users".into(),
@@ -852,6 +854,7 @@ mod tests {
                             captures_set: vec![],
                             location: None,
                             response_shape_mismatch: None,
+                            ..Default::default()
                         },
                     ],
                     captures: HashMap::new(),
@@ -871,6 +874,7 @@ mod tests {
                     captures_set: vec![],
                     location: None,
                     response_shape_mismatch: None,
+                    ..Default::default()
                 }],
             }],
         }
@@ -911,6 +915,7 @@ mod tests {
                             captures_set: vec![],
                             location: None,
                             response_shape_mismatch: None,
+                            ..Default::default()
                         },
                         StepResult {
                             name: "Verify user".into(),
@@ -945,6 +950,7 @@ mod tests {
                             captures_set: vec![],
                             location: None,
                             response_shape_mismatch: None,
+                            ..Default::default()
                         },
                     ],
                     captures: HashMap::new(),

@@ -273,6 +273,7 @@ mod tests {
                         captures_set: vec!["id".into()],
                         location: None,
                         response_shape_mismatch: None,
+                        ..Default::default()
                     }],
                     captures: HashMap::new(),
                 }],
@@ -320,6 +321,7 @@ mod tests {
                         captures_set: vec![],
                         location: None,
                         response_shape_mismatch: None,
+                        ..Default::default()
                     }],
                     captures: HashMap::new(),
                 }],
@@ -390,6 +392,7 @@ mod tests {
                     captures_set: vec![],
                     location: None,
                     response_shape_mismatch: None,
+                    ..Default::default()
                 }],
                 captures: HashMap::new(),
             }],
@@ -429,6 +432,7 @@ mod tests {
                 captures_set: vec![],
                 location: None,
                 response_shape_mismatch: None,
+                ..Default::default()
             });
         run.file_results[0].test_results[0]
             .step_results
@@ -452,6 +456,7 @@ mod tests {
                 captures_set: vec![],
                 location: None,
                 response_shape_mismatch: None,
+                ..Default::default()
             });
         let out = render(&run);
         let expected = "skipped: 2 steps (depended on failed capture 'id') in \

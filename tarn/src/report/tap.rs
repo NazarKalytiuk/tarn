@@ -115,6 +115,7 @@ mod tests {
                         captures_set: vec![],
                         location: None,
                         response_shape_mismatch: None,
+                        ..Default::default()
                     }],
                     captures: HashMap::new(),
                 }],
@@ -195,6 +196,7 @@ mod tests {
                             captures_set: vec![],
                             location: None,
                             response_shape_mismatch: None,
+                            ..Default::default()
                         },
                         StepResult {
                             name: "step2".into(),
@@ -211,6 +213,7 @@ mod tests {
                             captures_set: vec![],
                             location: None,
                             response_shape_mismatch: None,
+                            ..Default::default()
                         },
                     ],
                     captures: HashMap::new(),
@@ -271,6 +274,7 @@ mod tests {
                         captures_set: vec![],
                         location: None,
                         response_shape_mismatch: None,
+                        ..Default::default()
                     }],
                     captures: HashMap::new(),
                 }],

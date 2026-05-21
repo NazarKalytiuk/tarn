@@ -425,6 +425,7 @@ mod tests {
             captures_set: vec!["user_id".into()],
             location: None,
             response_shape_mismatch: None,
+            ..Default::default()
         }
     }
 

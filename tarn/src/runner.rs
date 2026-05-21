@@ -23,8 +23,52 @@ use base64::Engine;
 use indexmap::IndexMap;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
+
+/// Shared, run-scoped counter that assigns each test-phase step its
+/// global position in the form `[index/total]`. The CLI sums up all
+/// planned test steps (after tag and selector filtering) into `total`
+/// before any test runs and then plumbs the counter through
+/// [`RunObservers::progress_counter`]. `next` is incremented with
+/// [`Ordering::SeqCst`] so concurrent workers in `run_files_parallel`
+/// never see a duplicate or skipped index, and the resulting stamp is
+/// written onto each [`crate::assert::types::StepResult`] so both
+/// streaming progress reporters and batch renderers can display it
+/// from a single source.
+///
+/// Setup and teardown steps are intentionally not counted: only steps
+/// that ran as part of a named test (or simple-format `steps:`) get a
+/// position. Library callers that do not attach a counter leave the
+/// `progress_index` / `progress_total` fields on `StepResult` as
+/// `None`, and renderers omit the `[X/Y]` prefix in that case.
+#[derive(Debug)]
+pub struct ProgressCounter {
+    total: u32,
+    next: AtomicU32,
+}
+
+impl ProgressCounter {
+    /// Build a counter for a run with `total` planned test-phase steps.
+    pub fn new(total: u32) -> Self {
+        Self {
+            total,
+            next: AtomicU32::new(1),
+        }
+    }
+
+    /// Reserve and return the next 1-based index. Safe to call from
+    /// multiple threads.
+    pub fn advance(&self) -> u32 {
+        self.next.fetch_add(1, Ordering::SeqCst)
+    }
+
+    /// Total step count this counter was initialized with.
+    pub fn total(&self) -> u32 {
+        self.total
+    }
+}
 
 /// Options controlling how tests are run.
 #[derive(Debug, Clone)]
@@ -99,6 +143,12 @@ const DEFAULT_JAR_NAME: &str = "default";
 pub struct RunObservers<'a> {
     pub progress: Option<&'a (dyn ProgressReporter + Send + Sync)>,
     pub events: Option<&'a Arc<EventStream>>,
+    /// Shared counter that stamps each test-phase step with its global
+    /// `[index/total]` position. `None` when the caller did not
+    /// pre-compute a total (library use, watch-mode reruns, individual
+    /// `run_file` callers); steps then carry `progress_index = None`
+    /// and renderers omit the prefix.
+    pub progress_counter: Option<&'a Arc<ProgressCounter>>,
 }
 
 impl<'a> RunObservers<'a> {
@@ -106,6 +156,7 @@ impl<'a> RunObservers<'a> {
         Self {
             progress: None,
             events: None,
+            progress_counter: None,
         }
     }
 
@@ -119,6 +170,11 @@ impl<'a> RunObservers<'a> {
 
     pub fn with_events(mut self, events: Option<&'a Arc<EventStream>>) -> Self {
         self.events = events;
+        self
+    }
+
+    pub fn with_progress_counter(mut self, counter: Option<&'a Arc<ProgressCounter>>) -> Self {
+        self.progress_counter = counter;
         self
     }
 }
@@ -300,6 +356,64 @@ pub fn file_matches_tag_filter(test_file: &TestFile, tag_filter: &[String]) -> b
     matches_simple || any_group_matches
 }
 
+/// Count the test-phase steps that the runner will execute across
+/// `parsed` test files, honoring the same tag and selector filters
+/// that [`run_file_with_observers`] applies at execution time.
+///
+/// This is the source of the `Y` in the `[X/Y]` progress prefix that
+/// streaming and batch renderers print next to each step. Only steps
+/// that belong to a tag/selector-matched test (named group or
+/// simple-format `steps:` array) are counted — setup and teardown are
+/// not, since those phases never participate in the progress sequence.
+///
+/// Steps that would be skipped at runtime (`fail_fast_within_test`
+/// cascades, capture-cascade short-circuits, `if:`/`unless:` skips)
+/// are still counted because the runner emits a [`StepResult`] for
+/// each of them and the counter increments alongside.
+pub fn count_planned_test_steps(
+    parsed: &[(String, TestFile)],
+    tag_filter: &[String],
+    selectors: &[Selector],
+) -> u32 {
+    let mut total: u32 = 0;
+    for (file_path, test_file) in parsed {
+        if !file_matches_tag_filter(test_file, tag_filter) {
+            continue;
+        }
+        if !selector::any_matches_file(selectors, file_path) {
+            continue;
+        }
+
+        if !test_file.steps.is_empty()
+            && selector::any_matches_test(selectors, file_path, &test_file.name)
+            && (tag_filter.is_empty() || matches_tags(&test_file.tags, tag_filter))
+        {
+            let selected = filter_steps(&test_file.steps, selectors, file_path, &test_file.name);
+            total = total.saturating_add(selected.len() as u32);
+        }
+
+        for (name, group) in &test_file.tests {
+            if !tag_filter.is_empty() {
+                let combined: Vec<String> = test_file
+                    .tags
+                    .iter()
+                    .chain(group.tags.iter())
+                    .cloned()
+                    .collect();
+                if !matches_tags(&combined, tag_filter) {
+                    continue;
+                }
+            }
+            if !selector::any_matches_test(selectors, file_path, name) {
+                continue;
+            }
+            let selected = filter_steps(&group.steps, selectors, file_path, name);
+            total = total.saturating_add(selected.len() as u32);
+        }
+    }
+    total
+}
+
 /// Compose the `--test-filter` / `--step-filter` CLI shorthand flags into
 /// a single wildcard [`Selector`] that applies to every discovered file.
 ///
@@ -407,6 +521,7 @@ pub fn run_file_with_observers(
 ) -> Result<FileResult, TarnError> {
     let progress = observers.progress;
     let events = observers.events;
+    let progress_counter = observers.progress_counter;
     let start = Instant::now();
     let client = http::HttpClient::new(&opts.http)?;
     let redaction = test_file.redaction.clone().unwrap_or_default();
@@ -495,6 +610,7 @@ pub fn run_file_with_observers(
             file_path,
             test_label: fixtures::SETUP_TEST_SLUG,
         },
+        None,
     )?;
     let setup_failed = setup_results.iter().any(|s| !s.passed);
 
@@ -550,6 +666,7 @@ pub fn run_file_with_observers(
                     file_path,
                     test_label: fixtures::FLAT_TEST_SLUG,
                 },
+                progress_counter,
             )?;
             let passed = step_results.iter().all(|s| s.passed);
             let duration_ms = step_results.iter().map(|s| s.duration_ms).sum();
@@ -635,6 +752,7 @@ pub fn run_file_with_observers(
                     file_path,
                     test_label: name,
                 },
+                progress_counter,
             )?;
             let passed = step_results.iter().all(|s| s.passed);
             let duration_ms = step_results.iter().map(|s| s.duration_ms).sum();
@@ -687,6 +805,7 @@ pub fn run_file_with_observers(
             file_path,
             test_label: fixtures::TEARDOWN_TEST_SLUG,
         },
+        None,
     )?;
 
     if let Some(p) = progress {
@@ -911,6 +1030,12 @@ fn filter_steps(
 }
 
 /// Run a sequence of steps, accumulating captures.
+///
+/// `progress` is `Some(counter)` only for test-phase calls (named-test
+/// `steps:` and the simple-format flat `steps:` array). Setup and
+/// teardown calls intentionally pass `None` so those phases do not
+/// consume positions in the `[index/total]` progress sequence — only
+/// real test work is counted.
 #[allow(clippy::too_many_arguments)]
 fn run_steps(
     steps: &[Step],
@@ -926,6 +1051,7 @@ fn run_steps(
     cookie_jars: &mut HashMap<String, CookieJar>,
     base_dir: &Path,
     fixture_scope: FixtureScope<'_>,
+    progress: Option<&Arc<ProgressCounter>>,
 ) -> Result<Vec<StepResult>, TarnError> {
     let mut results = Vec::new();
     // Track which capture names this scope failed to produce so that
@@ -942,7 +1068,9 @@ fn run_steps(
         // failed, short-circuit the remaining ones so reports stop at
         // the root cause.
         if opts.fail_fast_within_test && any_step_failed {
-            results.push(fail_fast_skipped_step(step));
+            let mut skipped = fail_fast_skipped_step(step);
+            stamp_progress(&mut skipped, progress);
+            results.push(skipped);
             continue;
         }
 
@@ -953,7 +1081,9 @@ fn run_steps(
         // unresolved-template duplicates.
         let cascade_refs = step_references_failed_captures(step, &failed_captures);
         if !cascade_refs.is_empty() {
-            results.push(skipped_due_to_failed_capture(step, &cascade_refs));
+            let mut cascade = skipped_due_to_failed_capture(step, &cascade_refs);
+            stamp_progress(&mut cascade, progress);
+            results.push(cascade);
             any_step_failed = true;
             // Propagate: anything this step would have captured is
             // also unavailable downstream.
@@ -963,7 +1093,7 @@ fn run_steps(
             continue;
         }
 
-        let result = run_step(
+        let mut result = run_step(
             step,
             env,
             captures,
@@ -977,6 +1107,7 @@ fn run_steps(
             cookie_jars,
             base_dir,
         )?;
+        stamp_progress(&mut result, progress);
 
         // Persist the fixture if enabled. Dry runs, unresolved
         // templates and cascade skips never produce enough data to
@@ -1012,6 +1143,16 @@ fn run_steps(
     }
 
     Ok(results)
+}
+
+/// Reserve the next position from the shared run counter and write it
+/// onto the step. No-op when the caller did not attach a counter (e.g.
+/// `run_file` invoked from library code or watch-mode reruns).
+fn stamp_progress(step: &mut StepResult, progress: Option<&Arc<ProgressCounter>>) {
+    if let Some(counter) = progress {
+        step.progress_index = Some(counter.advance());
+        step.progress_total = Some(counter.total());
+    }
 }
 
 /// Collect the `capture.<name>` references that `step`'s request makes
@@ -1160,6 +1301,7 @@ fn skipped_due_to_failed_capture(step: &Step, failed_refs: &[String]) -> StepRes
         captures_set: vec![],
         location: step.location.clone(),
         response_shape_mismatch: None,
+        ..Default::default()
     }
 }
 
@@ -1184,6 +1326,7 @@ fn fail_fast_skipped_step(step: &Step) -> StepResult {
         captures_set: vec![],
         location: step.location.clone(),
         response_shape_mismatch: None,
+        ..Default::default()
     }
 }
 
@@ -1207,6 +1350,7 @@ fn condition_skipped_step(step: &Step, message: String) -> StepResult {
         captures_set: vec![],
         location: step.location.clone(),
         response_shape_mismatch: None,
+        ..Default::default()
     }
 }
 
@@ -1254,6 +1398,7 @@ fn run_command_step(
             captures_set: vec![],
             location,
             response_shape_mismatch: None,
+            ..Default::default()
         };
     }
 
@@ -1282,6 +1427,7 @@ fn run_command_step(
             captures_set: vec![],
             location,
             response_shape_mismatch: None,
+            ..Default::default()
         };
     }
 
@@ -1332,6 +1478,7 @@ fn run_command_step(
                 captures_set,
                 location,
                 response_shape_mismatch: None,
+                ..Default::default()
             }
         }
         Err(reason) => {
@@ -1356,6 +1503,7 @@ fn run_command_step(
                 captures_set: vec![],
                 location,
                 response_shape_mismatch: None,
+                ..Default::default()
             }
         }
     }
@@ -1554,6 +1702,7 @@ fn unresolved_template_step(
             captures_set: vec![],
             location: step.location.clone(),
             response_shape_mismatch: None,
+            ..Default::default()
         });
     }
 
@@ -1581,6 +1730,7 @@ fn unresolved_template_step(
         captures_set: vec![],
         location: step.location.clone(),
         response_shape_mismatch: None,
+        ..Default::default()
     })
 }
 
@@ -1639,6 +1789,7 @@ fn runtime_failure_step(
         captures_set: vec![],
         location: step.location.clone(),
         response_shape_mismatch: None,
+        ..Default::default()
     }
 }
 
@@ -2278,6 +2429,7 @@ fn run_step_inner(
             captures_set: vec![],
             location: step.location.clone(),
             response_shape_mismatch: None,
+            ..Default::default()
         });
     }
 
@@ -2421,6 +2573,7 @@ fn run_step_inner(
                     captures_set: vec![],
                     location: step.location.clone(),
                     response_shape_mismatch: None,
+                    ..Default::default()
                 });
             }
 
@@ -2461,6 +2614,7 @@ fn run_step_inner(
                 captures_set: captured_keys,
                 location: step.location.clone(),
                 response_shape_mismatch: None,
+                ..Default::default()
             });
         }
 
@@ -2495,6 +2649,7 @@ fn run_step_inner(
         captures_set: vec![],
         location: step.location.clone(),
         response_shape_mismatch: None,
+        ..Default::default()
     })
 }
 
@@ -2683,6 +2838,7 @@ fn run_step_poll(
                             captures_set: vec![],
                             location: step.location.clone(),
                             response_shape_mismatch: None,
+                            ..Default::default()
                         });
                     }
                 }
@@ -2722,6 +2878,7 @@ fn run_step_poll(
                 captures_set: captured_keys,
                 location: step.location.clone(),
                 response_shape_mismatch: None,
+                ..Default::default()
             });
         }
     }
@@ -2758,6 +2915,7 @@ fn run_step_poll(
                 captures_set: vec![],
                 location: step.location.clone(),
                 response_shape_mismatch: None,
+                ..Default::default()
             });
         }
     };
@@ -2836,6 +2994,7 @@ fn run_step_poll(
         captures_set: vec![],
         location: step.location.clone(),
         response_shape_mismatch: None,
+        ..Default::default()
     })
 }
 
@@ -4665,5 +4824,324 @@ tests:
         )
         .unwrap_err();
         assert!(err.to_string().contains("no test named"));
+    }
+
+    // --- Progress counter & planning ---
+
+    #[test]
+    fn progress_counter_advance_is_sequential() {
+        let counter = ProgressCounter::new(5);
+        assert_eq!(counter.total(), 5);
+        assert_eq!(counter.advance(), 1);
+        assert_eq!(counter.advance(), 2);
+        assert_eq!(counter.advance(), 3);
+    }
+
+    #[test]
+    fn progress_counter_advance_is_thread_safe() {
+        use std::collections::BTreeSet;
+        use std::sync::Arc;
+
+        let counter = Arc::new(ProgressCounter::new(200));
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let c = Arc::clone(&counter);
+            handles.push(std::thread::spawn(move || {
+                let mut out = Vec::with_capacity(25);
+                for _ in 0..25 {
+                    out.push(c.advance());
+                }
+                out
+            }));
+        }
+        let mut all: Vec<u32> = Vec::new();
+        for h in handles {
+            all.extend(h.join().unwrap());
+        }
+        all.sort();
+        let unique: BTreeSet<u32> = all.iter().copied().collect();
+        assert_eq!(unique.len(), 200, "advance must hand out unique indices");
+        assert_eq!(*unique.iter().next().unwrap(), 1);
+        assert_eq!(*unique.iter().next_back().unwrap(), 200);
+    }
+
+    #[test]
+    fn stamp_progress_is_noop_without_counter() {
+        let mut step = StepResult::default();
+        stamp_progress(&mut step, None);
+        assert!(step.progress_index.is_none());
+        assert!(step.progress_total.is_none());
+    }
+
+    #[test]
+    fn stamp_progress_writes_index_and_total() {
+        use std::sync::Arc;
+
+        let counter = Arc::new(ProgressCounter::new(7));
+        let mut step = StepResult::default();
+        stamp_progress(&mut step, Some(&counter));
+        assert_eq!(step.progress_index, Some(1));
+        assert_eq!(step.progress_total, Some(7));
+        // A second stamp reserves the next index but keeps total stable.
+        let mut step2 = StepResult::default();
+        stamp_progress(&mut step2, Some(&counter));
+        assert_eq!(step2.progress_index, Some(2));
+        assert_eq!(step2.progress_total, Some(7));
+    }
+
+    fn parse_test_file(yaml: &str) -> crate::model::TestFile {
+        serde_yaml::from_str(yaml).unwrap()
+    }
+
+    #[test]
+    fn count_planned_handles_flat_format() {
+        let file = parse_test_file(
+            r#"
+name: flat
+steps:
+  - name: s1
+    request:
+      method: GET
+      url: http://x/1
+  - name: s2
+    request:
+      method: GET
+      url: http://x/2
+"#,
+        );
+        let parsed = vec![("flat.tarn.yaml".to_string(), file)];
+        assert_eq!(count_planned_test_steps(&parsed, &[], &[]), 2);
+    }
+
+    #[test]
+    fn count_planned_sums_named_test_groups() {
+        let file = parse_test_file(
+            r#"
+name: named
+tests:
+  alpha:
+    steps:
+      - name: a1
+        request:
+          method: GET
+          url: http://x/a1
+      - name: a2
+        request:
+          method: GET
+          url: http://x/a2
+  beta:
+    steps:
+      - name: b1
+        request:
+          method: GET
+          url: http://x/b1
+"#,
+        );
+        let parsed = vec![("named.tarn.yaml".to_string(), file)];
+        assert_eq!(count_planned_test_steps(&parsed, &[], &[]), 3);
+    }
+
+    #[test]
+    fn count_planned_excludes_setup_and_teardown() {
+        let file = parse_test_file(
+            r#"
+name: with-setup
+setup:
+  - name: login
+    request:
+      method: GET
+      url: http://x/login
+tests:
+  t1:
+    steps:
+      - name: real
+        request:
+          method: GET
+          url: http://x/real
+teardown:
+  - name: cleanup
+    request:
+      method: GET
+      url: http://x/cleanup
+"#,
+        );
+        let parsed = vec![("with-setup.tarn.yaml".to_string(), file)];
+        // Only `t1.real` is a test-phase step; setup/teardown are excluded.
+        assert_eq!(count_planned_test_steps(&parsed, &[], &[]), 1);
+    }
+
+    #[test]
+    fn count_planned_respects_tag_filter() {
+        let file = parse_test_file(
+            r#"
+name: tagged
+tests:
+  alpha:
+    tags: [smoke]
+    steps:
+      - name: a1
+        request:
+          method: GET
+          url: http://x/a1
+      - name: a2
+        request:
+          method: GET
+          url: http://x/a2
+  beta:
+    tags: [slow]
+    steps:
+      - name: b1
+        request:
+          method: GET
+          url: http://x/b1
+"#,
+        );
+        let parsed = vec![("tagged.tarn.yaml".to_string(), file)];
+        let smoke = parse_tag_filter("smoke");
+        assert_eq!(count_planned_test_steps(&parsed, &smoke, &[]), 2);
+        let slow = parse_tag_filter("slow");
+        assert_eq!(count_planned_test_steps(&parsed, &slow, &[]), 1);
+    }
+
+    #[test]
+    fn count_planned_sums_across_multiple_files() {
+        let a = parse_test_file(
+            r#"
+name: a
+steps:
+  - name: s1
+    request: { method: GET, url: http://x/1 }
+  - name: s2
+    request: { method: GET, url: http://x/2 }
+"#,
+        );
+        let b = parse_test_file(
+            r#"
+name: b
+tests:
+  t1:
+    steps:
+      - name: s1
+        request: { method: GET, url: http://x/3 }
+"#,
+        );
+        let parsed = vec![
+            ("a.tarn.yaml".to_string(), a),
+            ("b.tarn.yaml".to_string(), b),
+        ];
+        assert_eq!(count_planned_test_steps(&parsed, &[], &[]), 3);
+    }
+
+    #[test]
+    fn dry_run_file_stamps_global_progress_indices() {
+        use std::sync::Arc;
+
+        // Two named tests with two steps each — under dry-run mode the
+        // runner still produces `StepResult`s, so the counter must
+        // assign indices 1..=4 in order.
+        let yaml = r#"
+name: dry
+tests:
+  alpha:
+    steps:
+      - name: a1
+        request: { method: GET, url: http://x/a1 }
+      - name: a2
+        request: { method: GET, url: http://x/a2 }
+  beta:
+    steps:
+      - name: b1
+        request: { method: GET, url: http://x/b1 }
+      - name: b2
+        request: { method: GET, url: http://x/b2 }
+setup:
+  - name: setup-step
+    request: { method: GET, url: http://x/setup }
+teardown:
+  - name: teardown-step
+    request: { method: GET, url: http://x/teardown }
+"#;
+        let test_file: crate::model::TestFile = serde_yaml::from_str(yaml).unwrap();
+        let parsed = vec![("dry.tarn.yaml".to_string(), test_file.clone())];
+        let total = count_planned_test_steps(&parsed, &[], &[]);
+        assert_eq!(total, 4);
+
+        let counter = Arc::new(ProgressCounter::new(total));
+        let observers = RunObservers::new().with_progress_counter(Some(&counter));
+        let opts = RunOptions {
+            dry_run: true,
+            ..RunOptions::default()
+        };
+        let mut jars = HashMap::new();
+        let result = run_file_with_observers(
+            &test_file,
+            "dry.tarn.yaml",
+            &HashMap::new(),
+            &[],
+            &[],
+            &opts,
+            &mut jars,
+            &observers,
+        )
+        .unwrap();
+
+        let indices: Vec<Option<u32>> = result
+            .test_results
+            .iter()
+            .flat_map(|t| t.step_results.iter())
+            .map(|s| s.progress_index)
+            .collect();
+        assert_eq!(
+            indices,
+            vec![Some(1), Some(2), Some(3), Some(4)],
+            "test steps must be numbered 1..=N in order"
+        );
+        for tr in &result.test_results {
+            for s in &tr.step_results {
+                assert_eq!(s.progress_total, Some(4));
+            }
+        }
+        // Setup and teardown are NOT counted.
+        assert!(result
+            .setup_results
+            .iter()
+            .all(|s| s.progress_index.is_none()));
+        assert!(result
+            .teardown_results
+            .iter()
+            .all(|s| s.progress_index.is_none()));
+    }
+
+    #[test]
+    fn dry_run_without_counter_leaves_progress_unset() {
+        let yaml = r#"
+name: dry
+tests:
+  alpha:
+    steps:
+      - name: a1
+        request: { method: GET, url: http://x/a1 }
+"#;
+        let test_file: crate::model::TestFile = serde_yaml::from_str(yaml).unwrap();
+        let observers = RunObservers::new();
+        let opts = RunOptions {
+            dry_run: true,
+            ..RunOptions::default()
+        };
+        let mut jars = HashMap::new();
+        let result = run_file_with_observers(
+            &test_file,
+            "dry.tarn.yaml",
+            &HashMap::new(),
+            &[],
+            &[],
+            &opts,
+            &mut jars,
+            &observers,
+        )
+        .unwrap();
+        let step = &result.test_results[0].step_results[0];
+        assert!(step.progress_index.is_none());
+        assert!(step.progress_total.is_none());
     }
 }

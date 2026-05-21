@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+## 0.13.0 — Per-step `[X/Y]` progress indicator
+
+Every test-phase step now carries a global `[index/total]` position that streams during the run and persists into the final report. The total is computed up front after tag/selector filtering, so running `tarn run --tag smoke` against a 345-step suite that selects 12 will print `[1/12] … [12/12]` — not `[1/345]`. Setup and teardown steps are intentionally excluded; only real test work participates in the sequence.
+
+The counter is a single `Arc<ProgressCounter>` shared across the whole run, so the parallel runner hands out unique positions across rayon workers without coordination. Step indices are stamped onto each `StepResult` so both streaming and batch renderers can display the same `[X/Y]` from one source of truth.
+
+### Visible output
+
+`human` format prefixes the step name with a dimmed `[X/Y]`:
+
+```
+ ● users.tarn.yaml
+
+   create user
+   ✓ [121/345] POST /users (12ms)
+   ✓ [122/345] GET /users/{{id}} (8ms)
+```
+
+`compact` format includes the prefix in `FAIL:` lines. `--ndjson` `step_finished` events and the persisted JSON report both carry a new additive `progress: { "index": N, "total": M }` object on test-phase steps; setup/teardown step events omit the key entirely, so consumers can distinguish counted work without parsing the `phase` field.
+
+### Implementation notes
+
+- New `runner::ProgressCounter` (`AtomicU32`) and `runner::count_planned_test_steps(parsed_files, tag_filter, selectors)` source the `Y`.
+- New `RunObservers::progress_counter` field plumbs the shared counter into `run_file_with_observers` without changing existing call sites — library callers that don't attach one leave `StepResult.progress_index` and `progress_total` as `None`, and renderers silently omit the prefix.
+- `StepResult` now derives `Default` so future fields don't have to be added to every test fixture; ~110 literals across the codebase use `..Default::default()` instead.
+
 ## 0.12.1 — Tag-filter and project TLS regression fixes (NAZ-465, NAZ-466)
 
 Two bug fixes for regressions in 0.12.0.

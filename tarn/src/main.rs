@@ -3380,9 +3380,32 @@ fn run_files_sequential(
         std::collections::HashMap::new()
     };
 
-    for file_path in files {
+    // Parse every file up front so we can compute the total number of
+    // planned test-phase steps before the first one runs. The total
+    // becomes the `Y` in `[X/Y]` and must be stable across the whole
+    // run; a single shared `ProgressCounter` then hands out the `X`
+    // positions in order as steps complete.
+    let parsed: Vec<(String, tarn::model::TestFile)> = files
+        .iter()
+        .map(|file_path| {
+            let path = Path::new(file_path);
+            let test_file = parser::parse_file(path).map_err(|e| (e.exit_code(), e.to_string()))?;
+            Ok::<_, (i32, String)>((file_path.clone(), test_file))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let total_planned = runner::count_planned_test_steps(&parsed, tag_filter, selectors);
+    let progress_counter = if total_planned > 0 {
+        Some(std::sync::Arc::new(runner::ProgressCounter::new(
+            total_planned,
+        )))
+    } else {
+        None
+    };
+
+    for (file_path, parsed_test_file) in &parsed {
         let path = Path::new(file_path);
-        let mut test_file = parser::parse_file(path).map_err(|e| (e.exit_code(), e.to_string()))?;
+        let mut test_file = parsed_test_file.clone();
         let project = load_project_context(path.parent().unwrap_or(Path::new(".")))
             .map_err(|e| (e.exit_code(), e.to_string()))?;
         apply_project_defaults(&mut test_file, &project.config);
@@ -3395,7 +3418,8 @@ fn run_files_sequential(
             .map_err(|e| (e.exit_code(), e.to_string()))?;
         let observers = runner::RunObservers::new()
             .with_progress(progress)
-            .with_events(events);
+            .with_events(events)
+            .with_progress_counter(progress_counter.as_ref());
         let result = runner::run_file_with_observers(
             &test_file,
             file_path,
@@ -3451,6 +3475,18 @@ fn run_files_parallel(
         .map(|(path, tf)| runner::SchedulingMetadata::from_test_file(path, tf))
         .collect();
 
+    // Sum planned test-phase steps across every parsed file (post-tag
+    // and -selector filter). The Arc is shared across rayon workers so
+    // every step gets a globally unique `[index/total]` position.
+    let total_planned = runner::count_planned_test_steps(&parsed, tag_filter, selectors);
+    let progress_counter = if total_planned > 0 {
+        Some(std::sync::Arc::new(runner::ProgressCounter::new(
+            total_planned,
+        )))
+    } else {
+        None
+    };
+
     let worker_count = jobs.unwrap_or_else(num_cpus_for_scheduling);
     if let Some(j) = jobs {
         rayon::ThreadPoolBuilder::new()
@@ -3493,6 +3529,7 @@ fn run_files_parallel(
                     extra_redact_headers,
                     progress,
                     events,
+                    progress_counter.as_ref(),
                 )?);
             }
             Ok::<_, (i32, String)>(bucket_results)
@@ -3524,6 +3561,7 @@ fn run_files_parallel(
             extra_redact_headers,
             progress,
             events,
+            progress_counter.as_ref(),
         )?);
     }
 
@@ -3551,6 +3589,7 @@ fn execute_one_file(
     extra_redact_headers: &[String],
     progress: Option<&(dyn ProgressReporter + Send + Sync)>,
     events: Option<&std::sync::Arc<tarn::report::event_stream::EventStream>>,
+    progress_counter: Option<&std::sync::Arc<runner::ProgressCounter>>,
 ) -> Result<tarn::assert::types::FileResult, (i32, String)> {
     let path = Path::new(file_path);
     let mut test_file = test_file.clone();
@@ -3572,7 +3611,9 @@ fn execute_one_file(
     // full observer path. Progress is intentionally left out of the
     // inner run so the parallel reporter's per-file atomic flush still
     // works via the explicit call below.
-    let observers = runner::RunObservers::new().with_events(events);
+    let observers = runner::RunObservers::new()
+        .with_events(events)
+        .with_progress_counter(progress_counter);
     let result = runner::run_file_with_observers(
         &test_file,
         file_path,
@@ -5390,6 +5431,7 @@ steps:
             captures_set: vec![],
             location: None,
             response_shape_mismatch: None,
+            ..Default::default()
         };
 
         let make_file = |step| FileResult {

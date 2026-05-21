@@ -223,6 +223,18 @@ impl NdjsonProgress {
             "duration_ms": step.duration_ms,
         });
 
+        // `progress` carries the global `[index/total]` position
+        // assigned by the shared `ProgressCounter`. Emitted only for
+        // test-phase steps (setup/teardown leave the fields `None`),
+        // so consumers can render or ignore it without parsing the
+        // phase field.
+        if let (Some(index), Some(total)) = (step.progress_index, step.progress_total) {
+            obj["progress"] = json!({
+                "index": index,
+                "total": total,
+            });
+        }
+
         if !step.passed {
             if let Some(category) = step.error_category {
                 obj["failure_category"] = serde_json::to_value(category).unwrap_or(Value::Null);
@@ -460,6 +472,7 @@ mod tests {
                 captures_set: vec![],
                 location: None,
                 response_shape_mismatch: None,
+                ..Default::default()
             }],
             captures: HashMap::new(),
         }
@@ -734,5 +747,61 @@ mod tests {
         progress.run_finished(&make_run_result(vec![make_file("a", true)]));
         let out = snapshot(&buf);
         assert!(out.is_empty(), "HumanProgress should ignore run_finished");
+    }
+
+    fn test_with_progress(name: &str, index: Option<u32>, total: Option<u32>) -> TestResult {
+        let mut t = make_test(name, true);
+        t.step_results[0].progress_index = index;
+        t.step_results[0].progress_total = total;
+        t
+    }
+
+    #[test]
+    fn ndjson_step_event_carries_progress_when_stamped() {
+        let buf = Arc::new(StdMutex::new(Vec::new()));
+        let progress = NdjsonProgress::new(
+            Box::new(SharedWriter(buf.clone())),
+            ProgressMode::Sequential,
+        );
+        let ctx = ReportContext {
+            redaction: &RedactionConfig::default(),
+            redacted_values: &[],
+        };
+        progress.file_started("p.tarn.yaml", "P");
+        progress.test_finished(&test_with_progress("t1", Some(3), Some(10)), &ctx);
+
+        let events = collect_ndjson_events(&snapshot(&buf));
+        let step_event = events
+            .iter()
+            .find(|e| e["event"] == "step_finished")
+            .expect("step_finished event should be emitted");
+        assert_eq!(step_event["progress"]["index"], 3);
+        assert_eq!(step_event["progress"]["total"], 10);
+    }
+
+    #[test]
+    fn ndjson_step_event_omits_progress_when_unset() {
+        let buf = Arc::new(StdMutex::new(Vec::new()));
+        let progress = NdjsonProgress::new(
+            Box::new(SharedWriter(buf.clone())),
+            ProgressMode::Sequential,
+        );
+        let ctx = ReportContext {
+            redaction: &RedactionConfig::default(),
+            redacted_values: &[],
+        };
+        progress.file_started("p.tarn.yaml", "P");
+        progress.test_finished(&test_with_progress("t1", None, None), &ctx);
+
+        let events = collect_ndjson_events(&snapshot(&buf));
+        let step_event = events
+            .iter()
+            .find(|e| e["event"] == "step_finished")
+            .expect("step_finished event should be emitted");
+        assert!(
+            step_event.get("progress").is_none(),
+            "no progress key should be emitted for unstamped steps; got {:?}",
+            step_event
+        );
     }
 }

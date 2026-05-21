@@ -181,9 +181,14 @@ fn render_test_failures(
             &file.redacted_values,
             COMPACT_MESSAGE_CAP,
         );
+        let progress = match (step.progress_index, step.progress_total) {
+            (Some(i), Some(t)) => format!("[{}/{}] ", i, t),
+            _ => String::new(),
+        };
         out.push_str(&format!(
-            "  {} {} — {} — {}\n",
+            "  {} {}{} — {} — {}\n",
             "FAIL:".red().bold(),
+            progress,
             test.name,
             step.name,
             message
@@ -287,6 +292,7 @@ mod tests {
             captures_set: vec![],
             location: None,
             response_shape_mismatch: None,
+            ..Default::default()
         }
     }
 
@@ -321,6 +327,7 @@ mod tests {
             captures_set: vec![],
             location: None,
             response_shape_mismatch: None,
+            ..Default::default()
         }
     }
 
@@ -521,5 +528,43 @@ mod tests {
         assert!(out.contains("..."));
         // The line should not contain the full 200 'a' string uncut.
         assert!(!out.contains(&"a".repeat(150)));
+    }
+
+    #[test]
+    fn fail_line_includes_progress_prefix_when_stamped() {
+        let mut step = failing_step("login", 500);
+        step.progress_index = Some(42);
+        step.progress_total = Some(100);
+        let file = file_with("auth.tarn.yaml", false, vec![step]);
+        let run = build_run(vec![file]);
+        let out = strip_ansi(&render_with_options(
+            &run,
+            RenderOptions {
+                no_color: true,
+                ..RenderOptions::default()
+            },
+        ));
+        assert!(
+            out.contains("FAIL: [42/100] t — login"),
+            "expected `[42/100]` prefix in FAIL line:\n{}",
+            out
+        );
+    }
+
+    #[test]
+    fn fail_line_omits_progress_prefix_when_unstamped() {
+        let step = failing_step("login", 500);
+        let file = file_with("auth.tarn.yaml", false, vec![step]);
+        let run = build_run(vec![file]);
+        let out = strip_ansi(&render_with_options(
+            &run,
+            RenderOptions {
+                no_color: true,
+                ..RenderOptions::default()
+            },
+        ));
+        assert!(out.contains("FAIL: t — login"));
+        // Sanity: no `[N/N]` slipped in for an unstamped step.
+        assert!(!out.contains("[1/"));
     }
 }

@@ -59,6 +59,7 @@ fn example_outputs() {
         captures_set: vec![],
         location: None,
         response_shape_mismatch: None,
+        ..Default::default()
     };
     let fixture = fixture_writer::build_fixture(&step, &RedactionConfig::default(), &[]);
     let config = FixtureWriteConfig {

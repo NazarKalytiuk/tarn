@@ -224,6 +224,17 @@ fn render_step(
         obj["location"] = location_json(location);
     }
 
+    // Carry the `[index/total]` position assigned by the run-scoped
+    // `ProgressCounter`. Setup and teardown steps leave the fields
+    // `None`, so consumers can distinguish counted (test-phase) work
+    // from infrastructure steps without inspecting phase metadata.
+    if let (Some(index), Some(total)) = (step.progress_index, step.progress_total) {
+        obj["progress"] = json!({
+            "index": index,
+            "total": total,
+        });
+    }
+
     // Always include response_status and response_summary when available
     if let Some(status) = step.response_status {
         obj["response_status"] = json!(status);
@@ -528,6 +539,7 @@ mod tests {
                         captures_set: vec![],
                         location: None,
                         response_shape_mismatch: None,
+                        ..Default::default()
                     }],
                     captures: HashMap::new(),
                 }],
@@ -586,6 +598,7 @@ mod tests {
                         captures_set: vec![],
                         location: None,
                         response_shape_mismatch: None,
+                        ..Default::default()
                     }],
                     captures: HashMap::new(),
                 }],
@@ -696,6 +709,7 @@ mod tests {
                         captures_set: vec![],
                         location: None,
                         response_shape_mismatch: None,
+                        ..Default::default()
                     }],
                     captures: HashMap::new(),
                 }],
@@ -826,6 +840,7 @@ mod tests {
                         captures_set: vec![],
                         location: None,
                         response_shape_mismatch: None,
+                        ..Default::default()
                     }],
                     captures: HashMap::new(),
                 }],
@@ -913,6 +928,7 @@ mod tests {
                         captures_set: vec![],
                         location: None,
                         response_shape_mismatch: None,
+                        ..Default::default()
                     }],
                     captures: HashMap::new(),
                 }],
@@ -1024,6 +1040,7 @@ mod tests {
                         captures_set: vec![],
                         location: None,
                         response_shape_mismatch: None,
+                        ..Default::default()
                     }],
                     captures: HashMap::new(),
                 }],
@@ -1065,5 +1082,62 @@ mod tests {
         validate_against_schema(&render(&make_run_with_step_description(Some(
             "Checks /health",
         ))));
+    }
+
+    fn make_run_with_progress(progress: Option<(u32, u32)>) -> RunResult {
+        let (index, total) = match progress {
+            Some((i, t)) => (Some(i), Some(t)),
+            None => (None, None),
+        };
+        RunResult {
+            duration_ms: 10,
+            file_results: vec![FileResult {
+                file: "p.tarn.yaml".into(),
+                name: "P".into(),
+                passed: true,
+                duration_ms: 10,
+                redaction: crate::model::RedactionConfig::default(),
+                redacted_values: vec![],
+                setup_results: vec![],
+                test_results: vec![TestResult {
+                    name: "t".into(),
+                    description: None,
+                    passed: true,
+                    duration_ms: 10,
+                    step_results: vec![StepResult {
+                        name: "GET /x".into(),
+                        passed: true,
+                        duration_ms: 5,
+                        assertion_results: vec![AssertionResult::pass("status", "200", "200")],
+                        progress_index: index,
+                        progress_total: total,
+                        ..Default::default()
+                    }],
+                    captures: HashMap::new(),
+                }],
+                teardown_results: vec![],
+            }],
+        }
+    }
+
+    #[test]
+    fn json_step_includes_progress_when_stamped() {
+        let output = render(&make_run_with_progress(Some((121, 345))));
+        let parsed: Value = serde_json::from_str(&output).unwrap();
+        let step = &parsed["files"][0]["tests"][0]["steps"][0];
+        assert_eq!(step["progress"]["index"], 121);
+        assert_eq!(step["progress"]["total"], 345);
+    }
+
+    #[test]
+    fn json_step_omits_progress_when_unstamped() {
+        let output = render(&make_run_with_progress(None));
+        let parsed: Value = serde_json::from_str(&output).unwrap();
+        let step = &parsed["files"][0]["tests"][0]["steps"][0];
+        assert!(
+            step.get("progress").is_none(),
+            "expected no `progress` key, got: {:?}",
+            step
+        );
     }
 }

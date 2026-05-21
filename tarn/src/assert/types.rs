@@ -187,7 +187,12 @@ impl AssertionResult {
 }
 
 /// Result of executing a single step.
-#[derive(Debug, Clone)]
+///
+/// `Default` is derived so test fixtures and runner helpers can
+/// construct a [`StepResult`] with `..Default::default()` and only
+/// override the fields they care about. New fields therefore do not
+/// have to be added to every literal across the codebase.
+#[derive(Debug, Clone, Default)]
 pub struct StepResult {
     pub name: String,
     /// Optional human-readable description carried over from `Step.description`.
@@ -223,6 +228,16 @@ pub struct StepResult {
     /// the heuristic couldn't suggest anything, but the observed shape
     /// is still carried for agent consumption.
     pub response_shape_mismatch: Option<ShapeMismatchDiagnosis>,
+    /// 1-based global progress index across the whole run. Stamped by
+    /// [`crate::runner::run_steps`] only on test-phase steps when a
+    /// shared [`crate::runner::ProgressCounter`] is attached via
+    /// [`crate::runner::RunObservers`]. `None` for setup/teardown steps
+    /// and for library callers that did not pre-compute a total.
+    pub progress_index: Option<u32>,
+    /// Total number of test-phase steps planned for the run (after tag
+    /// and selector filtering). Carried alongside [`Self::progress_index`]
+    /// so renderers can display `[X/Y]` without consulting external state.
+    pub progress_total: Option<u32>,
 }
 
 impl StepResult {
@@ -483,6 +498,7 @@ mod tests {
             captures_set: vec![],
             location: None,
             response_shape_mismatch: None,
+            ..Default::default()
         };
         assert_eq!(sr.total_assertions(), 3);
         assert_eq!(sr.passed_assertions(), 2);
@@ -513,6 +529,7 @@ mod tests {
             captures_set: vec![],
             location: None,
             response_shape_mismatch: None,
+            ..Default::default()
         };
         assert_eq!(
             poll_timeout.error_code(),
@@ -539,6 +556,7 @@ mod tests {
             captures_set: vec![],
             location: None,
             response_shape_mismatch: None,
+            ..Default::default()
         };
         assert_eq!(
             request_timeout.error_code(),
@@ -568,6 +586,7 @@ mod tests {
             captures_set: vec![],
             location: None,
             response_shape_mismatch: None,
+            ..Default::default()
         };
         assert_eq!(refused.error_code(), Some(ErrorCode::ConnectionRefused));
 
@@ -591,6 +610,7 @@ mod tests {
             captures_set: vec![],
             location: None,
             response_shape_mismatch: None,
+            ..Default::default()
         };
         assert_eq!(tls.error_code(), Some(ErrorCode::TlsVerificationFailed));
     }
@@ -617,6 +637,7 @@ mod tests {
             captures_set: vec![],
             location: None,
             response_shape_mismatch: None,
+            ..Default::default()
         };
         assert_eq!(sr.error_code(), Some(ErrorCode::InterpolationFailed));
     }
@@ -644,6 +665,7 @@ mod tests {
                     captures_set: vec![],
                     location: None,
                     response_shape_mismatch: None,
+                    ..Default::default()
                 },
                 StepResult {
                     name: "verify".into(),
@@ -665,6 +687,7 @@ mod tests {
                     captures_set: vec![],
                     location: None,
                     response_shape_mismatch: None,
+                    ..Default::default()
                 },
             ],
             captures: HashMap::new(),
@@ -698,6 +721,7 @@ mod tests {
                 captures_set: vec![],
                 location: None,
                 response_shape_mismatch: None,
+                ..Default::default()
             }],
             test_results: vec![TestResult {
                 name: "t1".into(),
@@ -720,6 +744,7 @@ mod tests {
                         captures_set: vec![],
                         location: None,
                         response_shape_mismatch: None,
+                        ..Default::default()
                     },
                     StepResult {
                         name: "s2".into(),
@@ -736,6 +761,7 @@ mod tests {
                         captures_set: vec![],
                         location: None,
                         response_shape_mismatch: None,
+                        ..Default::default()
                     },
                 ],
                 captures: HashMap::new(),
@@ -779,6 +805,7 @@ mod tests {
                             captures_set: vec![],
                             location: None,
                             response_shape_mismatch: None,
+                            ..Default::default()
                         }],
                         captures: HashMap::new(),
                     }],
@@ -812,6 +839,7 @@ mod tests {
                             captures_set: vec![],
                             location: None,
                             response_shape_mismatch: None,
+                            ..Default::default()
                         }],
                         captures: HashMap::new(),
                     }],

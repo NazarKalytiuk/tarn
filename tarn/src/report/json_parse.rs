@@ -193,6 +193,7 @@ fn parse_step(value: &Value) -> Result<StepResult, ParseError> {
         captures_set,
         location,
         response_shape_mismatch: None,
+        ..Default::default()
     })
 }
 
@@ -333,6 +334,7 @@ mod tests {
                 captures_set: vec!["id".into()],
                 location: None,
                 response_shape_mismatch: None,
+                ..Default::default()
             }],
             captures: HashMap::new(),
         };

@@ -256,6 +256,7 @@ mod tests {
                         captures_set: vec![],
                         location: None,
                         response_shape_mismatch: None,
+                        ..Default::default()
                     }],
                     captures: HashMap::new(),
                 }],

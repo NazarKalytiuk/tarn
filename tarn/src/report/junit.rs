@@ -144,6 +144,7 @@ mod tests {
                         captures_set: vec![],
                         location: None,
                         response_shape_mismatch: None,
+                        ..Default::default()
                     }],
                     captures: HashMap::new(),
                 }],
@@ -232,6 +233,7 @@ mod tests {
                     captures_set: vec![],
                     location: None,
                     response_shape_mismatch: None,
+                    ..Default::default()
                 }],
                 test_results: vec![],
                 teardown_results: vec![StepResult {
@@ -249,6 +251,7 @@ mod tests {
                     captures_set: vec![],
                     location: None,
                     response_shape_mismatch: None,
+                    ..Default::default()
                 }],
             }],
         };
@@ -297,6 +300,7 @@ mod tests {
                         captures_set: vec![],
                         location: None,
                         response_shape_mismatch: None,
+                        ..Default::default()
                     }],
                     captures: HashMap::new(),
                 }],
