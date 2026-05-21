@@ -9,8 +9,9 @@
     "build": "vite build",
     "serve": "vite preview",
     "tauri": "tauri",
-    "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build",
+    "prepare:sidecar": "node scripts/prepare-sidecar.mjs",
+    "tauri:dev": "pnpm prepare:sidecar && tauri dev",
+    "tauri:build": "pnpm prepare:sidecar && tauri build",
     "typecheck": "tsc --noEmit"
   },
   "license": "MIT",

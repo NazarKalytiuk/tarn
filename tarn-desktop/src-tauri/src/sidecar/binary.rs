@@ -4,19 +4,35 @@ use std::path::PathBuf;
 /// Resolves the path to the `tarn` binary.
 ///
 /// Lookup order (first match wins):
-/// 1. `TARN_BIN` environment variable (absolute path).
-/// 2. The first `tarn` executable found on `PATH`.
-/// 3. The workspace `target/release/tarn`, relative to `CARGO_MANIFEST_DIR`.
-/// 4. The workspace `target/debug/tarn`, relative to `CARGO_MANIFEST_DIR`.
+/// 1. `TARN_BIN` environment variable (absolute path). Explicit user
+///    override — always wins.
+/// 2. **Adjacent to the current executable.** This is where Tauri's
+///    `bundle.externalBin` lands a packaged sidecar: on macOS that's
+///    `<App>.app/Contents/MacOS/tarn`, on Windows `<App>/tarn.exe`,
+///    on Linux `<App>/tarn`. Checking this before `PATH` means a
+///    user's globally-installed `tarn` cannot accidentally shadow
+///    the version the app was built and tested with.
+/// 3. The first `tarn` executable found on `PATH`. Convenient for
+///    developer setups where Studio runs unbundled.
+/// 4. The CLI workspace `target/release` or `target/debug` —
+///    relative to `CARGO_MANIFEST_DIR`. Useful when running Studio
+///    via `cargo tauri dev` from the CLI repo.
 ///
-/// In Phase 4 this is replaced by Tauri's bundled sidecar resolution
-/// (`tauri.conf.json > bundle > externalBin`), but for development the
-/// workspace target tree is the canonical source.
+/// Phase 4 will likely replace step 4 with Tauri's
+/// `app_handle.path().resolve(...)` so the resolver works without
+/// any compile-time path assumptions, but the current design keeps
+/// the function free of a Tauri AppHandle for testability.
 pub fn resolve_tarn() -> AppResult<PathBuf> {
     if let Ok(env_path) = std::env::var("TARN_BIN") {
         let path = PathBuf::from(env_path);
         if path.is_file() {
             return Ok(path);
+        }
+    }
+
+    if let Some(adjacent) = adjacent_to_current_exe() {
+        if adjacent.is_file() {
+            return Ok(adjacent);
         }
     }
 
@@ -38,9 +54,15 @@ pub fn resolve_tarn() -> AppResult<PathBuf> {
     Err(AppError::BinaryNotFound)
 }
 
+fn adjacent_to_current_exe() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    Some(dir.join(binary_name("tarn")))
+}
+
 fn workspace_root() -> PathBuf {
-    // CARGO_MANIFEST_DIR points at tarn-desktop/src-tauri/. The workspace
-    // root is two levels up.
+    // CARGO_MANIFEST_DIR points at tarn-desktop/src-tauri/. The CLI
+    // workspace root we want to probe is two levels up from there.
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     manifest_dir
         .parent()
