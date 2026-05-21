@@ -1,0 +1,287 @@
+name: Studio Release
+
+# Tarn Studio's own release pipeline. Lives next to release.yml (CLI)
+# and vscode-extension-release.yml, but is fully independent: a
+# Studio tag does not trigger a CLI release, and vice versa.
+#
+# Trigger: a `studio-v*` tag push, or manual workflow_dispatch for
+# smoke testing against a branch.
+#
+# Matrix produces three artifacts:
+#   - tarn-studio-aarch64+x86_64-apple-darwin.dmg (universal)
+#   - tarn-studio-x86_64-pc-windows-msvc.msi
+#   - tarn-studio-x86_64-unknown-linux-gnu.AppImage + .deb
+#
+# Code signing is intentionally OFF in this first iteration. macOS
+# users will see Gatekeeper's "unidentified developer" warning on
+# first launch; Windows users will see SmartScreen. Adding signing
+# is a config-only change once the secrets are in place — see the
+# "signing" block in the matrix step.
+
+on:
+  push:
+    tags: ["studio-v*"]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch / tag / SHA to build against"
+        required: false
+        default: "main"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  # Disable Tauri's auto-updater for this iteration. We'll wire it up
+  # in a follow-up release once the GitHub Release endpoint is the
+  # authoritative source of truth for new versions.
+  TAURI_SIGNING_PRIVATE_KEY: ""
+
+jobs:
+  # ─── Pre-flight: tag must match every version file ──────────────
+  verify-version-alignment:
+    name: Verify tag and version alignment
+    runs-on: ubuntu-latest
+    # Only enforce on actual tag pushes. Manual runs are expected to
+    # target a branch for smoke testing where versions may drift.
+    if: startsWith(github.ref, 'refs/tags/studio-v')
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Extract versions and compare
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME#studio-v}"
+          echo "Tag version: $TAG"
+
+          CARGO_VERSION=$(sed -n '/^\[package\]/,/^\[/p' tarn-desktop/src-tauri/Cargo.toml \
+            | sed -n 's/^version *= *"\([^"]*\)".*/\1/p' | head -n 1)
+          PKG_VERSION=$(node -p "require('./tarn-desktop/package.json').version")
+          TAURI_VERSION=$(node -p "require('./tarn-desktop/src-tauri/tauri.conf.json').version")
+
+          echo "Cargo.toml:       $CARGO_VERSION"
+          echo "package.json:     $PKG_VERSION"
+          echo "tauri.conf.json:  $TAURI_VERSION"
+
+          fail=0
+          if [ "$CARGO_VERSION" != "$TAG" ];  then echo "::error::Cargo.toml version $CARGO_VERSION != tag $TAG"; fail=1; fi
+          if [ "$PKG_VERSION"   != "$TAG" ];  then echo "::error::package.json version $PKG_VERSION != tag $TAG"; fail=1; fi
+          if [ "$TAURI_VERSION" != "$TAG" ];  then echo "::error::tauri.conf.json version $TAURI_VERSION != tag $TAG"; fail=1; fi
+          exit $fail
+
+  # ─── Matrix: build the app + sidecar per OS ─────────────────────
+  build:
+    name: Build (${{ matrix.label }})
+    needs: verify-version-alignment
+    # `needs:` is conditional on the gate job; for manual runs the
+    # gate is skipped, but `needs` still treats a skipped dependency
+    # as a passed dependency, so manual triggers still reach this job.
+    if: |
+      always() &&
+      (needs.verify-version-alignment.result == 'success' ||
+       needs.verify-version-alignment.result == 'skipped')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: macos-universal
+            os: macos-latest
+            sidecar_targets:
+              - aarch64-apple-darwin
+              - x86_64-apple-darwin
+            tauri_target: universal-apple-darwin
+            tauri_args: --target universal-apple-darwin
+
+          - label: windows-x86_64
+            os: windows-latest
+            sidecar_targets:
+              - x86_64-pc-windows-msvc
+            tauri_target: x86_64-pc-windows-msvc
+            tauri_args: ""
+
+          - label: linux-x86_64
+            os: ubuntu-latest
+            sidecar_targets:
+              - x86_64-unknown-linux-gnu
+            tauri_target: x86_64-unknown-linux-gnu
+            tauri_args: ""
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ join(matrix.sidecar_targets, ',') }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            tarn-desktop/src-tauri
+          key: studio-${{ matrix.label }}
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: tarn-desktop/pnpm-lock.yaml
+
+      # Tauri's Linux build needs WebKitGTK + GTK headers + a few
+      # standard system libs. Ubuntu 24.04 (ubuntu-latest as of
+      # writing) carries webkit2gtk-4.1 by default.
+      - name: Install Linux Tauri dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libgtk-3-dev
+
+      - name: Install frontend deps
+        working-directory: tarn-desktop
+        run: pnpm install --frozen-lockfile
+
+      # Build the tarn CLI for each sidecar target the matrix calls
+      # for, copy it into tarn-desktop/src-tauri/binaries/ where
+      # Tauri's externalBin expects to find it.
+      - name: Prepare tarn sidecar(s)
+        shell: bash
+        run: |
+          set -euo pipefail
+          for triple in ${{ join(matrix.sidecar_targets, ' ') }}; do
+            echo "::group::Build tarn for $triple"
+            cargo build --release -p tarn --target "$triple"
+            echo "::endgroup::"
+            node tarn-desktop/scripts/prepare-sidecar.mjs --target="$triple"
+          done
+
+      - name: Tauri build
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Code-signing secrets — empty in this iteration.
+          # When you're ready, add to repo secrets and the values
+          # below will start picking them up automatically:
+          #   APPLE_CERTIFICATE              (base64 .p12)
+          #   APPLE_CERTIFICATE_PASSWORD
+          #   APPLE_SIGNING_IDENTITY         (e.g. "Developer ID Application: Name (TEAMID)")
+          #   APPLE_ID
+          #   APPLE_PASSWORD                 (app-specific)
+          #   APPLE_TEAM_ID
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          projectPath: tarn-desktop
+          args: ${{ matrix.tauri_args }}
+          # We aggregate uploads in a follow-up job for control over
+          # release naming + checksums. Skip the action's own upload.
+          tagName: ""
+          releaseId: ""
+          includeUpdaterJson: false
+
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+
+          # Tauri 2 bundle output path depends on whether a --target
+          # was supplied. Universal-apple-darwin and explicit triples
+          # land under target/<triple>/release/bundle/. Default builds
+          # (Linux/Windows here) when invoked without --target land
+          # under target/release/bundle/.
+          if [ -n "${{ matrix.tauri_target }}" ] && [ "${{ matrix.os }}" = "macos-latest" ]; then
+            BUNDLE_BASE="tarn-desktop/src-tauri/target/${{ matrix.tauri_target }}/release/bundle"
+          else
+            BUNDLE_BASE="tarn-desktop/src-tauri/target/release/bundle"
+          fi
+          echo "BUNDLE_BASE=$BUNDLE_BASE"
+
+          if [ -d "$BUNDLE_BASE" ]; then
+            find "$BUNDLE_BASE" -type f \( \
+              -name "*.dmg" -o \
+              -name "*.msi" -o \
+              -name "*.exe" -o \
+              -name "*.AppImage" -o \
+              -name "*.deb" \
+            \) -print -exec cp {} artifacts/ \;
+          fi
+
+          ls -la artifacts/
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tarn-studio-${{ matrix.label }}
+          path: artifacts/*
+          if-no-files-found: error
+
+  # ─── Aggregate: publish a single GH Release with everything ─────
+  release:
+    name: Create GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/studio-v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          set -euo pipefail
+          cd artifacts
+          ls -la
+          sha256sum * > tarn-studio-checksums.txt
+          cat tarn-studio-checksums.txt
+
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME#studio-v}"
+          # Pull the section for this version out of the changelog.
+          # awk grabs from `## <TAG>` up to (but not including) the
+          # next `## ` heading.
+          NOTES=$(awk -v tag="$TAG" '
+            $0 ~ "^## " tag {found=1; next}
+            found && /^## / {exit}
+            found {print}
+          ' tarn-desktop/CHANGELOG.md)
+          if [ -z "$NOTES" ]; then
+            NOTES="See \`tarn-desktop/CHANGELOG.md\` for details."
+          fi
+          # Write to a file so multi-line passes through `gh release`.
+          printf '%s\n' "$NOTES" > release-notes.md
+          echo "First few lines of extracted notes:"
+          head -n 5 release-notes.md
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "Tarn Studio ${GITHUB_REF_NAME#studio-}" \
+            --notes-file release-notes.md \
+            artifacts/*
