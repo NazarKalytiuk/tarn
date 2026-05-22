@@ -109,6 +109,12 @@ jobs:
             tauri_args: ""
 
     runs-on: ${{ matrix.os }}
+    env:
+      # GH Actions doesn't let `secrets.X` appear directly inside an
+      # `if:` step condition, so we capture the presence of the cert
+      # secret as a boolean job env var here. Steps that conditionally
+      # use it reference `env.HAS_APPLE_CERT` instead.
+      HAS_APPLE_CERT: ${{ secrets.APPLE_CERTIFICATE != '' }}
     steps:
       - uses: actions/checkout@v6
 
@@ -169,7 +175,7 @@ jobs:
       # tauri-action try to import an empty cert and fail with
       # `SecKeychainItemImport: parameters were not valid`.
       - name: Export macOS signing secrets (when available)
-        if: matrix.os == 'macos-latest' && secrets.APPLE_CERTIFICATE != ''
+        if: matrix.os == 'macos-latest' && env.HAS_APPLE_CERT == 'true'
         shell: bash
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
