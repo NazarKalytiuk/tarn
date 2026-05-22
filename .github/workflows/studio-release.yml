@@ -163,25 +163,35 @@ jobs:
         run: |
           node tarn-desktop/scripts/prepare-sidecar.mjs --target=${{ matrix.tauri_target }}
 
-      - name: Tauri build
-        uses: tauri-apps/tauri-action@v0
+      # Conditionally export signing secrets to the job env so the
+      # tauri-action step picks them up only when they actually
+      # exist. Setting `APPLE_CERTIFICATE: ""` unconditionally makes
+      # tauri-action try to import an empty cert and fail with
+      # `SecKeychainItemImport: parameters were not valid`.
+      - name: Export macOS signing secrets (when available)
+        if: matrix.os == 'macos-latest' && secrets.APPLE_CERTIFICATE != ''
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Code-signing secrets — empty in this iteration.
-          # When you're ready, add to repo secrets and the values
-          # below will start picking them up automatically:
-          #   APPLE_CERTIFICATE              (base64 .p12)
-          #   APPLE_CERTIFICATE_PASSWORD
-          #   APPLE_SIGNING_IDENTITY         (e.g. "Developer ID Application: Name (TEAMID)")
-          #   APPLE_ID
-          #   APPLE_PASSWORD                 (app-specific)
-          #   APPLE_TEAM_ID
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          {
+            echo "APPLE_CERTIFICATE=$APPLE_CERTIFICATE"
+            echo "APPLE_CERTIFICATE_PASSWORD=$APPLE_CERTIFICATE_PASSWORD"
+            echo "APPLE_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY"
+            echo "APPLE_ID=$APPLE_ID"
+            echo "APPLE_PASSWORD=$APPLE_PASSWORD"
+            echo "APPLE_TEAM_ID=$APPLE_TEAM_ID"
+          } >> "$GITHUB_ENV"
+
+      - name: Tauri build
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: tarn-desktop
           args: ${{ matrix.tauri_args }}
