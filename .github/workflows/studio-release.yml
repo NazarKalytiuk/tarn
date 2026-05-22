@@ -154,19 +154,14 @@ jobs:
         working-directory: tarn-desktop
         run: pnpm install --frozen-lockfile
 
-      # Build the tarn CLI for each sidecar target the matrix calls
-      # for, copy it into tarn-desktop/src-tauri/binaries/ where
-      # Tauri's externalBin expects to find it.
-      - name: Prepare tarn sidecar(s)
+      # Place the tarn sidecar into tarn-desktop/src-tauri/binaries/
+      # under the name Tauri's `externalBin` expects. For
+      # universal-apple-darwin, prepare-sidecar.mjs builds both
+      # arches and `lipo`-merges them into a single fat binary.
+      - name: Prepare tarn sidecar
         shell: bash
         run: |
-          set -euo pipefail
-          for triple in ${{ join(matrix.sidecar_targets, ' ') }}; do
-            echo "::group::Build tarn for $triple"
-            cargo build --release -p tarn --target "$triple"
-            echo "::endgroup::"
-            node tarn-desktop/scripts/prepare-sidecar.mjs --target="$triple"
-          done
+          node tarn-desktop/scripts/prepare-sidecar.mjs --target=${{ matrix.tauri_target }}
 
       - name: Tauri build
         uses: tauri-apps/tauri-action@v0
