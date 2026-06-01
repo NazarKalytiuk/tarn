@@ -625,6 +625,13 @@ pub struct Request {
     /// Request body — can be any JSON-compatible value
     pub body: Option<serde_json::Value>,
 
+    /// Request body loaded from an external file, resolved relative to the
+    /// test file's directory. The file is parsed as JSON and interpolated
+    /// exactly like an inline `body` (`{{ env.x }}`, `{{ capture.x }}`,
+    /// builtins, type-preserving). Mutually exclusive with `body`.
+    #[serde(alias = "body-file")]
+    pub body_file: Option<String>,
+
     /// URL-encoded form body sent as application/x-www-form-urlencoded
     #[serde(default)]
     pub form: Option<IndexMap<String, String>>,

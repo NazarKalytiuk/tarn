@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+## 0.14.0 — Load a JSON request body from a file (`body_file`)
+
+Requests can now source their JSON body from an external file instead of inlining it:
+
+```yaml
+request:
+  method: POST
+  url: "{{ env.base_url }}/users"
+  body_file: "payloads/create-user.json"
+```
+
+`body_file` resolves relative to the test file (matching multipart file paths), parses the file as JSON, and interpolates it exactly like an inline `body` — `{{ env }}`, `{{ capture }}`, and builtins all work inside the file, type-preservingly. It is the direct equivalent of Hurl's `file,…;` body for JSON payloads, easing migration.
+
+### Behavior
+
+- Mutually exclusive with `body` — setting both is a validation error (`tarn validate` / parse, exit 2).
+- A missing file or invalid JSON fails that step with `failure_category: parse_error` and the full request context; the run continues rather than aborting.
+- The resolved body flows into the JSON report and `curl` / `curl-all` export identically to an inline body.
+- Accepts the `body-file` alias; `tarn fmt` normalizes it to `body_file`.
+
+### Surfaces touched
+
+- `model::Request.body_file`, resolved in `runner::prepare_request` via the new `load_body_file` helper.
+- Schema `schemas/v1/testfile.json` gains the `body_file` property plus a `not: { required: [body, body_file] }` constraint.
+- New runnable example `examples/post-json.tarn.yaml` (+ `examples/payloads/create-user.json`).
+- Docs: README **Request Body** section, docs site **Writing Tests**, and the Hurl migration guide.
+
 ## 0.13.1 — Per-step `[X/Y]` progress indicator
 
 > The v0.13.0 tag was pushed but the release pipeline rejected it because `editors/vscode/package.json` had not been bumped, so no artifacts shipped. v0.13.1 is the first published release that carries the progress-indicator feature; the changes below are otherwise identical to what v0.13.0 staged.

@@ -507,6 +507,11 @@
         "body": {
           "description": "Request body sent as JSON. Can be any valid JSON value (object, array, string, number, boolean, null)"
         },
+        "body_file": {
+          "type": "string",
+          "description": "Path to an external JSON file (relative to the test file) used as the request body. Parsed as JSON and interpolated like an inline body. Mutually exclusive with `body`.",
+          "examples": ["./payloads/create-user.json"]
+        },
         "form": {
           "$ref": "#/$defs/FormBody",
           "description": "URL-encoded form body sent as application/x-www-form-urlencoded"
@@ -514,6 +519,7 @@
         "graphql": { "$ref": "#/$defs/GraphqlRequest" },
         "multipart": { "$ref": "#/$defs/MultipartBody" }
       },
+      "not": { "required": ["body", "body_file"] },
       "additionalProperties": false
     },
     "AuthConfig": {
