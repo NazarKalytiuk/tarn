@@ -1,0 +1,18 @@
+# Tarn MCP server for OpenAI Codex.
+#
+# Add this block to ~/.codex/config.toml (user scope) or .codex/config.toml
+# (project scope). It is exactly what `codex mcp add tarn -- tarn-mcp` writes.
+#
+# Requires `tarn-mcp` on $PATH. Build with `cargo install --path tarn-mcp` from
+# a checkout of https://github.com/NazarKalytiuk/tarn.
+#
+# Tools exposed: tarn_run, tarn_validate, tarn_list, tarn_fix_plan (+ the
+# failures-first tools tarn_last_failures / tarn_inspect / tarn_rerun_failed).
+
+[mcp_servers.tarn]
+command = "tarn-mcp"
+args = []
+
+# Optional tuning — defaults are 10s / 60s; bump only if cold starts are slow.
+startup_timeout_sec = 10
+tool_timeout_sec = 60

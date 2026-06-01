@@ -1,0 +1,73 @@
+# Reproducible agent-loop example.
+#
+# Hits the public JSONPlaceholder API (https://jsonplaceholder.typicode.com),
+# so it runs with zero local setup — no server to start, no secrets.
+#
+#   tarn validate examples/agent-loop/api.tarn.yaml
+#   tarn run      examples/agent-loop/api.tarn.yaml --format llm
+#
+# To watch the failures-first loop end to end, change `length_gte: 1` below to
+# `length_gte: 1000`, rerun, then `tarn failures` / inspect / fix — see README.md.
+name: Agent loop demo (JSONPlaceholder)
+
+env:
+  # Inline default so the file runs standalone. Override per environment via
+  # tarn.env.yaml (shipped alongside) or `--var base_url=...`.
+  base_url: "https://jsonplaceholder.typicode.com"
+
+defaults:
+  headers:
+    Content-Type: "application/json"
+    Accept: "application/json"
+  timeout: 10000
+
+tests:
+  read:
+    description: List and fetch a single resource
+    steps:
+      - name: List posts
+        request:
+          method: GET
+          url: "{{ env.base_url }}/posts"
+        assert:
+          status: 200
+          body:
+            "$": { type: array, length_gte: 1 }
+            "$[0].id": 1
+            "$[0].title": { type: string, not_empty: true }
+
+      - name: Fetch one post
+        request:
+          method: GET
+          url: "{{ env.base_url }}/posts/1"
+        assert:
+          status: 200
+          body:
+            "$.id": 1
+            "$.userId": { type: number }
+
+  create-and-chain:
+    description: Create a post, then reuse the captured id downstream
+    steps:
+      - name: Create post
+        request:
+          method: POST
+          url: "{{ env.base_url }}/posts"
+          body:
+            title: "Written by an agent via Tarn"
+            body: "Generated with the {{ $word }} workflow"
+            userId: 1
+        capture:
+          post_id: "$.id"
+        assert:
+          status: 201
+          body:
+            "$.title": "Written by an agent via Tarn"
+            "$.id": { type: number }
+
+      - name: Fetch the created post back
+        request:
+          method: GET
+          url: "{{ env.base_url }}/posts/{{ capture.post_id }}"
+        assert:
+          status: { in: [200, 404] } # JSONPlaceholder fakes writes; either is fine

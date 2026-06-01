@@ -559,9 +559,9 @@ Each entry under `command.capture:` must use exactly one of:
 
 ## MCP Integration
 
-Tarn ships with `tarn-mcp`, an MCP server for Claude Code, opencode, Cursor, and Windsurf.
+Tarn ships with `tarn-mcp`, an MCP server for Claude Code, opencode, Cursor, Windsurf, and Codex. (pi has no native MCP — it uses the `tarn-api-testing` skill plus the `tarn` CLI directly.)
 
-See `references/mcp-integration.md` for setup and tool reference.
+See `references/mcp-integration.md` for setup and tool reference, and `editors/codex/`, `editors/opencode/`, and `editors/pi/` for per-agent integration kits.
 
 ## Parallel Execution and Isolation
 

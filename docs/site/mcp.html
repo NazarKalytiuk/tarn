@@ -26,6 +26,7 @@
           <a href="./mcp.html" class="active">MCP</a>
           <a href="./ci-usage.html">CI</a>
           <a href="./examples.html">Examples</a>
+          <a href="./agents.html">Agents</a>
           <a href="https://github.com/NazarKalytiuk/tarn" class="nav__gh" target="_blank" rel="noopener">
             <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
           </a>
@@ -202,6 +203,32 @@ cargo install tarn-mcp</pre>
             </div>
             <p>This repo commits a working <a href="https://github.com/NazarKalytiuk/tarn/blob/main/opencode.jsonc" target="_blank" rel="noopener"><code class="ic">opencode.jsonc</code></a> at its root alongside a <code class="ic">.opencode/skills/tarn-api-testing/</code> symlink, so agents running <code class="ic">opencode</code> inside the Tarn repo get the full MCP + LSP + skill surface with no extra setup. See <a href="https://github.com/NazarKalytiuk/tarn/blob/main/editors/opencode/README.md" target="_blank" rel="noopener"><code class="ic">editors/opencode/README.md</code></a> for the full install flow.</p>
 
+            <h2 id="codex">Codex</h2>
+            <p><a href="https://developers.openai.com/codex/" target="_blank" rel="noopener">OpenAI Codex</a> uses TOML, not JSON. Register the server with the CLI &mdash; it writes <code class="ic">~/.codex/config.toml</code> for you:</p>
+            <div class="code-block">
+              <div class="code-block__header">
+                <span class="code-block__dot code-block__dot--red"></span>
+                <span class="code-block__dot code-block__dot--yellow"></span>
+                <span class="code-block__dot code-block__dot--green"></span>
+              </div>
+              <pre>codex mcp add tarn -- tarn-mcp</pre>
+            </div>
+            <p>Or add it by hand &mdash; <code class="ic">command</code> is a bare executable, <code class="ic">args</code> a separate array:</p>
+            <div class="code-block">
+              <div class="code-block__header">
+                <span class="code-block__dot code-block__dot--red"></span>
+                <span class="code-block__dot code-block__dot--yellow"></span>
+                <span class="code-block__dot code-block__dot--green"></span>
+              </div>
+              <pre>[mcp_servers.tarn]
+command = <span class="str">"tarn-mcp"</span>
+args = []</pre>
+            </div>
+            <p>See <a href="https://github.com/NazarKalytiuk/tarn/blob/main/editors/codex/README.md" target="_blank" rel="noopener"><code class="ic">editors/codex/README.md</code></a> for the skill and AGENTS.md setup.</p>
+
+            <h2 id="more-agents">pi and the full agent matrix</h2>
+            <p>pi has no native MCP &mdash; it integrates via the <code class="ic">tarn-api-testing</code> skill plus the <code class="ic">tarn</code> CLI. For the canonical supported-agents list and per-agent setup (Codex, opencode, pi, Cursor, Windsurf, Claude Code), see the <a href="./agents.html">AI Agent Integrations</a> guide.</p>
+
             <h2 id="agent-loop">Recommended loop</h2>
             <ol>
               <li>Call <code class="ic">tarn_list</code> to get the suite shape.</li>
@@ -236,10 +263,13 @@ cargo install tarn-mcp</pre>
               <a class="sidebar-link" href="#claude-code"><strong>Claude Code</strong></a>
               <a class="sidebar-link" href="#cursor"><strong>Cursor</strong></a>
               <a class="sidebar-link" href="#opencode"><strong>opencode</strong></a>
+              <a class="sidebar-link" href="#codex"><strong>Codex</strong></a>
+              <a class="sidebar-link" href="#more-agents"><strong>pi &amp; full matrix</strong></a>
               <a class="sidebar-link" href="#agent-loop"><strong>Agent Loop</strong></a>
             </div>
             <div class="sidebar-card" style="margin-top: 12px;">
               <h3>Related</h3>
+              <a class="sidebar-link" href="./agents.html"><strong>AI Agent Integrations</strong></a>
               <a class="sidebar-link" href="./reference/mcp-tools.html"><strong>MCP Tools Reference</strong></a>
               <a class="sidebar-link" href="./ai-workflows.html"><strong>AI Workflows</strong></a>
             </div>

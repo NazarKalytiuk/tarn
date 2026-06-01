@@ -123,7 +123,7 @@ Schema files live in `schemas/v1/testfile.json` and `schemas/v1/report.json`.
 
 ## MCP Server
 
-Tarn includes an MCP server (`tarn-mcp`) for direct integration with Claude Code, opencode, Cursor, and Windsurf.
+Tarn includes an MCP server (`tarn-mcp`) for direct integration with Claude Code, Codex, opencode, Cursor, and Windsurf. (pi has no native MCP — it uses the `tarn-api-testing` skill plus the `tarn` CLI.) Per-agent setup kits live under `editors/` (`codex/`, `opencode/`, `pi/`).
 
 ### Claude Code Setup
 
