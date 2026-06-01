@@ -87,6 +87,28 @@ Add to `.windsurf/mcp.json`:
 }
 ```
 
+### Codex (OpenAI)
+
+Codex uses TOML, not JSON. Register the server with the CLI (writes `~/.codex/config.toml`):
+
+```bash
+codex mcp add tarn -- tarn-mcp
+```
+
+Or add the block by hand to `~/.codex/config.toml` (user) or `.codex/config.toml` (project):
+
+```toml
+[mcp_servers.tarn]
+command = "tarn-mcp"
+args = []
+```
+
+Note the shape: `command` is a bare executable and `args` is a separate array. See `editors/codex/README.md` for the skill (`.agents/skills/`) and `AGENTS.md` setup.
+
+### pi
+
+pi has **no native MCP**. Integrate Tarn via the Agent Skills standard plus the `tarn` CLI: drop the skill at `.agents/skills/tarn-api-testing/SKILL.md` and pi runs `tarn` through its `bash` tool. To expose the `tarn-mcp` tools inside pi, use the community `pi-mcp-adapter`, which reads the same `.mcp.json` shown at the top of this file. See `editors/pi/README.md`.
+
 **Prerequisite:** `tarn-mcp` binary must be in `$PATH`. Build with `cargo build --release -p tarn-mcp`.
 
 ## Resolving the working directory (`cwd`)

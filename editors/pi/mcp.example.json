@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "tarn": {
+      "command": "tarn-mcp",
+      "args": []
+    }
+  }
+}

@@ -65,6 +65,16 @@ This index lists the canonical repository markdown after the roadmap cleanup.
 - `editors/opencode/README.md`
   - opencode integration: repo-root `opencode.jsonc` + `.opencode/skills/tarn-api-testing/`
   - config-driven (no marketplace / installer); skill reuses `plugin/skills/tarn-api-testing/` via symlink
+- `editors/codex/README.md`
+  - OpenAI Codex integration: `codex mcp add tarn -- tarn-mcp` (or `~/.codex/config.toml` `[mcp_servers.tarn]`) + `.agents/skills/` skill + `AGENTS.md`
+  - config snippet in `editors/codex/config.example.toml`
+- `editors/pi/README.md`
+  - pi integration: `tarn-api-testing` skill (Agent Skills standard) + the `tarn` CLI; pi has no native MCP
+  - optional `tarn-mcp` surface via the community `pi-mcp-adapter`, reading the repo-root `.mcp.json` (mirrored in `editors/pi/mcp.example.json`)
+- `.agents/skills/tarn-api-testing/`
+  - cross-agent Agent Skills standard location read by Codex, opencode, and pi; symlinked to canonical `plugin/skills/tarn-api-testing/`
+- `examples/agent-loop/`
+  - reproducible write → run → read-failure → fix loop against the public JSONPlaceholder API; referenced by every per-agent kit
 - `editors/zed/README.md`
   - Zed extension: grammar, snippets, runnable tasks, and `tarn-lsp` adapter
   - auto-downloads `tarn-lsp` from GitHub releases on first activation

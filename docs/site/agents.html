@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Tarn &mdash; AI Agent Integrations</title>
+    <meta name="description" content="Wire Tarn into Claude Code, OpenAI Codex, opencode, pi, Cursor, and Windsurf via tarn-mcp and the tarn-api-testing skill.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="site-header__inner">
+        <a class="brand" href="./index.html">
+          <span class="brand__icon"><svg viewBox="0 0 24 24"><path d="M12 2L2 19h20L12 2zm0 4l7 13H5l7-13z"/></svg></span>
+          Tarn
+        </a>
+        <nav class="nav">
+          <a href="./overview.html">Overview</a>
+          <a href="./getting-started.html">Get Started</a>
+          <a href="./writing-tests.html">Writing Tests</a>
+          <a href="./cli-reference.html">CLI</a>
+          <a href="./ai-workflows.html">AI Workflows</a>
+          <a href="./mcp.html">MCP</a>
+          <a href="./ci-usage.html">CI</a>
+          <a href="./examples.html">Examples</a>
+          <a href="./agents.html" class="active">Agents</a>
+          <a href="https://github.com/NazarKalytiuk/tarn" class="nav__gh" target="_blank" rel="noopener">
+            <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          </a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="page">
+      <div class="container">
+        <section class="page__hero">
+          <span class="badge">Guide 09</span>
+          <h1>Wire Tarn into your coding&nbsp;agent.</h1>
+          <p class="lead">Tarn drives any agent that speaks MCP or has a shell. <code class="ic">tarn-mcp</code> exposes <code class="ic">list</code> / <code class="ic">validate</code> / <code class="ic">run</code> / <code class="ic">fix_plan</code> as structured tools; the <code class="ic">tarn-api-testing</code> skill teaches the failures-first loop.</p>
+        </section>
+
+        <div class="page__layout">
+          <article class="page__content">
+            <h2 id="supported">Supported agents</h2>
+            <p>This table is the canonical supported-agents list. Per-agent setup kits live under <a href="https://github.com/NazarKalytiuk/tarn/tree/main/editors" target="_blank" rel="noopener"><code class="ic">editors/</code></a>.</p>
+            <div class="table-wrap">
+            <table class="table">
+              <thead>
+                <tr><th>Agent</th><th>How Tarn plugs in</th><th>Setup</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><strong>Claude Code</strong></td><td><code>tarn-mcp</code> + skill plugin, plus the <code>tarn-lsp</code> plugin</td><td><a href="https://github.com/NazarKalytiuk/tarn/blob/main/editors/claude-code/tarn-lsp-plugin/README.md" target="_blank" rel="noopener">marketplace plugin</a></td></tr>
+                <tr><td><strong>OpenAI Codex</strong></td><td><code>tarn-mcp</code> (<code>codex mcp add</code>) + <code>.agents/skills/</code> skill + <code>AGENTS.md</code></td><td><a href="https://github.com/NazarKalytiuk/tarn/blob/main/editors/codex/README.md" target="_blank" rel="noopener">editors/codex</a></td></tr>
+                <tr><td><strong>opencode</strong></td><td><code>tarn-mcp</code> + <code>tarn-lsp</code> + skill via <code>opencode.jsonc</code></td><td><a href="https://github.com/NazarKalytiuk/tarn/blob/main/editors/opencode/README.md" target="_blank" rel="noopener">editors/opencode</a></td></tr>
+                <tr><td><strong>pi</strong></td><td><code>tarn-api-testing</code> skill + <code>tarn</code> CLI (no native MCP; optional MCP via adapter)</td><td><a href="https://github.com/NazarKalytiuk/tarn/blob/main/editors/pi/README.md" target="_blank" rel="noopener">editors/pi</a></td></tr>
+                <tr><td><strong>Cursor</strong></td><td><code>tarn-mcp</code> via <code>.cursor/mcp.json</code></td><td><a href="./mcp.html#cursor">MCP setup</a></td></tr>
+                <tr><td><strong>Windsurf</strong></td><td><code>tarn-mcp</code> via <code>.windsurf/mcp.json</code></td><td><a href="./mcp.html#windsurf">MCP setup</a></td></tr>
+                <tr><td>Neovim / Helix / Zed / VS Code</td><td><code>tarn-lsp</code> language server</td><td><a href="./tarn-lsp.html">tarn-lsp</a></td></tr>
+              </tbody>
+            </table>
+            </div>
+
+            <h2 id="codex">OpenAI Codex</h2>
+            <p>Register the MCP server with the Codex CLI &mdash; it writes <code class="ic">~/.codex/config.toml</code> for you:</p>
+            <div class="code-block">
+              <div class="code-block__header">
+                <span class="code-block__dot code-block__dot--red"></span>
+                <span class="code-block__dot code-block__dot--yellow"></span>
+                <span class="code-block__dot code-block__dot--green"></span>
+              </div>
+              <pre>codex mcp add tarn -- tarn-mcp
+codex mcp list   # confirm "tarn" is listed</pre>
+            </div>
+            <p>Or add the block by hand to <code class="ic">~/.codex/config.toml</code> (user) or <code class="ic">.codex/config.toml</code> (project). <code class="ic">command</code> is the bare executable; <code class="ic">args</code> is a separate array:</p>
+            <div class="code-block">
+              <div class="code-block__header">
+                <span class="code-block__dot code-block__dot--red"></span>
+                <span class="code-block__dot code-block__dot--yellow"></span>
+                <span class="code-block__dot code-block__dot--green"></span>
+              </div>
+              <pre>[mcp_servers.tarn]
+command = <span class="str">"tarn-mcp"</span>
+args = []</pre>
+            </div>
+            <p>For the skill, Codex reads the <strong>Agent Skills standard</strong> at <code class="ic">.agents/skills/&lt;name&gt;/SKILL.md</code> (or <code class="ic">~/.agents/skills/</code>). Full flow: <a href="https://github.com/NazarKalytiuk/tarn/blob/main/editors/codex/README.md" target="_blank" rel="noopener"><code class="ic">editors/codex/README.md</code></a>.</p>
+
+            <h2 id="opencode">opencode</h2>
+            <p><a href="https://opencode.ai" target="_blank" rel="noopener">opencode</a> uses its native <code class="ic">opencode.jsonc</code> at the repo root &mdash; note the schema shape (<code class="ic">mcp</code>, not <code class="ic">mcpServers</code>; <code class="ic">type: "local"</code>; a <code class="ic">command</code> array). It also gets the <code class="ic">tarn-lsp</code> language server:</p>
+            <div class="code-block">
+              <div class="code-block__header">
+                <span class="code-block__dot code-block__dot--red"></span>
+                <span class="code-block__dot code-block__dot--yellow"></span>
+                <span class="code-block__dot code-block__dot--green"></span>
+              </div>
+              <pre>{
+  <span class="key">"$schema"</span>: <span class="str">"https://opencode.ai/config.json"</span>,
+  <span class="key">"mcp"</span>: {
+    <span class="key">"tarn"</span>: { <span class="key">"type"</span>: <span class="str">"local"</span>, <span class="key">"command"</span>: [<span class="str">"tarn-mcp"</span>], <span class="key">"enabled"</span>: <span class="value">true</span> }
+  },
+  <span class="key">"lsp"</span>: {
+    <span class="key">"tarn"</span>: { <span class="key">"command"</span>: [<span class="str">"tarn-lsp"</span>], <span class="key">"extensions"</span>: [<span class="str">".yaml"</span>, <span class="str">".yml"</span>] }
+  }
+}</pre>
+            </div>
+            <p>The <code class="ic">lsp</code> entry claims all <code class="ic">.yaml</code>/<code class="ic">.yml</code> files (opencode matches by final extension, not the <code class="ic">.tarn.yaml</code> compound suffix), so keep it in project-level config for Tarn-focused repos. Full flow: <a href="https://github.com/NazarKalytiuk/tarn/blob/main/editors/opencode/README.md" target="_blank" rel="noopener"><code class="ic">editors/opencode/README.md</code></a>.</p>
+
+            <h2 id="pi">pi</h2>
+            <p>The <a href="https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent" target="_blank" rel="noopener">pi coding agent</a> is deliberately minimal and has <strong>no native MCP</strong> &mdash; its docs say to "build CLI tools with READMEs (skills), or build an extension." That fits Tarn perfectly: <code class="ic">tarn</code> is a single static binary, and pi runs it through its <code class="ic">bash</code> tool. The canonical integration is the skill plus the CLI:</p>
+            <div class="code-block">
+              <div class="code-block__header">
+                <span class="code-block__dot code-block__dot--red"></span>
+                <span class="code-block__dot code-block__dot--yellow"></span>
+                <span class="code-block__dot code-block__dot--green"></span>
+              </div>
+              <pre># drop the skill where pi discovers it
+.agents/skills/tarn-api-testing/SKILL.md
+
+# inside pi
+/skill:tarn-api-testing write a smoke test for GET /health and run it</pre>
+            </div>
+            <p>To expose the structured <code class="ic">tarn-mcp</code> tools in pi, use the community <a href="https://github.com/nicobailon/pi-mcp-adapter" target="_blank" rel="noopener"><code class="ic">pi-mcp-adapter</code></a>, which reads the same <code class="ic">.mcp.json</code> Tarn already ships. Full flow: <a href="https://github.com/NazarKalytiuk/tarn/blob/main/editors/pi/README.md" target="_blank" rel="noopener"><code class="ic">editors/pi/README.md</code></a>.</p>
+
+            <h2 id="skill">The cross-agent skill</h2>
+            <p>The <code class="ic">tarn-api-testing</code> skill teaches an agent the failures-first loop, the <code class="ic">.tarn.yaml</code> format, and the diagnosis taxonomy. <code class="ic">.agents/skills/&lt;name&gt;/SKILL.md</code> is a shared standard read by Codex, opencode, and pi &mdash; one directory serves all three. The Tarn repo ships it at <code class="ic">.agents/skills/tarn-api-testing/</code>, symlinked to the canonical <code class="ic">plugin/skills/tarn-api-testing/</code>.</p>
+
+            <h2 id="example">End-to-end example</h2>
+            <p>A reproducible write &rarr; run &rarr; read-failure &rarr; fix loop lives in <a href="https://github.com/NazarKalytiuk/tarn/tree/main/examples/agent-loop" target="_blank" rel="noopener"><code class="ic">examples/agent-loop/</code></a>. It hits the public JSONPlaceholder API, so there is nothing to start:</p>
+            <div class="code-block">
+              <div class="code-block__header">
+                <span class="code-block__dot code-block__dot--red"></span>
+                <span class="code-block__dot code-block__dot--yellow"></span>
+                <span class="code-block__dot code-block__dot--green"></span>
+              </div>
+              <pre>tarn validate examples/agent-loop/api.tarn.yaml
+tarn run      examples/agent-loop/api.tarn.yaml --format llm</pre>
+            </div>
+            <p>Ask any MCP-enabled agent: <em>"Run <code class="ic">examples/agent-loop/api.tarn.yaml</code> with the tarn tools; if anything fails, call <code class="ic">tarn_fix_plan</code> and patch it."</em> See the <a href="./ai-workflows.html">AI Workflows</a> guide for the loop in depth.</p>
+          </article>
+
+          <aside class="page__sidebar">
+            <div class="sidebar-card">
+              <h3>On this page</h3>
+              <a class="sidebar-link" href="#supported"><strong>Supported agents</strong></a>
+              <a class="sidebar-link" href="#codex"><strong>OpenAI Codex</strong></a>
+              <a class="sidebar-link" href="#opencode"><strong>opencode</strong></a>
+              <a class="sidebar-link" href="#pi"><strong>pi</strong></a>
+              <a class="sidebar-link" href="#skill"><strong>The cross-agent skill</strong></a>
+              <a class="sidebar-link" href="#example"><strong>End-to-end example</strong></a>
+            </div>
+            <div class="sidebar-card" style="margin-top: 12px;">
+              <h3>Related</h3>
+              <a class="sidebar-link" href="./mcp.html"><strong>MCP Integration</strong></a>
+              <a class="sidebar-link" href="./ai-workflows.html"><strong>AI Workflows</strong></a>
+              <a class="sidebar-link" href="./tarn-lsp.html"><strong>tarn-lsp</strong></a>
+            </div>
+          </aside>
+        </div>
+      </div>
+    </main>
+
+    <footer class="site-footer">
+      <div class="site-footer__inner">
+        <span class="footer__brand"><a href="./index.html">Tarn</a> &mdash; AI-first API testing CLI</span>
+        <div class="footer__links">
+          <a href="./examples.html">Prev: Examples</a>
+          <a href="./mcp.html">Next: MCP</a>
+          <a href="https://github.com/NazarKalytiuk/tarn" target="_blank" rel="noopener">GitHub</a>
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

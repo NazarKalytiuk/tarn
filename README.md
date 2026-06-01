@@ -19,7 +19,7 @@
 
 ---
 
-Tarn is a CLI-first API testing tool written in Rust. Tests are `.tarn.yaml` files. Output is structured JSON with categorized failures and remediation hints, so an agent &mdash; Claude Code, Cursor, Windsurf, opencode &mdash; can write a test, run it, read what broke, and fix it without scraping logs.
+Tarn is a CLI-first API testing tool written in Rust. Tests are `.tarn.yaml` files. Output is structured JSON with categorized failures and remediation hints, so an agent &mdash; Claude Code, Codex, opencode, Cursor, Windsurf, pi &mdash; can write a test, run it, read what broke, and fix it without scraping logs.
 
 ```yaml
 # tests/health.tarn.yaml
@@ -48,7 +48,7 @@ When something breaks, `--format json` returns the same run as machine-readable 
 ## Why Tarn?
 
 - **Structured failures, not log scraping** &mdash; every failure carries a stable category, error code, and remediation hints. Agents branch on taxonomy, not regex.
-- **MCP-native** &mdash; `tarn-mcp` exposes `list`, `validate`, `run`, and `fix_plan` as structured tools for Claude Code, opencode, Cursor, and Windsurf.
+- **MCP-native** &mdash; `tarn-mcp` exposes `list`, `validate`, `run`, and `fix_plan` as structured tools for Claude Code, Codex, opencode, Cursor, and Windsurf (and pi via the skill + CLI). See [AI agent integrations](#ai-agent-integrations).
 - **YAML the model already knows** &mdash; no DSL to teach, no test framework to bootstrap. An LLM writes a `.tarn.yaml` and ships.
 - **One static binary** &mdash; `curl | sh` install, no runtime, drops into any CI image.
 - **Batteries included** &mdash; REST + GraphQL, captures, cookies, multipart, includes, polling, Lua, parallel execution, 7 output formats.
@@ -135,9 +135,26 @@ In-repo docs to start with:
 
 The reference sections below mirror what's on the docs site &mdash; useful when reading on GitHub directly.
 
+## AI agent integrations
+
+Tarn drives any agent that speaks MCP or has a shell. `tarn-mcp` exposes `list` / `validate` / `run` / `fix_plan` (plus the failures-first tools); the [`tarn-api-testing` skill](#claude-code-skill) teaches the loop. This table is the canonical supported-agents list &mdash; per-agent setup kits live under [`editors/`](./editors).
+
+| Agent | How Tarn plugs in | Setup |
+|-------|-------------------|-------|
+| **Claude Code** | `tarn-mcp` + skill plugin, plus the `tarn-lsp` plugin | [marketplace](#claude-code-plugin) · [`editors/claude-code/tarn-lsp-plugin`](./editors/claude-code/tarn-lsp-plugin/README.md) |
+| **OpenAI Codex** | `tarn-mcp` (`codex mcp add`) + `.agents/skills/` skill + `AGENTS.md` | [`editors/codex`](./editors/codex/README.md) |
+| **opencode** | `tarn-mcp` + `tarn-lsp` + skill via `opencode.jsonc` | [`editors/opencode`](./editors/opencode/README.md) |
+| **pi** | `tarn-api-testing` skill + `tarn` CLI (no native MCP; optional MCP via adapter) | [`editors/pi`](./editors/pi/README.md) |
+| **Cursor** | `tarn-mcp` via `.cursor/mcp.json` | [MCP setup](#mcp-server) |
+| **Windsurf** | `tarn-mcp` via `.windsurf/mcp.json` | [MCP setup](#mcp-server) |
+| Neovim / Helix / Zed / VS Code | `tarn-lsp` language server | [`docs/TARN_LSP.md`](./docs/TARN_LSP.md) |
+
+A reproducible write → run → read-failure → fix loop for any of these lives in [`examples/agent-loop/`](./examples/agent-loop/).
+
 ## Table of Contents
 
 - [Test File Format](#test-file-format)
+- [Request Body](#request-body)
 - [Assertions](#assertions)
 - [Variables](#variables)
 - [Cookies](#cookies)

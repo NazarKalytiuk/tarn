@@ -3,7 +3,7 @@
 
   // Tarn MCP server — structured tool calls for write / run / validate / fix-plan.
   // Requires `tarn-mcp` on $PATH. Build with `cargo install --path tarn-mcp` from a
-  // checkout of https://github.com/NazarKalytiuk/hive.
+  // checkout of https://github.com/NazarKalytiuk/tarn.
   "mcp": {
     "tarn": {
       "type": "local",

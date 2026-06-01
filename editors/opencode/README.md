@@ -60,6 +60,12 @@ Give the agent the `tarn-api-testing` skill. Opencode auto-discovers skills at `
 
 Easiest option: vendor the skill directory from this repo into your own, or keep a git submodule pointing at `plugin/skills/tarn-api-testing/`. The skill's `SKILL.md` plus the four files under `references/` are self-contained and require no source code.
 
+**Cross-agent tip:** opencode reads `.agents/skills/` in addition to `.opencode/skills/`. Placing the skill at [`.agents/skills/tarn-api-testing/`](../../.agents/skills/tarn-api-testing) — as this repo does — lights it up for opencode, [Codex](../codex/README.md), and [pi](../pi/README.md) from a single directory.
+
+### 3. AGENTS.md (optional)
+
+opencode also loads `AGENTS.md` for project instructions. The repo root [`AGENTS.md`](../../AGENTS.md) is a concise Tarn agent guide, so an opencode session in the repo knows the `validate → run → failures → fix` loop even before the skill is loaded.
+
 ## Compound-extension caveat
 
 Tarn test files use the compound extension `.tarn.yaml`, but opencode's LSP matcher uses `path.parse(file).ext`, which only returns the final dotted component — `.yaml`. This plays out the same way it does in Claude Code: the `tarn` LSP entry unavoidably claims every `.yaml` / `.yml` file in the workspace, not just `.tarn.yaml`.
@@ -79,6 +85,14 @@ Inside your repo with `opencode.jsonc` in place:
 2. Open any `.tarn.yaml` file. Introduce a typo in a schema key — opencode should surface the parser diagnostic with a precise line range.
 3. Hover over `{{ env.api_key }}` in a test file — resolved value and source file should appear.
 4. Ask the agent: *"write a Tarn smoke test for GET /health"*. The `tarn-api-testing` skill should activate and produce a valid `.tarn.yaml`.
+
+## End-to-end example
+
+A reproducible write → run → read-failure → fix loop lives in [`examples/agent-loop/`](../../examples/agent-loop/) — it hits the public JSONPlaceholder API, so there is nothing to start. In an opencode session:
+
+> *"Run `examples/agent-loop/api.tarn.yaml` with the tarn tools. If anything fails, call `tarn_fix_plan` and patch it."*
+
+opencode will call `tarn_validate` → `tarn_run`, read `summary.status` and `failure_category` from the structured result, and (on failure) call `tarn_fix_plan`. See [`examples/agent-loop/README.md`](../../examples/agent-loop/README.md) for the full loop and a one-line way to make it fail on purpose.
 
 ## Troubleshooting
 
@@ -106,3 +120,4 @@ Inside your repo with `opencode.jsonc` in place:
 - [Tarn LSP spec](../../docs/TARN_LSP.md)
 - [Tarn MCP workflow](../../docs/MCP_WORKFLOW.md)
 - [Claude Code companion plugin](../claude-code/tarn-lsp-plugin/README.md) — mirrors this setup through Claude Code's plugin/marketplace system.
+- [Codex companion](../codex/README.md) · [pi companion](../pi/README.md) — the same MCP + skill surface for the other two agents.
