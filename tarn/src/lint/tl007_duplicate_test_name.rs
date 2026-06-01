@@ -119,6 +119,7 @@ mod tests {
                 headers: std::collections::HashMap::new(),
                 auth: None,
                 body: None,
+                body_file: None,
                 form: None,
                 graphql: None,
                 multipart: None,

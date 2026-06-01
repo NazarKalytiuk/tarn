@@ -283,6 +283,64 @@ tests:
           status: 200
 ```
 
+## Request Body
+
+The most common case &mdash; `POST` (or `PUT`/`PATCH`) an endpoint with a JSON body. Write the body inline as YAML; Tarn serializes it as JSON and sets `Content-Type: application/json` automatically.
+
+```yaml
+name: Create a user
+steps:
+  - name: POST /users
+    request:
+      method: POST
+      url: "{{ env.base_url }}/users"
+      body:
+        name: "Jane Doe"
+        email: "jane@example.com"
+        role: "editor"
+        tags: ["content", "marketing"]
+    assert:
+      status: 201
+      body:
+        "$.id": { type: string, not_empty: true }
+```
+
+`body` accepts any JSON value &mdash; object, array, string, number, boolean, or `null`. Templates resolve inside it, type-preservingly (`"{{ capture.count }}"` becomes the captured number, not a string):
+
+```yaml
+request:
+  method: POST
+  url: "{{ env.base_url }}/orders"
+  body:
+    customer_id: "{{ capture.user_id }}"
+    idempotency_key: "{{ $uuid }}"
+    quantity: "{{ capture.qty }}"     # stays a JSON number
+```
+
+### Body from a file (`body_file`)
+
+For larger or shared payloads, keep the JSON in its own file and reference it with `body_file`. The path resolves relative to the test file, the content is parsed as JSON, and it is interpolated exactly like an inline `body` (so `{{ env }}`, `{{ capture }}`, and builtins work inside the file). `body_file` is mutually exclusive with `body`.
+
+```yaml
+request:
+  method: POST
+  url: "{{ env.base_url }}/users"
+  body_file: "payloads/create-user.json"
+```
+
+```json
+// payloads/create-user.json
+{
+  "name": "Grace Hopper",
+  "email": "grace.{{ $random_hex(6) }}@example.com",
+  "role": "admin"
+}
+```
+
+A missing file or invalid JSON fails that step with `failure_category: parse_error` (the run continues; it does not abort). Runnable end-to-end example: [`examples/post-json.tarn.yaml`](./examples/post-json.tarn.yaml).
+
+> Sending a non-JSON body? Use [`form`](#form-url-encoding) for URL-encoded data, [`multipart`](#multipart--file-upload) for file uploads, or [`graphql`](#graphql) for GraphQL queries.
+
 ## Assertions
 
 ### Status

@@ -116,6 +116,32 @@ steps:
       status: 200
 ```
 
+### JSON body from a file
+
+Hurl can send a file as the request body:
+
+```hurl
+POST https://api.example.com/users
+file,create-user.json;
+HTTP 201
+```
+
+Tarn's `body_file` is the direct equivalent for **JSON** payloads. The path resolves relative to the test file, the file is parsed as JSON, and it is interpolated just like an inline `body` (so `{{ env }}` / `{{ capture }}` / builtins work inside it):
+
+```yaml
+name: Users
+steps:
+  - name: Create user
+    request:
+      method: POST
+      url: "https://api.example.com/users"
+      body_file: "create-user.json"
+    assert:
+      status: 201
+```
+
+For non-JSON file bodies (binary uploads, raw text), use `multipart` for file uploads or inline the content as a string `body`; `body_file` itself is JSON-only.
+
 ### Shared auth
 
 Hurl usually keeps auth setup inline in earlier entries.

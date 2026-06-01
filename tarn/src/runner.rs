@@ -1983,6 +1983,11 @@ struct PreparedRequest {
     form: Option<IndexMap<String, String>>,
     transport: http::RequestTransportOptions,
     ctx: Context,
+    /// Deferred error from resolving `request.body_file` (unreadable file or
+    /// invalid JSON). Surfaced by the runner as a graceful per-step failure
+    /// so a broken body file never aborts the whole run — mirroring how
+    /// transport/capture failures stay step-local.
+    body_error: Option<TarnError>,
 }
 
 fn resolve_multipart_for_report(
@@ -2114,12 +2119,17 @@ fn prepare_request(
     optional_unset: &HashSet<String>,
     test_file: &TestFile,
     cookie_jar: Option<&CookieJar>,
+    base_dir: &Path,
 ) -> PreparedRequest {
     let ctx = Context {
         env: env.clone(),
         captures: captures.clone(),
         optional_unset: optional_unset.clone(),
     };
+
+    // Carries a `body_file` resolution failure out of the body-selection
+    // block below so the caller can turn it into a step-level failure.
+    let mut body_error: Option<TarnError> = None;
 
     let request_spec = step.request();
     let url = interpolation::interpolate(&request_spec.url, &ctx);
@@ -2182,14 +2192,25 @@ fn prepare_request(
         }
         let form = interpolation::interpolate_string_map(form, &ctx);
         (Some(form_to_report_body(&form)), Some(form))
-    } else {
+    } else if let Some(ref inline_body) = request_spec.body {
         (
-            request_spec
-                .body
-                .as_ref()
-                .map(|b| interpolation::interpolate_json(b, &ctx)),
+            Some(interpolation::interpolate_json(inline_body, &ctx)),
             None,
         )
+    } else if let Some(ref body_file) = request_spec.body_file {
+        // `body_file` is just an external source for the JSON body: read,
+        // parse as JSON, then interpolate exactly like an inline `body` so
+        // downstream reporting, curl export, and assertions see an identical
+        // resolved value. A read/parse failure is deferred to the caller.
+        match load_body_file(body_file, base_dir, &ctx) {
+            Ok(value) => (Some(value), None),
+            Err(e) => {
+                body_error = Some(e);
+                (None, None)
+            }
+        }
+    } else {
+        (None, None)
     };
 
     let headers = interpolation::interpolate_headers(&merged_headers, &ctx);
@@ -2215,7 +2236,38 @@ fn prepare_request(
         form,
         transport,
         ctx,
+        body_error,
     }
+}
+
+/// Read a JSON request body from an external file referenced by
+/// `request.body_file`. The path resolves relative to the test file's
+/// directory (`base_dir`, matching multipart file resolution), the content
+/// is parsed as JSON, then interpolated with [`interpolation::interpolate_json`]
+/// so it behaves identically to an inline `body`. Failures (missing/unreadable
+/// file, invalid JSON) become [`TarnError::Config`] so the runner reports a
+/// parse-category step failure instead of aborting the run.
+fn load_body_file(
+    rel_path: &str,
+    base_dir: &Path,
+    ctx: &Context,
+) -> Result<serde_json::Value, TarnError> {
+    let full_path = base_dir.join(rel_path);
+    let raw = std::fs::read_to_string(&full_path).map_err(|e| {
+        TarnError::Config(format!(
+            "Failed to read body_file '{}': {}",
+            full_path.display(),
+            e
+        ))
+    })?;
+    let parsed: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
+        TarnError::Config(format!(
+            "body_file '{}' is not valid JSON: {}",
+            full_path.display(),
+            e
+        ))
+    })?;
+    Ok(interpolation::interpolate_json(&parsed, ctx))
 }
 
 fn execute_prepared_request(
@@ -2374,7 +2426,7 @@ fn run_step_inner(
         );
     }
 
-    let request = prepare_request(
+    let mut request = prepare_request(
         step,
         env,
         captures,
@@ -2383,8 +2435,16 @@ fn run_step_inner(
         jar_name
             .as_ref()
             .and_then(|name| cookie_jars.get(name.as_str())),
+        base_dir,
     );
     let request_info = build_request_info(step, &request, base_dir);
+
+    // A `body_file` that could not be read or parsed fails this step (with
+    // full request context) rather than aborting the run — same posture as
+    // a transport error.
+    if let Some(error) = request.body_error.take() {
+        return Ok(runtime_failure_step(step, 0, request_info, error));
+    }
 
     // Check for unresolved template expressions (e.g. failed captures, missing env vars).
     // Classify against the live context so a reference to an
@@ -2692,7 +2752,7 @@ fn run_step_poll(
             std::thread::sleep(std::time::Duration::from_millis(interval_ms));
         }
 
-        let request = prepare_request(
+        let mut request = prepare_request(
             step,
             env,
             captures,
@@ -2701,8 +2761,14 @@ fn run_step_poll(
             jar_name
                 .as_ref()
                 .and_then(|name| cookie_jars.get(name.as_str())),
+            base_dir,
         );
         let request_info = build_request_info(step, &request, base_dir);
+
+        // A broken `body_file` fails the step instead of aborting the poll.
+        if let Some(error) = request.body_error.take() {
+            return Ok(runtime_failure_step(step, 0, request_info, error));
+        }
 
         // Check for unresolved template expressions before sending.
         // Shares its classification with the non-poll path so a single
@@ -4095,6 +4161,7 @@ steps:
             &HashSet::new(),
             &tf,
             Some(&jar),
+            Path::new("."),
         );
 
         assert_eq!(
@@ -4124,6 +4191,7 @@ steps:
             &HashSet::new(),
             &tf,
             None,
+            Path::new("."),
         );
 
         assert_eq!(
@@ -4168,6 +4236,7 @@ steps:
             &HashSet::new(),
             &tf,
             None,
+            Path::new("."),
         );
 
         assert_eq!(
@@ -4196,6 +4265,7 @@ steps:
             &HashSet::new(),
             &tf,
             None,
+            Path::new("."),
         );
 
         assert_eq!(
@@ -4226,12 +4296,112 @@ steps:
             &HashSet::new(),
             &tf,
             None,
+            Path::new("."),
         );
 
         assert_eq!(
             request.headers.get("Authorization").map(String::as_str),
             Some("ApiKey raw-header-wins")
         );
+    }
+
+    #[test]
+    fn prepare_request_loads_json_body_from_body_file() {
+        let dir = tempfile::tempdir().unwrap();
+        // Templated payload: a string capture and a type-preserved numeric
+        // capture, proving body_file goes through the same interpolation as
+        // an inline body.
+        std::fs::write(
+            dir.path().join("payload.json"),
+            r#"{"name": "{{ env.who }}", "count": "{{ capture.n }}"}"#,
+        )
+        .unwrap();
+
+        let yaml = r#"
+name: body file
+steps:
+  - name: create
+    request:
+      method: POST
+      url: "https://api.example.com/items"
+      body_file: "payload.json"
+"#;
+        let tf: crate::model::TestFile = serde_yaml::from_str(yaml).unwrap();
+        let request = prepare_request(
+            &tf.steps[0],
+            &HashMap::from([("who".to_string(), "Jane".to_string())]),
+            &HashMap::from([("n".to_string(), serde_json::json!(5))]),
+            &HashSet::new(),
+            &tf,
+            None,
+            dir.path(),
+        );
+
+        assert!(request.body_error.is_none());
+        assert_eq!(
+            request.body,
+            Some(serde_json::json!({ "name": "Jane", "count": 5 }))
+        );
+    }
+
+    #[test]
+    fn prepare_request_body_file_missing_sets_body_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let yaml = r#"
+name: body file
+steps:
+  - name: create
+    request:
+      method: POST
+      url: "https://api.example.com/items"
+      body_file: "does-not-exist.json"
+"#;
+        let tf: crate::model::TestFile = serde_yaml::from_str(yaml).unwrap();
+        let request = prepare_request(
+            &tf.steps[0],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &tf,
+            None,
+            dir.path(),
+        );
+
+        assert!(request.body.is_none());
+        let err = request.body_error.expect("missing body_file should error");
+        assert!(matches!(err, TarnError::Config(_)));
+        assert!(err.to_string().contains("does-not-exist.json"));
+    }
+
+    #[test]
+    fn prepare_request_body_file_invalid_json_sets_body_error() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("broken.json"), "{ not valid json").unwrap();
+
+        let yaml = r#"
+name: body file
+steps:
+  - name: create
+    request:
+      method: POST
+      url: "https://api.example.com/items"
+      body_file: "broken.json"
+"#;
+        let tf: crate::model::TestFile = serde_yaml::from_str(yaml).unwrap();
+        let request = prepare_request(
+            &tf.steps[0],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &tf,
+            None,
+            dir.path(),
+        );
+
+        assert!(request.body.is_none());
+        let err = request.body_error.expect("invalid JSON should error");
+        assert!(matches!(err, TarnError::Config(_)));
+        assert!(err.to_string().contains("not valid JSON"));
     }
 
     // --- Model deserializes new fields ---

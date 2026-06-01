@@ -168,6 +168,19 @@
     <span class="key">role</span>: <span class="str">"admin"</span></pre>
             </div>
 
+            <p><strong>JSON body from a file</strong> (<code class="ic">body_file</code>): keep larger or shared payloads in their own <code class="ic">.json</code> file. The path resolves relative to the test file, the content is parsed as JSON, and it is interpolated just like an inline <code class="ic">body</code>. Mutually exclusive with <code class="ic">body</code>.</p>
+            <div class="code-block">
+              <div class="code-block__header">
+                <span class="code-block__dot code-block__dot--red"></span>
+                <span class="code-block__dot code-block__dot--yellow"></span>
+                <span class="code-block__dot code-block__dot--green"></span>
+              </div>
+              <pre><span class="key">request</span>:
+  <span class="key">method</span>: <span class="str">POST</span>
+  <span class="key">url</span>: <span class="str">"{{ env.base_url }}/users"</span>
+  <span class="key">body_file</span>: <span class="str">"payloads/create-user.json"</span></pre>
+            </div>
+
             <p><strong>Plain text body:</strong></p>
             <div class="code-block">
               <div class="code-block__header">

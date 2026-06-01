@@ -1,0 +1,5 @@
+{
+  "name": "Grace Hopper",
+  "email": "grace.{{ $random_hex(6) }}@example.com",
+  "role": "admin"
+}

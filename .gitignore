@@ -25,3 +25,8 @@ tarn.env.local.yaml
 .tarn/state.json.tmp
 .tarn/summary.json
 .tarn/summary.json.tmp
+
+# The patterns above are anchored to the repo root; this blanket rule also
+# ignores run artifacts under any subdirectory (e.g. examples/*/.tarn/),
+# matching examples/studio-demo/.gitignore.
+.tarn/

@@ -1,0 +1,72 @@
+version: "1"
+name: "POST with a JSON body"
+description: "The most common case — POST an endpoint with a JSON body, written inline or loaded from a file"
+tags: [smoke, post]
+
+# Runnable against the bundled demo server:
+#   PORT=3000 cargo run -p demo-server &
+#   tarn run examples/post-json.tarn.yaml
+
+env:
+  base_url: "http://localhost:3000"
+  admin_email: "admin@example.com"
+  admin_password: "password123"
+
+defaults:
+  headers:
+    Content-Type: "application/json"
+    Accept: "application/json"
+
+setup:
+  - name: Authenticate
+    request:
+      method: POST
+      url: "{{ env.base_url }}/auth/login"
+      body:
+        email: "{{ env.admin_email }}"
+        password: "{{ env.admin_password }}"
+    capture:
+      auth_token: "$.token"
+    assert:
+      status: 200
+
+tests:
+  post_inline_json_body:
+    description: "POST a JSON body written inline in the test file"
+    steps:
+      - name: Create user (inline body)
+        request:
+          method: POST
+          url: "{{ env.base_url }}/users"
+          headers:
+            Authorization: "Bearer {{ capture.auth_token }}"
+          body:
+            name: "Ada Lovelace"
+            email: "ada.{{ $random_hex(6) }}@example.com"
+            role: "editor"
+        assert:
+          status: 201
+          body:
+            "$.name": "Ada Lovelace"
+            "$.role": "editor"
+            "$.id": { type: string, not_empty: true }
+
+  post_json_body_from_file:
+    description: "POST a JSON body loaded from an external file via body_file"
+    steps:
+      - name: Create user (body_file)
+        request:
+          method: POST
+          url: "{{ env.base_url }}/users"
+          headers:
+            Authorization: "Bearer {{ capture.auth_token }}"
+          # body_file is parsed as JSON and interpolated exactly like an
+          # inline body, so {{ env }} / {{ capture }} / builtins work inside
+          # the file. The path resolves relative to this test file.
+          body_file: "payloads/create-user.json"
+        assert:
+          status: 201
+          body:
+            "$.name": "Grace Hopper"
+            "$.role": "admin"
+            "$.id": { type: string, not_empty: true }

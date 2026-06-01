@@ -86,6 +86,8 @@ const REQUEST_FIELDS: &[(&str, &str)] = &[
     ("headers", "headers"),
     ("auth", "auth"),
     ("body", "body"),
+    ("body_file", "body_file"),
+    ("body-file", "body_file"),
     ("form", "form"),
     ("graphql", "graphql"),
     ("multipart", "multipart"),
@@ -803,6 +805,16 @@ fn validate_request(
 ) -> Result<(), TarnError> {
     let request = as_mapping(value, path, context)?;
     validate_mapping_keys(request, REQUEST_FIELDS, context, path)?;
+
+    // `body` and `body_file` are two sources for the same JSON body slot;
+    // accepting both would silently drop one, so reject the combination.
+    if mapping_value(request, "body").is_some() && mapping_value(request, "body_file").is_some() {
+        return Err(TarnError::Validation(format!(
+            "{}: {} sets both `body` and `body_file` — use only one",
+            path.display(),
+            context
+        )));
+    }
 
     if let Some(auth) = mapping_value(request, "auth") {
         validate_auth(auth, &format!("{context}.auth"), path)?;
@@ -1680,6 +1692,93 @@ steps:
         .unwrap();
         assert_eq!(tf.name, "Health check");
         assert_eq!(tf.steps.len(), 1);
+    }
+
+    #[test]
+    fn parse_accepts_body_file_alone() {
+        let tf = parse_yaml(
+            r#"
+name: body file
+steps:
+  - name: create
+    request:
+      method: POST
+      url: "http://localhost:3000/items"
+      body_file: "./payloads/item.json"
+    assert:
+      status: 201
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            tf.steps[0].request().body_file.as_deref(),
+            Some("./payloads/item.json")
+        );
+        assert!(tf.steps[0].request().body.is_none());
+    }
+
+    #[test]
+    fn parse_accepts_body_file_kebab_alias() {
+        let tf = parse_yaml(
+            r#"
+name: body file
+steps:
+  - name: create
+    request:
+      method: POST
+      url: "http://localhost:3000/items"
+      body-file: "./payloads/item.json"
+    assert:
+      status: 201
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            tf.steps[0].request().body_file.as_deref(),
+            Some("./payloads/item.json")
+        );
+    }
+
+    #[test]
+    fn parse_rejects_body_and_body_file_together() {
+        let err = parse_yaml(
+            r#"
+name: body file
+steps:
+  - name: create
+    request:
+      method: POST
+      url: "http://localhost:3000/items"
+      body:
+        name: "inline"
+      body_file: "./payloads/item.json"
+    assert:
+      status: 201
+"#,
+        )
+        .unwrap_err();
+        assert!(matches!(err, TarnError::Validation(_)));
+        assert!(err.to_string().contains("body_file"));
+    }
+
+    #[test]
+    fn format_normalizes_body_file_kebab_alias() {
+        let formatted = format_yaml(
+            r#"
+name: body file
+steps:
+  - name: create
+    request:
+      method: POST
+      url: "http://localhost:3000/items"
+      body-file: "./payloads/item.json"
+    assert:
+      status: 201
+"#,
+        )
+        .unwrap();
+        assert!(formatted.contains("body_file: ./payloads/item.json"));
+        assert!(!formatted.contains("body-file:"));
     }
 
     #[test]
