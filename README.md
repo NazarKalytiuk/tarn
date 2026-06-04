@@ -806,13 +806,15 @@ steps:
         Authorization: "Bearer {{ capture.token }}"
       multipart:
         fields:
+          - name: "albumId"
+            value: "{{ capture.album_id }}"
           - name: "title"
-            value: "My Photo"
+            value: "Upload {{ $random_hex(8) }}"
           - name: "description"
             value: "A test upload"
         files:
           - name: "photo"
-            path: "./fixtures/test.jpg"
+            path: "{{ env.fixtures }}/test.jpg"
             content_type: "image/jpeg"
           - name: "thumbnail"
             path: "./fixtures/thumb.png"
@@ -820,6 +822,8 @@ steps:
     assert:
       status: 201
 ```
+
+Every string in `multipart` — field names and values, plus each file's `path`, `filename`, and `content_type` — is interpolated exactly like a JSON `body`. `{{ env.* }}`, `{{ capture.* }}`, and builtins such as `{{ $random_hex(8) }}` all resolve before the request is sent, so multipart fields can chain captured IDs and randomized values for test isolation. (Capture values are coerced to strings, since multipart fields are inherently textual.)
 
 > Note: `multipart` cannot be combined with `body`, `form`, or `graphql` on the same step.
 

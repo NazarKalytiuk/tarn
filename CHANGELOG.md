@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+## 0.14.1 — Resolve templates in `multipart` fields (NAZ-470)
+
+`multipart` field values now go through the same template resolution as every other request part. Previously a multipart field shipped its raw text, so `value: "{{ capture.mfg_id }}"` sent the literal string `{{ capture.mfg_id }}` to the server while the identical placeholder inside a JSON `body` resolved correctly.
+
+```yaml
+multipart:
+  fields:
+    - name: "manufacturerId"
+      value: "{{ capture.mfg_id }}"          # was sent literally — now resolves
+    - name: "documentNumber"
+      value: "UC04-DOC-{{ $random_hex(8) }}" # builtins resolve for test isolation
+```
+
+### Behavior
+
+- Every string in a `multipart` body is interpolated: field `name`/`value`, and each file's `path`, `filename`, and `content_type`. `{{ env.* }}`, `{{ capture.* }}` (type-coerced to string), and builtins all resolve.
+- The resolved values flow into the JSON report and `curl` / `curl-all` export, so output shows what was actually sent rather than raw templates.
+- A multipart field that references a missing variable now fails the step with `failure_category: unresolved_template` — the same pre-flight guard already applied to URLs, headers, JSON bodies, and form fields — instead of silently sending a literal `{{ ... }}`.
+
+### Surfaces touched
+
+- `runner::prepare_request` resolves multipart via the new `interpolate_multipart` helper and stores it on `PreparedRequest`; both sending (`execute_prepared_request`) and reporting (`build_request_info`) read that one resolved copy.
+- `runner::unresolved_template_step` extends the unresolved-template scan to multipart fields.
+- Docs: README **Multipart / File Upload** section documents the interpolation surface.
+
 ## 0.14.0 — Load a JSON request body from a file (`body_file`)
 
 Requests can now source their JSON body from an external file instead of inlining it:

@@ -1656,6 +1656,22 @@ fn unresolved_template_step(
             raw.extend(interpolation::find_unresolved(v));
         }
     }
+    if let Some(ref multipart) = request.multipart {
+        for field in &multipart.fields {
+            raw.extend(interpolation::find_unresolved(&field.name));
+            raw.extend(interpolation::find_unresolved(&field.value));
+        }
+        for file in &multipart.files {
+            raw.extend(interpolation::find_unresolved(&file.name));
+            raw.extend(interpolation::find_unresolved(&file.path));
+            if let Some(ref ct) = file.content_type {
+                raw.extend(interpolation::find_unresolved(ct));
+            }
+            if let Some(ref filename) = file.filename {
+                raw.extend(interpolation::find_unresolved(filename));
+            }
+        }
+    }
     if raw.is_empty() {
         return None;
     }
@@ -1981,6 +1997,13 @@ struct PreparedRequest {
     headers: HashMap<String, String>,
     body: Option<serde_json::Value>,
     form: Option<IndexMap<String, String>>,
+    /// Multipart body with every string field (field names/values and file
+    /// path/filename/content_type) already template-resolved against `ctx`,
+    /// mirroring how `body`/`form` are resolved here. Sending and reporting
+    /// both read this resolved copy so multipart fields support the same
+    /// `{{ capture.* }}` / `{{ env.* }}` / `{{ $fn() }}` syntax as JSON
+    /// bodies. (NAZ-470)
+    multipart: Option<crate::model::MultipartBody>,
     transport: http::RequestTransportOptions,
     ctx: Context,
     /// Deferred error from resolving `request.body_file` (unreadable file or
@@ -1988,6 +2011,46 @@ struct PreparedRequest {
     /// so a broken body file never aborts the whole run — mirroring how
     /// transport/capture failures stay step-local.
     body_error: Option<TarnError>,
+}
+
+/// Resolve `{{ ... }}` templates in every string of a multipart body —
+/// field names/values and file path/filename/content_type — against `ctx`.
+///
+/// Without this, multipart fields were sent and reported verbatim while JSON
+/// bodies, form fields, headers, and URLs all went through interpolation,
+/// so `value: "{{ capture.mfg_id }}"` shipped the literal placeholder to the
+/// server. This brings multipart in line with every other request part.
+/// (NAZ-470)
+fn interpolate_multipart(
+    multipart: &crate::model::MultipartBody,
+    ctx: &Context,
+) -> crate::model::MultipartBody {
+    crate::model::MultipartBody {
+        fields: multipart
+            .fields
+            .iter()
+            .map(|field| crate::model::FormField {
+                name: interpolation::interpolate(&field.name, ctx),
+                value: interpolation::interpolate(&field.value, ctx),
+            })
+            .collect(),
+        files: multipart
+            .files
+            .iter()
+            .map(|file| crate::model::FileField {
+                name: interpolation::interpolate(&file.name, ctx),
+                path: interpolation::interpolate(&file.path, ctx),
+                content_type: file
+                    .content_type
+                    .as_ref()
+                    .map(|ct| interpolation::interpolate(ct, ctx)),
+                filename: file
+                    .filename
+                    .as_ref()
+                    .map(|name| interpolation::interpolate(name, ctx)),
+            })
+            .collect(),
+    }
 }
 
 fn resolve_multipart_for_report(
@@ -2003,7 +2066,7 @@ fn resolve_multipart_for_report(
 
 fn build_request_info(step: &Step, request: &PreparedRequest, base_dir: &Path) -> RequestInfo {
     let req = step.request();
-    let multipart = req
+    let multipart = request
         .multipart
         .as_ref()
         .map(|multipart| resolve_multipart_for_report(multipart, base_dir));
@@ -2213,6 +2276,13 @@ fn prepare_request(
         (None, None)
     };
 
+    // Resolve templates in multipart fields up front, exactly like body/form
+    // above, so sending and reporting share one interpolated copy. (NAZ-470)
+    let multipart = request_spec
+        .multipart
+        .as_ref()
+        .map(|mp| interpolate_multipart(mp, &ctx));
+
     let headers = interpolation::interpolate_headers(&merged_headers, &ctx);
     let transport = http::RequestTransportOptions {
         timeout_ms: step
@@ -2234,6 +2304,7 @@ fn prepare_request(
         headers,
         body,
         form,
+        multipart,
         transport,
         ctx,
         body_error,
@@ -2277,7 +2348,7 @@ fn execute_prepared_request(
     base_dir: &Path,
 ) -> Result<http::HttpResponse, TarnError> {
     let req = step.request();
-    if let Some(ref multipart) = req.multipart {
+    if let Some(ref multipart) = request.multipart {
         http::execute_multipart_request(
             client,
             &req.method,
@@ -4402,6 +4473,268 @@ steps:
         let err = request.body_error.expect("invalid JSON should error");
         assert!(matches!(err, TarnError::Config(_)));
         assert!(err.to_string().contains("not valid JSON"));
+    }
+
+    // --- NAZ-470: multipart field template resolution ---
+
+    /// The headline regression from NAZ-470: captures (incl. numeric ones
+    /// coerced to string), env vars, and builtins must all resolve inside
+    /// multipart field values, not ship as literal `{{ ... }}` placeholders.
+    #[test]
+    fn prepare_request_resolves_multipart_field_values() {
+        let yaml = r#"
+name: upload
+steps:
+  - name: create doc
+    request:
+      method: POST
+      url: "https://api.example.com/docs"
+      multipart:
+        fields:
+          - name: "manufacturerId"
+            value: "{{ capture.mfg_id }}"
+          - name: "tenant"
+            value: "{{ env.tenant }}"
+          - name: "documentNumber"
+            value: "UC04-DOC-{{ $random_hex(8) }}"
+"#;
+        let tf: crate::model::TestFile = serde_yaml::from_str(yaml).unwrap();
+        let request = prepare_request(
+            &tf.steps[0],
+            &HashMap::from([("tenant".to_string(), "acme".to_string())]),
+            // numeric capture, exactly like an ID extracted from a JSON response
+            &HashMap::from([("mfg_id".to_string(), serde_json::json!(4271))]),
+            &HashSet::new(),
+            &tf,
+            None,
+            Path::new("."),
+        );
+
+        let mp = request.multipart.expect("multipart should be prepared");
+        assert_eq!(mp.fields[0].value, "4271");
+        assert_eq!(mp.fields[1].value, "acme");
+        // builtin resolved: prefix kept, 8 hex chars appended, no placeholder left
+        assert!(mp.fields[2].value.starts_with("UC04-DOC-"));
+        assert_eq!(mp.fields[2].value.len(), "UC04-DOC-".len() + 8);
+        assert!(!mp.fields[2].value.contains("{{"));
+    }
+
+    /// Field names go through interpolation too, mirroring `form` keys, so a
+    /// templated field name resolves instead of being sent literally.
+    #[test]
+    fn prepare_request_resolves_multipart_field_names() {
+        let yaml = r#"
+name: upload
+steps:
+  - name: create
+    request:
+      method: POST
+      url: "https://api.example.com/docs"
+      multipart:
+        fields:
+          - name: "{{ env.field_key }}"
+            value: "static"
+"#;
+        let tf: crate::model::TestFile = serde_yaml::from_str(yaml).unwrap();
+        let request = prepare_request(
+            &tf.steps[0],
+            &HashMap::from([("field_key".to_string(), "manufacturerId".to_string())]),
+            &HashMap::new(),
+            &HashSet::new(),
+            &tf,
+            None,
+            Path::new("."),
+        );
+
+        let mp = request.multipart.expect("multipart should be prepared");
+        assert_eq!(mp.fields[0].name, "manufacturerId");
+        assert_eq!(mp.fields[0].value, "static");
+    }
+
+    /// File metadata (path, filename, content_type) are strings too and must
+    /// resolve so fixtures can live under a templated directory and be sent
+    /// with a dynamic filename.
+    #[test]
+    fn prepare_request_resolves_multipart_file_metadata() {
+        let yaml = r#"
+name: upload
+steps:
+  - name: create
+    request:
+      method: POST
+      url: "https://api.example.com/docs"
+      multipart:
+        files:
+          - name: "{{ env.file_field }}"
+            path: "{{ env.fixtures }}/report.pdf"
+            filename: "report-{{ capture.run_id }}.pdf"
+            content_type: "{{ env.ct }}"
+"#;
+        let tf: crate::model::TestFile = serde_yaml::from_str(yaml).unwrap();
+        let request = prepare_request(
+            &tf.steps[0],
+            &HashMap::from([
+                ("file_field".to_string(), "document".to_string()),
+                ("fixtures".to_string(), "assets".to_string()),
+                ("ct".to_string(), "application/pdf".to_string()),
+            ]),
+            &HashMap::from([("run_id".to_string(), serde_json::json!("9f3"))]),
+            &HashSet::new(),
+            &tf,
+            None,
+            Path::new("."),
+        );
+
+        let mp = request.multipart.expect("multipart should be prepared");
+        assert_eq!(mp.files[0].name, "document");
+        assert_eq!(mp.files[0].path, "assets/report.pdf");
+        assert_eq!(mp.files[0].filename.as_deref(), Some("report-9f3.pdf"));
+        assert_eq!(mp.files[0].content_type.as_deref(), Some("application/pdf"));
+    }
+
+    /// Plain literal fields must pass through byte-for-byte — interpolation
+    /// only touches `{{ ... }}` placeholders, so non-templated multipart
+    /// tests keep working unchanged.
+    #[test]
+    fn prepare_request_leaves_literal_multipart_fields_untouched() {
+        let yaml = r#"
+name: upload
+steps:
+  - name: create
+    request:
+      method: POST
+      url: "https://api.example.com/docs"
+      multipart:
+        fields:
+          - name: "title"
+            value: "My Photo"
+        files:
+          - name: "photo"
+            path: "./fixtures/test.jpg"
+            content_type: "image/jpeg"
+"#;
+        let tf: crate::model::TestFile = serde_yaml::from_str(yaml).unwrap();
+        let request = prepare_request(
+            &tf.steps[0],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &tf,
+            None,
+            Path::new("."),
+        );
+
+        let mp = request.multipart.expect("multipart should be prepared");
+        assert_eq!(mp.fields[0].name, "title");
+        assert_eq!(mp.fields[0].value, "My Photo");
+        assert_eq!(mp.files[0].name, "photo");
+        assert_eq!(mp.files[0].path, "./fixtures/test.jpg");
+        assert_eq!(mp.files[0].content_type.as_deref(), Some("image/jpeg"));
+    }
+
+    /// The resolved field values must reach the report (`RequestInfo`) too,
+    /// so JSON output and the `--format curl` exporter show what was actually
+    /// sent rather than the raw templates.
+    #[test]
+    fn build_request_info_carries_resolved_multipart() {
+        let yaml = r#"
+name: upload
+steps:
+  - name: create
+    request:
+      method: POST
+      url: "https://api.example.com/docs"
+      multipart:
+        fields:
+          - name: "manufacturerId"
+            value: "{{ capture.mfg_id }}"
+"#;
+        let tf: crate::model::TestFile = serde_yaml::from_str(yaml).unwrap();
+        let request = prepare_request(
+            &tf.steps[0],
+            &HashMap::new(),
+            &HashMap::from([("mfg_id".to_string(), serde_json::json!(4271))]),
+            &HashSet::new(),
+            &tf,
+            None,
+            Path::new("."),
+        );
+
+        let info = build_request_info(&tf.steps[0], &request, Path::new("."));
+        let mp = info.multipart.expect("report should carry multipart");
+        assert_eq!(mp.fields[0].value, "4271");
+    }
+
+    /// A multipart field referencing a missing variable should surface a
+    /// pre-flight unresolved-template failure, exactly like an unresolved
+    /// URL/header/body/form reference — not silently send `{{ ... }}`.
+    #[test]
+    fn unresolved_template_step_flags_unresolved_multipart_field() {
+        let yaml = r#"
+name: upload
+steps:
+  - name: create
+    request:
+      method: POST
+      url: "https://api.example.com/docs"
+      multipart:
+        fields:
+          - name: "manufacturerId"
+            value: "{{ capture.missing_id }}"
+"#;
+        let tf: crate::model::TestFile = serde_yaml::from_str(yaml).unwrap();
+        let request = prepare_request(
+            &tf.steps[0],
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &tf,
+            None,
+            Path::new("."),
+        );
+        let info = build_request_info(&tf.steps[0], &request, Path::new("."));
+
+        let result = unresolved_template_step(&tf.steps[0], &request, &info, &request.ctx)
+            .expect("unresolved multipart field should fail the step");
+        assert!(!result.passed);
+        assert_eq!(
+            result.error_category,
+            Some(FailureCategory::UnresolvedTemplate)
+        );
+        assert!(result.assertion_results[0]
+            .message
+            .contains("capture.missing_id"));
+    }
+
+    /// And the inverse: once every multipart template resolves, the
+    /// pre-flight check must pass the step through (return `None`).
+    #[test]
+    fn unresolved_template_step_passes_resolved_multipart() {
+        let yaml = r#"
+name: upload
+steps:
+  - name: create
+    request:
+      method: POST
+      url: "https://api.example.com/docs"
+      multipart:
+        fields:
+          - name: "manufacturerId"
+            value: "{{ capture.mfg_id }}"
+"#;
+        let tf: crate::model::TestFile = serde_yaml::from_str(yaml).unwrap();
+        let request = prepare_request(
+            &tf.steps[0],
+            &HashMap::new(),
+            &HashMap::from([("mfg_id".to_string(), serde_json::json!(4271))]),
+            &HashSet::new(),
+            &tf,
+            None,
+            Path::new("."),
+        );
+        let info = build_request_info(&tf.steps[0], &request, Path::new("."));
+
+        assert!(unresolved_template_step(&tf.steps[0], &request, &info, &request.ctx).is_none());
     }
 
     // --- Model deserializes new fields ---
